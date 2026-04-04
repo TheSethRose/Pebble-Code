@@ -36,7 +36,7 @@ export function WelcomeHeader({ cwd, model, providerLabel, sessionId, mascotMood
           <Text bold>Welcome to Pebble Code</Text>
 
           <Box marginY={1}>
-            <PebbleMascot mood={mascotMood} color="green" layoutWidth={width} />
+            <PebbleMascot mood={mascotMood} color="green" />
           </Box>
 
           <Text dimColor>{modelLine}</Text>

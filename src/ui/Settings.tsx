@@ -1,6 +1,6 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import { Box, Text, useInput } from "ink";
-import { TextInput } from "@inkjs/ui";
+import { TextInput, Select } from "@inkjs/ui";
 import type { CommandContext } from "../commands/types.js";
 import {
   loadSettingsForCwd,
@@ -21,6 +21,31 @@ import {
 } from "../constants/openrouter.js";
 
 type TabId = "config" | "provider" | "model" | "api-key";
+
+// ---------------------------------------------------------------------------
+// OpenRouter model fetching
+// ---------------------------------------------------------------------------
+
+interface OpenRouterModel {
+  id: string;
+  name?: string;
+}
+
+const MANUAL_VALUE = "__manual__";
+
+async function fetchOpenRouterModels(apiKey: string, baseUrl: string): Promise<OpenRouterModel[]> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "HTTP-Referer": "https://github.com/TheSethRose/Pebble-Code",
+    "X-Title": "Pebble Code",
+  };
+  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+  const res = await fetch(`${baseUrl}/models`, { headers });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json() as { data?: OpenRouterModel[] };
+  return (json.data ?? []).sort((a, b) => a.id.localeCompare(b.id));
+}
+
 
 interface SettingsProps {
   context: CommandContext;
@@ -178,8 +203,53 @@ function ModelTab({
   onSave: (s: Settings) => void;
 }) {
   const [message, setMessage] = useState("");
+  const [models, setModels] = useState<OpenRouterModel[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [showManual, setShowManual] = useState(false);
 
-  const handleSubmit = useCallback(
+  const resolved = resolveProviderConfig(settings);
+
+  useEffect(() => {
+    if (!resolved.apiKey || showManual) return;
+    setLoading(true);
+    setLoadError("");
+    fetchOpenRouterModels(resolved.apiKey, resolved.baseUrl)
+      .then((mods) => {
+        setModels(mods);
+        setLoading(false);
+      })
+      .catch((e: unknown) => {
+        setLoadError(e instanceof Error ? e.message : String(e));
+        setLoading(false);
+        setShowManual(true);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolved.apiKey, resolved.baseUrl]);
+
+  const modelOptions = useMemo(() => {
+    const opts = models.map((m) => ({
+      label: m.name ? `${m.id}  —  ${m.name}` : m.id,
+      value: m.id,
+    }));
+    opts.push({ label: "⌨  Type model ID manually…", value: MANUAL_VALUE });
+    return opts;
+  }, [models]);
+
+  const handleSelectChange = useCallback(
+    (value: string) => {
+      if (value === MANUAL_VALUE) {
+        setShowManual(true);
+        return;
+      }
+      const next = ensureProviderDefaults({ ...settings, model: value });
+      onSave(next);
+      setMessage(`Model set to ${value}`);
+    },
+    [settings, onSave],
+  );
+
+  const handleTextSubmit = useCallback(
     (value: string) => {
       if (!value.trim()) {
         setMessage("Model name cannot be empty");
@@ -192,20 +262,73 @@ function ModelTab({
     [settings, onSave],
   );
 
-  const resolved = resolveProviderConfig(settings);
+  const showPicker = !showManual && models.length > 0 && !loading;
 
   return (
     <Box flexDirection="column">
       <Text bold color="cyan">Model</Text>
       <Box flexDirection="column" marginTop={1}>
         <Text>Current: {resolved.model}</Text>
-        <Box marginTop={1}>
-          <Text color="cyan">{"› "} </Text>
-          <TextInput
-            onSubmit={handleSubmit}
-            placeholder="Model (e.g. anthropic/claude-sonnet-4.6)"
-          />
-        </Box>
+
+        {loading && (
+          <Box marginTop={1}>
+            <Text dimColor>Loading models from OpenRouter…</Text>
+          </Box>
+        )}
+
+        {loadError && (
+          <Box marginTop={1}>
+            <Text color="red">Could not load model list: {loadError}</Text>
+          </Box>
+        )}
+
+        {!resolved.apiKey && !loading && (
+          <Box marginTop={1}>
+            <Text color="yellow">No API key — configure via the API Key tab to load model list.</Text>
+          </Box>
+        )}
+
+        {showPicker && (
+          <Box flexDirection="column" marginTop={1}>
+            <Text dimColor>↑↓ navigate · Enter select · {models.length} models available</Text>
+            <Box marginTop={1}>
+              <Select
+                options={modelOptions}
+                visibleOptionCount={10}
+                defaultValue={resolved.model}
+                onChange={handleSelectChange}
+              />
+            </Box>
+          </Box>
+        )}
+
+        {(showManual || (!loading && !showPicker && !loadError && resolved.apiKey)) && (
+          <Box flexDirection="column" marginTop={1}>
+            {showManual && models.length > 0 && (
+              <Text dimColor>Manual entry (Tab back to model list):</Text>
+            )}
+            <Box marginTop={1}>
+              <Text color="cyan">{"› "} </Text>
+              <TextInput
+                onSubmit={handleTextSubmit}
+                placeholder={`Model ID (e.g. ${OPENROUTER_DEFAULT_MODEL})`}
+              />
+            </Box>
+          </Box>
+        )}
+
+        {!resolved.apiKey && !loading && (
+          <Box marginTop={1}>
+            <Box>
+              <Text color="cyan">{"› "} </Text>
+              <TextInput
+                onSubmit={handleTextSubmit}
+                placeholder={`Model ID (e.g. ${OPENROUTER_DEFAULT_MODEL})`}
+              />
+            </Box>
+          </Box>
+        )}
+
         {message && (
           <Box marginTop={1}>
             <Text color={message.startsWith("Model name") ? "red" : "green"}>

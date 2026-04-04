@@ -5,6 +5,9 @@ import { TextInput } from "@inkjs/ui";
 interface PromptInputProps {
   isProcessing: boolean;
   onSubmit: (value: string) => void;
+  onChange?: (value: string) => void;
+  inputKey?: number;
+  exitWarning?: boolean;
   statusText?: string;
   model?: string;
   sessionId?: string | null;
@@ -19,6 +22,9 @@ interface PromptInputProps {
 export function PromptInput({
   isProcessing,
   onSubmit,
+  onChange,
+  inputKey = 0,
+  exitWarning = false,
   statusText = "",
   model = "default",
   sessionId = null,
@@ -33,13 +39,20 @@ export function PromptInput({
     <Box flexDirection="column" marginTop={1}>
       <Text dimColor>{rule}</Text>
 
+      {exitWarning && (
+        <Box paddingLeft={1}>
+          <Text color="yellow">Press Ctrl+C again to exit</Text>
+        </Box>
+      )}
+
       <Box paddingLeft={1}>
         <Text color={isProcessing ? "yellow" : "gray"} bold>
           {promptGlyph}{" "}
         </Text>
         <TextInput
-          key={isProcessing ? "busy" : "idle"}
+          key={`${isProcessing ? "busy" : "idle"}-${inputKey}`}
           onSubmit={onSubmit}
+          onChange={onChange}
           placeholder={isProcessing ? "working…" : "Ask anything or try /help"}
         />
       </Box>

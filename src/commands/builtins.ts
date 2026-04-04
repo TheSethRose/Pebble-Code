@@ -156,7 +156,7 @@ function createConfigCommand(): Command {
     usage: "/config",
     modes: ["interactive"],
     execute: (_args, _ctx): CommandResult => {
-      return { success: true, output: "" };
+      return { success: true, output: "", data: { action: "open-settings" } };
     },
   };
 }

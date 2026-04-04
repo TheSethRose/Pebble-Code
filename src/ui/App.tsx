@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { render, Box, Text, useStdout } from "ink";
+import { render, Box, Text, useStdout, useInput } from "ink";
 import { CommandRegistry } from "../commands/registry.js";
 import { registerBuiltinCommands } from "../commands/builtins.js";
 import type { CommandContext } from "../commands/types.js";
@@ -21,6 +21,7 @@ import { getPebbleMood } from "./mascotMood.js";
 import { PromptInput } from "./components/PromptInput.js";
 import { WelcomeHeader } from "./components/WelcomeHeader.js";
 import { TranscriptView } from "./components/TranscriptView.js";
+import { Settings } from "./Settings.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -76,9 +77,14 @@ export function App({ context }: { context: CommandContext }) {
     loadCommandConfig(context.cwd, context.config),
   );
   const [state, setState] = React.useState<AppState>(INITIAL_STATE);
+  const [showSettings, setShowSettings] = React.useState(false);
+  const [inputValue, setInputValue] = React.useState("");
+  const [inputKey, setInputKey] = React.useState(0);
+  const [ctrlCOnce, setCtrlCOnce] = React.useState(false);
 
   const engineRef = React.useRef<QueryEngine | null>(null);
   const sessionIdRef = React.useRef<string | null>(null);
+  const ctrlCTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionStore = context.sessionStore ?? null;
 
   const registry = React.useMemo(() => {
@@ -168,12 +174,42 @@ export function App({ context }: { context: CommandContext }) {
   }, []); // run once on mount — intentionally not re-running on id change
 
   // ------------------------------------------------------------------
+  // Ctrl+C: first press clears input; second press exits
+  // ------------------------------------------------------------------
+  useInput(
+    (_input, key) => {
+      if (key.ctrl && _input === "c") {
+        if (inputValue.length > 0) {
+          setInputValue("");
+          setInputKey((k) => k + 1);
+          return;
+        }
+        if (ctrlCOnce) {
+          if (ctrlCTimerRef.current) clearTimeout(ctrlCTimerRef.current);
+          process.exit(0);
+          return;
+        }
+        setCtrlCOnce(true);
+        ctrlCTimerRef.current = setTimeout(() => setCtrlCOnce(false), 2000);
+      }
+    },
+    { isActive: !showSettings },
+  );
+
+  // ------------------------------------------------------------------
   // Command / prompt handler
   // ------------------------------------------------------------------
   const handleSubmit = React.useCallback(
     async (input: string) => {
       const trimmed = input.trim();
       if (!trimmed) return;
+
+      // Dismiss exit warning on any submission
+      setCtrlCOnce(false);
+      if (ctrlCTimerRef.current) {
+        clearTimeout(ctrlCTimerRef.current);
+        ctrlCTimerRef.current = null;
+      }
 
       const commandContext: CommandContext = {
         ...context,
@@ -188,6 +224,12 @@ export function App({ context }: { context: CommandContext }) {
         if (!parsed) return;
 
         const result = await registry.execute(parsed.name, parsed.args, commandContext);
+
+        // /config — open the settings panel
+        if (result.data?.action === "open-settings") {
+          setShowSettings(true);
+          return;
+        }
 
         // /clear — wipe conversation, reset session
         if (result.data?.action === "clear") {
@@ -349,6 +391,18 @@ export function App({ context }: { context: CommandContext }) {
   const { columns, rows } = useTerminalDimensions();
   const mascotMood = getPebbleMood(state);
 
+  if (showSettings) {
+    return (
+      <Settings
+        context={context}
+        onClose={() => {
+          setShowSettings(false);
+          setRuntimeConfig(loadCommandConfig(context.cwd, runtimeConfig));
+        }}
+      />
+    );
+  }
+
   return (
     <Box
       flexDirection="column"
@@ -390,6 +444,9 @@ export function App({ context }: { context: CommandContext }) {
         <PromptInput
           isProcessing={state.isProcessing}
           onSubmit={handleSubmit}
+          onChange={setInputValue}
+          inputKey={inputKey}
+          exitWarning={ctrlCOnce}
           statusText={state.statusText}
           model={model}
           sessionId={state.activeSessionId}
