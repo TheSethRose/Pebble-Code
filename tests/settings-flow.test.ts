@@ -30,6 +30,7 @@ describe("settings auth follow-up routing", () => {
     expect(followUp).not.toBeNull();
     expect(followUp?.providerId).toBe("github-copilot");
     expect(followUp?.notice).toContain("OAuth");
+    expect(followUp?.notice).toContain("automatically");
   });
 
   test("does not reroute already-configured providers", () => {

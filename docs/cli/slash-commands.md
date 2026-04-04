@@ -62,6 +62,6 @@ Some commands also register short aliases:
 
 ## Related pages
 
-- [CLI overview](/cli)
+- [CLI overview](/cli/index)
 - [Sessions](/concepts/sessions)
 - [Configuration](/concepts/configuration)

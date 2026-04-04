@@ -60,6 +60,6 @@ Headless runs also use the same session store.
 
 ## Related pages
 
-- [CLI overview](/cli)
+- [CLI overview](/cli/index)
 - [Headless mode](/cli/headless)
-- [SDK](/sdk)
+- [SDK](/sdk/index)

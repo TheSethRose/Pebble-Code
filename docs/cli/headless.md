@@ -79,6 +79,6 @@ Pebble does **not** currently expose a CLI `--auto-approve` flag in `src/entrypo
 
 ## Related pages
 
-- [CLI overview](/cli)
-- [SDK](/sdk)
+- [CLI overview](/cli/index)
+- [SDK](/sdk/index)
 - [Trust and permissions](/concepts/trust-and-permissions)

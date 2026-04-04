@@ -87,6 +87,6 @@ Create `.pebble/project-settings.json` with shared defaults such as model, max t
 
 ## Related pages
 
-- [Providers](/providers)
+- [Providers](/providers/index)
 - [Trust and permissions](/concepts/trust-and-permissions)
 - [Slash commands](/cli/slash-commands)

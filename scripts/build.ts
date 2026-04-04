@@ -137,12 +137,22 @@ type SpawnResult = ReturnType<typeof Bun.spawnSync>;
 
 function runBundledCli(...args: string[]): SpawnResult {
   const smokeCwd = createSmokeProjectDir();
+  const smokePebbleHome = join(smokeCwd, ".pebble-home");
+  mkdirSync(smokePebbleHome, { recursive: true });
 
   return Bun.spawnSync({
     cmd: [process.execPath, join(DIST, "pebble.js"), ...args],
     cwd: smokeCwd,
     env: {
       ...process.env,
+      HOME: smokeCwd,
+      PEBBLE_HOME: smokePebbleHome,
+      PEBBLE_PROVIDER: "",
+      GH_TOKEN: "",
+      GITHUB_TOKEN: "",
+      COPILOT_GITHUB_TOKEN: "",
+      GITHUB_COPILOT_TOKEN: "",
+      COPILOT_TOKEN: "",
       OPENROUTER_API_KEY: "",
       OPENROUTER_BASE_URL: "",
       OPENROUTER_MODEL: "",

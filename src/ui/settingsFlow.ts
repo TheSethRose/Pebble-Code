@@ -155,7 +155,9 @@ export function getProviderSelectionAuthFollowUp(
   if (definition.authKind === "oauth" && !hasConfiguredCredential) {
     return {
       providerId: normalizedProviderId,
-      notice: `${definition.label} is not configured yet. Run /login ${normalizedProviderId} from the main prompt to start its OAuth login flow.`,
+      notice: definition.implemented
+        ? `${definition.label} is not configured yet. Pebble will start its OAuth login flow automatically when you open the Auth step for this provider.`
+        : `${definition.label} is not configured yet. Run /login ${normalizedProviderId} from the main prompt to start its OAuth login flow.`,
     };
   }
 

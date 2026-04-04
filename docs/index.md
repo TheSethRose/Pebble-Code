@@ -18,20 +18,33 @@ It gives you:
 - provider switching and per-provider auth storage
 - a permission-aware tool loop with local extensions, skills, and MCP servers
 
-<Columns>
-  <Card title="Get started" href="/start/getting-started" icon="rocket">
-    Install dependencies, configure a provider, and run your first Pebble session.
-  </Card>
-  <Card title="Use the CLI" href="/cli" icon="terminal-square">
-    Fast flags, interactive usage, headless mode, and slash commands.
-  </Card>
-  <Card title="Configure Pebble" href="/concepts/configuration" icon="settings">
-    Settings files, provider auth, env vars, and runtime precedence.
-  </Card>
-  <Card title="Troubleshoot" href="/help/troubleshooting" icon="wrench">
-    Fix provider auth, trust, session, and extension-loading issues quickly.
-  </Card>
-</Columns>
+## Start here
+
+- [Getting Started](/start/getting-started) — install dependencies, configure a provider, and run Pebble
+- [Docs Directory](/start/docs-directory) — quick links to the most useful product docs
+- [Docs Hubs](/start/hubs) — full map of the current documentation set
+
+## Jump to a section
+
+### Use Pebble
+
+- [CLI overview](/cli/index)
+- [Headless mode](/cli/headless)
+- [Slash commands](/cli/slash-commands)
+- [SDK](/sdk/index)
+
+### Configure Pebble
+
+- [Configuration](/concepts/configuration)
+- [Sessions](/concepts/sessions)
+- [Trust and permissions](/concepts/trust-and-permissions)
+- [Extensions](/concepts/extensions)
+- [Providers](/providers/index)
+
+### Get help
+
+- [Help](/help/index)
+- [Troubleshooting](/help/troubleshooting)
 
 ## What Pebble is for
 
@@ -47,40 +60,33 @@ Compared with a one-shot CLI wrapper, Pebble keeps more of the useful agent runt
 
 ## Product surface
 
-<Columns>
-  <Card title="Interactive REPL" href="/cli" icon="message-square">
-    Run Pebble in the terminal, stream results live, and use slash commands for config, resume, memory, and review tasks.
-  </Card>
-  <Card title="Headless mode" href="/cli/headless" icon="workflow">
-    Run Pebble non-interactively with `--headless`, `--prompt`, and structured output formats.
-  </Card>
-  <Card title="SDK" href="/sdk" icon="code-2">
-    Use the package-root SDK helpers such as `runSdk`, `runHeadless`, `query`, `streamQuery`, and `QueryEngine`.
-  </Card>
-  <Card title="Providers" href="/providers" icon="bot">
-    Configure OpenRouter, OpenAI, and the broader built-in provider catalog without silently falling back to a different provider.
-  </Card>
-</Columns>
+Pebble has four main product surfaces:
+
+- **Interactive REPL** — use [CLI overview](/cli/index) to run Pebble in the terminal and work with slash commands, settings, and session resume.
+- **Headless mode** — use [Headless mode](/cli/headless) for non-interactive runs and structured output.
+- **SDK** — use [SDK](/sdk/index) for programmatic entrypoints like `runSdk`, `runHeadless`, `query`, and `streamQuery`.
+- **Providers** — use [Providers](/providers/index) to configure OpenRouter, OpenAI, and the current built-in provider catalog.
 
 ## Quick start
 
-<Steps>
-  <Step title="Install repository dependencies">
-    ```bash
-    git clone https://github.com/TheSethRose/Pebble-Code.git
-    cd Pebble-Code
-    bun install
-    bun run hooks:install
-    ```
-  </Step>
-  <Step title="Configure a provider credential">
-    Set `OPENROUTER_API_KEY` in your environment, or launch Pebble and use `/login openrouter <credential>`.
-  </Step>
-  <Step title="Start Pebble">
-    ```bash
-    bun run dev
-    ```
-  </Step>
-</Steps>
+1. Clone the repository and install dependencies.
+
+   ```bash
+   git clone https://github.com/TheSethRose/Pebble-Code.git
+   cd Pebble-Code
+   bun install
+   bun run hooks:install
+   ```
+
+2. Configure a provider credential.
+
+   - Set `OPENROUTER_API_KEY` in your environment, or
+   - launch Pebble and run `/login openrouter <credential>`
+
+3. Start Pebble.
+
+   ```bash
+   bun run dev
+   ```
 
 Need the guided version? Go to [Getting Started](/start/getting-started).

@@ -48,5 +48,5 @@ If an extension fails:
 ## Related pages
 
 - [Configuration](/concepts/configuration)
-- [Providers](/providers)
-- [Help](/help)
+- [Providers](/providers/index)
+- [Help](/help/index)

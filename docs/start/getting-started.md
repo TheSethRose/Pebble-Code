@@ -26,44 +26,44 @@ If you start Pebble without a working provider configuration, it will still boot
 
 ## Quick setup
 
-<Steps>
-  <Step title="Clone and install">
-    ```bash
-    git clone https://github.com/TheSethRose/Pebble-Code.git
-    cd Pebble-Code
-    bun install
-    bun run hooks:install
-    ```
-  </Step>
-  <Step title="Choose a credential path">
-    <Tabs>
-      <Tab title="Environment variable">
-        ```bash
-        export OPENROUTER_API_KEY=your-key-here
-        ```
-      </Tab>
-      <Tab title="Interactive login">
-        Start Pebble first, then run:
+1. Clone the repository and install dependencies.
 
-        ```text
-        /login openrouter <credential>
-        ```
+   ```bash
+   git clone https://github.com/TheSethRose/Pebble-Code.git
+   cd Pebble-Code
+   bun install
+   bun run hooks:install
+   ```
 
-        Pebble stores user credentials in `~/.pebble/settings.json`.
-      </Tab>
-    </Tabs>
-  </Step>
-  <Step title="Run the interactive CLI">
-    ```bash
-    bun run dev
-    ```
-  </Step>
-  <Step title="Or run headless">
-    ```bash
-    bun run src/entrypoints/cli.tsx --headless --prompt "summarize this repository"
-    ```
-  </Step>
-</Steps>
+2. Choose a credential path.
+
+   **Environment variable**
+
+   ```bash
+   export OPENROUTER_API_KEY=your-key-here
+   ```
+
+   **Interactive login**
+
+   Start Pebble first, then run:
+
+   ```text
+   /login openrouter <credential>
+   ```
+
+   Pebble stores user credentials in `~/.pebble/settings.json`.
+
+3. Run the interactive CLI.
+
+   ```bash
+   bun run dev
+   ```
+
+4. Or run headless.
+
+   ```bash
+   bun run src/entrypoints/cli.tsx --headless --prompt "summarize this repository"
+   ```
 
 ## What to expect on first run
 
@@ -82,17 +82,7 @@ If you start Pebble without a working provider configuration, it will still boot
 
 ## Next steps
 
-<Columns>
-  <Card title="CLI overview" href="/cli" icon="terminal-square">
-    Learn the fast flags, runtime options, and interactive flow.
-  </Card>
-  <Card title="Slash commands" href="/cli/slash-commands" icon="slash">
-    See the built-in commands Pebble registers today.
-  </Card>
-  <Card title="Configuration" href="/concepts/configuration" icon="settings">
-    Understand settings files, env vars, and provider precedence.
-  </Card>
-  <Card title="Providers" href="/providers" icon="bot">
-    See which provider paths are runnable today and which are still catalog-only.
-  </Card>
-</Columns>
+- [CLI overview](/cli/index) — learn the runtime flags and interactive flow
+- [Slash commands](/cli/slash-commands) — see the built-in REPL commands
+- [Configuration](/concepts/configuration) — understand settings files, env vars, and precedence
+- [Providers](/providers/index) — see which provider paths are runnable today

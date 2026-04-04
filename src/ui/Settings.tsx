@@ -1,11 +1,9 @@
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Box, Text, useInput } from "ink";
 import { TextInput, Select } from "@inkjs/ui";
 import type { CommandContext } from "../commands/types.js";
 import {
   getProjectSettingsPath,
-  getStoredProviderCredential,
-  getStoredProviderOAuthSession,
   loadSettingsForCwd,
   saveSettingsForCwd,
   getSettingsPath,
@@ -17,7 +15,6 @@ import {
   maskSecret,
 } from "../providers/config.js";
 import {
-  applyProviderDefaults,
   getBuiltinProviderDefinition,
   getBuiltinProviderDefinitions,
   getProviderAuthDescription,
@@ -28,8 +25,6 @@ import {
 import { listRuntimeProviders, resolveRuntimeProvider } from "../providers/runtime.js";
 import {
   OPENROUTER_DEFAULT_MODEL,
-  OPENROUTER_DEFAULT_BASE_URL,
-  OPENROUTER_PROVIDER_ID,
 } from "../constants/openrouter.js";
 import {
   getProviderSelectionAuthFollowUp,
@@ -37,6 +32,21 @@ import {
   type ProviderAuthFollowUp,
   type ProviderAuthStatus,
 } from "./settingsFlow.js";
+import {
+  ensureSettingsProviderDefaults,
+  runSettingsProviderLogin,
+} from "./providerLogin.js";
+import {
+  fetchProviderModels,
+  uniqueModels,
+  type ProviderModel,
+} from "./providerModels.js";
+import {
+  getInitialSettingsModelPhase,
+  resolveSettingsPostLoginNavigation,
+  type SettingsAuthReturnTarget,
+  type SettingsModelResumeTarget,
+} from "./settingsTransitions.js";
 
 export type TabId = "config" | "provider" | "model" | "api-key";
 
@@ -44,32 +54,7 @@ export type TabId = "config" | "provider" | "model" | "api-key";
 // OpenRouter model fetching
 // ---------------------------------------------------------------------------
 
-interface ProviderModel {
-  id: string;
-  name?: string;
-}
-
 const MANUAL_VALUE = "__manual__";
-
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, "");
-}
-
-async function fetchOpenAiCompatibleModels(
-  apiKey: string,
-  baseUrl: string,
-  requestHeaders: Record<string, string> = {},
-): Promise<ProviderModel[]> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...requestHeaders,
-  };
-  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-  const res = await fetch(`${trimTrailingSlash(baseUrl)}/models`, { headers });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = await res.json() as { data?: ProviderModel[] };
-  return (json.data ?? []).sort((a, b) => a.id.localeCompare(b.id));
-}
 
 function buildRuntimeProviderOptions(context: CommandContext): Array<{ label: string; value: string }> {
   return listRuntimeProviders(context.extensionProviders ?? []).map((provider) => ({
@@ -235,15 +220,24 @@ function getProviderAuthActionHint(params: {
   manualEntrySupported: boolean;
   implemented: boolean;
   authStatus: ProviderAuthStatus;
+  loginState?: ProviderLoginState | null;
 }): string {
   if (params.manualEntrySupported) {
     return "Enter to save · ← change provider · Shift+Tab / Tab to switch sections";
   }
 
   if (params.implemented) {
+    if (params.loginState?.status === "running") {
+      return "Waiting for browser/device authorization · ← change provider · Shift+Tab / Tab to switch sections";
+    }
+
+    if (params.loginState?.status === "error") {
+      return "← change provider to retry · Shift+Tab / Tab to switch sections";
+    }
+
     return params.authStatus.isConfigured
       ? `OAuth session saved · re-run /login ${params.providerId} from the main prompt to refresh · ← change provider · Shift+Tab / Tab to switch sections`
-      : `Close settings, then run /login ${params.providerId} from the main prompt · ← change provider · Shift+Tab / Tab to switch sections`;
+      : `Selecting this provider auto-starts its login flow · ← change provider · Shift+Tab / Tab to switch sections`;
   }
 
   return "← change provider · Shift+Tab / Tab to switch sections";
@@ -255,23 +249,43 @@ function renderProviderAuthHelp(params: {
   manualEntrySupported: boolean;
   implemented: boolean;
   authStatus: ProviderAuthStatus;
+  loginState?: ProviderLoginState | null;
 }): React.ReactNode {
   if (params.manualEntrySupported) {
     return null;
   }
 
   if (params.implemented) {
+    const loginState = params.loginState;
+
     return (
       <Box marginTop={1} flexDirection="column">
-        <Text color="yellow">
-          {params.authStatus.isConfigured
-            ? `${params.providerLabel} already has a saved OAuth session.`
-            : `Login for ${params.providerLabel} happens from the main prompt, not inside this Auth tab.`}
-        </Text>
-        <Text color="cyan">Run: /login {params.providerId}</Text>
-        <Text dimColor>
-          Pebble will show a browser/device URL and code, then store the resulting OAuth session in ~/.pebble/settings.json.
-        </Text>
+        {params.authStatus.isConfigured ? (
+          <>
+            <Text color="yellow">{params.providerLabel} already has a saved OAuth session.</Text>
+            <Text color="cyan">Run: /login {params.providerId}</Text>
+            <Text dimColor>Use the slash command if you want to refresh or replace the stored session manually.</Text>
+          </>
+        ) : (
+          <>
+            <Text color="yellow">Pebble auto-starts the login flow when you select this provider here.</Text>
+            <Text dimColor>It will show the browser/device instructions below and store the resulting OAuth session in ~/.pebble/settings.json.</Text>
+          </>
+        )}
+        {loginState?.lines.length ? (
+          <Box marginTop={1} flexDirection="column">
+            {loginState.lines.map((line, index) => (
+              <Text key={`${params.providerId}:${index}`} dimColor={loginState.status === "running"}>{line}</Text>
+            ))}
+          </Box>
+        ) : null}
+        {loginState?.message ? (
+          <Box marginTop={1}>
+            <Text color={loginState.status === "error" ? "red" : loginState.status === "success" ? "green" : "cyan"}>
+              {loginState.message}
+            </Text>
+          </Box>
+        ) : null}
       </Box>
     );
   }
@@ -283,46 +297,17 @@ function renderProviderAuthHelp(params: {
   );
 }
 
-function uniqueModels(models: ProviderModel[]): ProviderModel[] {
-  const seen = new Set<string>();
-  return models.filter((model) => {
-    if (seen.has(model.id)) {
-      return false;
-    }
-
-    seen.add(model.id);
-    return true;
-  });
+interface ProviderLoginState {
+  providerId: string;
+  status: "running" | "success" | "error";
+  lines: string[];
+  message?: string;
 }
-
 
 interface SettingsProps {
   context: CommandContext;
   onClose: () => void;
   defaultTab?: TabId;
-}
-
-function ensureProviderDefaults(settings: Settings): Settings {
-  const withDefaults = applyProviderDefaults(settings);
-  const oauthSession = getStoredProviderOAuthSession(withDefaults, withDefaults.provider);
-  const activeCredential = getStoredProviderCredential(withDefaults, withDefaults.provider)
-    ?? oauthSession?.accessToken?.trim()
-    ?? oauthSession?.refreshToken?.trim();
-  if (withDefaults.provider === OPENROUTER_PROVIDER_ID) {
-    return {
-      ...withDefaults,
-      apiKey: activeCredential,
-      model: withDefaults.model?.trim() || OPENROUTER_DEFAULT_MODEL,
-      baseUrl: withDefaults.baseUrl?.trim() || OPENROUTER_DEFAULT_BASE_URL,
-    };
-  }
-
-  return {
-    ...withDefaults,
-    apiKey: activeCredential,
-    model: withDefaults.model?.trim(),
-    baseUrl: withDefaults.baseUrl?.trim(),
-  };
 }
 
 const TABS: { id: TabId; label: string }[] = [
@@ -413,7 +398,7 @@ function ProviderTab({
   context: CommandContext;
   settings: Settings;
   onSave: (s: Settings) => void;
-  onOpenAuth: (followUp: ProviderAuthFollowUp) => void;
+  onOpenAuth: (followUp: ProviderAuthFollowUp, returnTarget?: SettingsAuthReturnTarget) => void;
 }) {
   const [message, setMessage] = useState("");
   const [showManual, setShowManual] = useState(false);
@@ -462,11 +447,11 @@ function ProviderTab({
       if (provider === settings.provider) {
         const followUp = getProviderSelectionAuthFollowUp(settings, provider);
         if (followUp) {
-          onOpenAuth(followUp);
+          onOpenAuth(followUp, { tab: "provider" });
         }
         return;
       }
-      const next = ensureProviderDefaults({
+      const next = ensureSettingsProviderDefaults({
         ...settings,
         provider,
         model: undefined,
@@ -475,7 +460,7 @@ function ProviderTab({
       onSave(next);
       const followUp = getProviderSelectionAuthFollowUp(next, provider);
       if (followUp) {
-        onOpenAuth(followUp);
+        onOpenAuth(followUp, { tab: "provider" });
         return;
       }
       setMessage(`Provider set to ${provider}`);
@@ -490,7 +475,7 @@ function ProviderTab({
         setMessage("Provider ID cannot be empty");
         return;
       }
-      const next = ensureProviderDefaults({
+      const next = ensureSettingsProviderDefaults({
         ...settings,
         provider,
         model: undefined,
@@ -499,7 +484,7 @@ function ProviderTab({
       onSave(next);
       const followUp = getProviderSelectionAuthFollowUp(next, provider);
       if (followUp) {
-        onOpenAuth(followUp);
+        onOpenAuth(followUp, { tab: "provider" });
         return;
       }
       setMessage(`Provider set to ${provider}`);
@@ -571,18 +556,22 @@ function ModelTab({
   settings,
   onSave,
   onOpenAuth,
+  resumeTarget,
 }: {
   context: CommandContext;
   settings: Settings;
   onSave: (s: Settings) => void;
-  onOpenAuth: (followUp: ProviderAuthFollowUp) => void;
+  onOpenAuth: (followUp: ProviderAuthFollowUp, returnTarget?: SettingsAuthReturnTarget) => void;
+  resumeTarget?: SettingsModelResumeTarget | null;
 }) {
   const [message, setMessage] = useState("");
   const [models, setModels] = useState<ProviderModel[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [showManual, setShowManual] = useState(false);
-  const [phase, setPhase] = useState<"provider" | "model">("provider");
+  const [phase, setPhase] = useState<"provider" | "model">(
+    () => getInitialSettingsModelPhase(resumeTarget),
+  );
   const [providerFilterQuery, setProviderFilterQuery] = useState("");
   const [filterQuery, setFilterQuery] = useState("");
 
@@ -612,6 +601,20 @@ function ModelTab({
   );
 
   useEffect(() => {
+    if (!resumeTarget) {
+      return;
+    }
+
+    setPhase(resumeTarget.phase);
+    setProviderFilterQuery("");
+    setFilterQuery("");
+    setShowManual(false);
+    setModels([]);
+    setLoadError("");
+    setMessage(resumeTarget.message ?? "Authentication validated. Pick a model below.");
+  }, [resumeTarget]);
+
+  useEffect(() => {
     if (phase !== "model" || showManual) {
       return;
     }
@@ -623,7 +626,12 @@ function ModelTab({
 
     setLoading(true);
     setLoadError("");
-    fetchOpenAiCompatibleModels(resolved.apiKey, resolved.baseUrl, resolved.requestHeaders)
+    fetchProviderModels({
+      providerId: resolved.providerId,
+      apiKey: resolved.apiKey,
+      baseUrl: resolved.baseUrl,
+      requestHeaders: resolved.requestHeaders,
+    })
       .then((nextModels) => {
         setModels(nextModels);
         setLoading(false);
@@ -712,7 +720,7 @@ function ModelTab({
       const provider = normalizeProviderId(value);
       const changingProvider = provider !== resolved.providerId;
       if (changingProvider) {
-        const next = ensureProviderDefaults({
+        const next = ensureSettingsProviderDefaults({
           ...settings,
           provider,
           model: undefined,
@@ -721,13 +729,21 @@ function ModelTab({
         onSave(next);
         const followUp = getProviderSelectionAuthFollowUp(next, provider);
         if (followUp) {
-          onOpenAuth(followUp);
+          onOpenAuth(followUp, {
+            tab: "model",
+            modelPhase: "model",
+            successMessage: `${getBuiltinProviderDefinition(provider)?.label ?? provider} authenticated. Pick a model below.`,
+          });
           return;
         }
       } else {
         const followUp = getProviderSelectionAuthFollowUp(settings, provider);
         if (followUp) {
-          onOpenAuth(followUp);
+          onOpenAuth(followUp, {
+            tab: "model",
+            modelPhase: "model",
+            successMessage: `${getBuiltinProviderDefinition(provider)?.label ?? provider} authenticated. Pick a model below.`,
+          });
           return;
         }
       }
@@ -756,7 +772,7 @@ function ModelTab({
         return;
       }
 
-      const next = ensureProviderDefaults({
+      const next = ensureSettingsProviderDefaults({
         ...settings,
         model: value,
       });
@@ -773,7 +789,7 @@ function ModelTab({
         return;
       }
 
-      const next = ensureProviderDefaults({
+      const next = ensureSettingsProviderDefaults({
         ...settings,
         model: value.trim(),
       });
@@ -902,16 +918,21 @@ function ApiKeyTab({
   initialProviderId,
   initialPhase = "provider",
   notice,
+  loginState,
+  onAutoLogin,
 }: {
   settings: Settings;
   onSave: (s: Settings) => void;
   initialProviderId?: string;
   initialPhase?: "provider" | "credential";
   notice?: string;
+  loginState?: ProviderLoginState | null;
+  onAutoLogin: (providerId: string) => void;
 }) {
   const [message, setMessage] = useState("");
   const [phase, setPhase] = useState<"provider" | "credential">(initialPhase);
   const [filterQuery, setFilterQuery] = useState("");
+  const [lastAutoLoginProviderId, setLastAutoLoginProviderId] = useState<string | null>(null);
   const [selectedProviderId, setSelectedProviderId] = useState(
     normalizeProviderId(initialProviderId ?? settings.provider),
   );
@@ -945,6 +966,43 @@ function ApiKeyTab({
   });
   const authStatus = getProviderAuthStatus(settings, selectedProviderId);
   const manualEntrySupported = providerSupportsManualCredentialEntry(selectedDefinition);
+  const activeLoginState = loginState?.providerId === selectedProviderId ? loginState : null;
+
+  useEffect(() => {
+    if (phase !== "credential" || activeLoginState?.status !== "success" || !authStatus.isConfigured) {
+      return;
+    }
+
+    setPhase("provider");
+    setFilterQuery("");
+    setLastAutoLoginProviderId(null);
+  }, [activeLoginState?.status, authStatus.isConfigured, phase]);
+
+  useEffect(() => {
+    const shouldAutoLogin = phase === "credential"
+      && selectedDefinition?.authKind === "oauth"
+      && resolved.implemented
+      && !authStatus.isConfigured;
+
+    if (!shouldAutoLogin) {
+      return;
+    }
+
+    if (lastAutoLoginProviderId === selectedProviderId) {
+      return;
+    }
+
+    onAutoLogin(selectedProviderId);
+    setLastAutoLoginProviderId(selectedProviderId);
+  }, [
+    authStatus.isConfigured,
+    lastAutoLoginProviderId,
+    onAutoLogin,
+    phase,
+    resolved.implemented,
+    selectedDefinition?.authKind,
+    selectedProviderId,
+  ]);
 
   const handleSubmit = useCallback(
     (value: string) => {
@@ -956,7 +1014,7 @@ function ApiKeyTab({
         setMessage(`${getProviderCredentialLabel(selectedDefinition)} cannot be empty`);
         return;
       }
-      const next = ensureProviderDefaults(
+      const next = ensureSettingsProviderDefaults(
         setStoredProviderCredential(settings, selectedProviderId, value.trim()),
       );
       onSave(next);
@@ -970,6 +1028,7 @@ function ApiKeyTab({
     setPhase("credential");
     setFilterQuery("");
     setMessage("");
+    setLastAutoLoginProviderId(null);
   }, []);
 
   useInput(
@@ -1055,6 +1114,7 @@ function ApiKeyTab({
                 manualEntrySupported,
                 implemented: resolved.implemented,
                 authStatus,
+                loginState: activeLoginState,
               })
             )}
           </>
@@ -1076,6 +1136,7 @@ function ApiKeyTab({
               manualEntrySupported,
               implemented: resolved.implemented,
               authStatus,
+              loginState: activeLoginState,
             })}
         </Text>
       </Box>
@@ -1089,10 +1150,14 @@ export function Settings({
   defaultTab = "config",
 }: SettingsProps) {
   const [settings, setSettings] = useState<Settings>(() =>
-    ensureProviderDefaults(loadSettingsForCwd(context.cwd)),
+    ensureSettingsProviderDefaults(loadSettingsForCwd(context.cwd)),
   );
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
   const [authFollowUp, setAuthFollowUp] = useState<ProviderAuthFollowUp | null>(null);
+  const [authReturnTarget, setAuthReturnTarget] = useState<SettingsAuthReturnTarget | null>(null);
+  const [providerLoginState, setProviderLoginState] = useState<ProviderLoginState | null>(null);
+  const [modelResumeTarget, setModelResumeTarget] = useState<SettingsModelResumeTarget | null>(null);
+  const activeProviderLoginRef = useRef<string | null>(null);
 
   const handleSave = useCallback(
     (next: Settings) => {
@@ -1130,10 +1195,90 @@ export function Settings({
   const settingsPath = getSettingsPath(context.cwd);
   const projectSettingsPath = getProjectSettingsPath(context.cwd);
 
-  const openAuthTab = useCallback((followUp: ProviderAuthFollowUp) => {
+  const openAuthTab = useCallback((followUp: ProviderAuthFollowUp, returnTarget?: SettingsAuthReturnTarget) => {
     setAuthFollowUp(followUp);
+    setAuthReturnTarget(returnTarget ?? null);
+    setModelResumeTarget(null);
     setActiveTab("api-key");
   }, []);
+
+  const runProviderLogin = useCallback(async (providerId: string) => {
+    if (activeProviderLoginRef.current === providerId) {
+      return;
+    }
+
+    activeProviderLoginRef.current = providerId;
+    setActiveTab("api-key");
+    setProviderLoginState({
+      providerId,
+      status: "running",
+      lines: [],
+      message: `Starting ${providerId} login…`,
+    });
+
+    try {
+      const result = await runSettingsProviderLogin({
+        providerId,
+        settings,
+        writeLine: (line) => {
+          setProviderLoginState((current) => {
+            if (current?.providerId !== providerId) {
+              return {
+                providerId,
+                status: "running",
+                lines: [line],
+              };
+            }
+
+            return {
+              ...current,
+              status: "running",
+              lines: [...current.lines, line],
+              message: current.message,
+            };
+          });
+        },
+      });
+
+      handleSave(result.nextSettings);
+      const navigation = resolveSettingsPostLoginNavigation({
+        providerId,
+        followUpProviderId: authFollowUp?.providerId,
+        returnTarget: authReturnTarget,
+      });
+
+      setProviderLoginState((current) => ({
+        providerId,
+        status: "success",
+        lines: current?.providerId === providerId ? current.lines : [],
+        message: result.message,
+      }));
+
+      if (navigation) {
+        setAuthFollowUp(null);
+        setAuthReturnTarget(null);
+        if (navigation.modelResumeTarget) {
+          setModelResumeTarget({
+            nonce: Date.now(),
+            ...navigation.modelResumeTarget,
+          });
+        }
+        setActiveTab(navigation.nextTab);
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      setProviderLoginState((current) => ({
+        providerId,
+        status: "error",
+        lines: current?.providerId === providerId ? current.lines : [],
+        message,
+      }));
+    } finally {
+      if (activeProviderLoginRef.current === providerId) {
+        activeProviderLoginRef.current = null;
+      }
+    }
+  }, [authFollowUp?.providerId, authReturnTarget, handleSave, settings]);
 
   return (
     <Box
@@ -1181,6 +1326,7 @@ export function Settings({
             settings={settings}
             onSave={handleSave}
             onOpenAuth={openAuthTab}
+            resumeTarget={modelResumeTarget}
           />
         )}
         {activeTab === "api-key" && (
@@ -1190,6 +1336,8 @@ export function Settings({
             initialProviderId={authFollowUp?.providerId}
             initialPhase={authFollowUp ? "credential" : "provider"}
             notice={authFollowUp?.notice}
+            loginState={providerLoginState}
+            onAutoLogin={runProviderLogin}
           />
         )}
       </Box>

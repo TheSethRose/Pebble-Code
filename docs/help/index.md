@@ -11,14 +11,14 @@ read_when:
 If you want the quick “get unstuck” path, start here:
 
 - **Setup path:** [Getting Started](/start/getting-started)
-- **Provider setup:** [Providers](/providers)
+- **Provider setup:** [Providers](/providers/index)
 - **Config rules:** [Configuration](/concepts/configuration)
 - **Runtime guardrails:** [Trust and permissions](/concepts/trust-and-permissions)
 - **Troubleshooting:** [Start here](/help/troubleshooting)
 
 ## Most common docs destinations
 
-- [CLI overview](/cli)
+- [CLI overview](/cli/index)
 - [Headless mode](/cli/headless)
 - [Slash commands](/cli/slash-commands)
 - [Sessions](/concepts/sessions)
