@@ -22,6 +22,7 @@ import { PromptInput } from "./components/PromptInput.js";
 import { WelcomeHeader } from "./components/WelcomeHeader.js";
 import { TranscriptView } from "./components/TranscriptView.js";
 import { Settings } from "./Settings.js";
+import type { TabId } from "./Settings.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -78,6 +79,7 @@ export function App({ context }: { context: CommandContext }) {
   );
   const [state, setState] = React.useState<AppState>(INITIAL_STATE);
   const [showSettings, setShowSettings] = React.useState(false);
+  const [settingsTab, setSettingsTab] = React.useState<TabId>("config");
   const [inputValue, setInputValue] = React.useState("");
   const [inputKey, setInputKey] = React.useState(0);
   const [ctrlCOnce, setCtrlCOnce] = React.useState(false);
@@ -227,6 +229,8 @@ export function App({ context }: { context: CommandContext }) {
 
         // /config — open the settings panel
         if (result.data?.action === "open-settings") {
+          const tab = (result.data.defaultTab as TabId | undefined) ?? "config";
+          setSettingsTab(tab);
           setShowSettings(true);
           return;
         }
@@ -395,8 +399,10 @@ export function App({ context }: { context: CommandContext }) {
     return (
       <Settings
         context={context}
+        defaultTab={settingsTab}
         onClose={() => {
           setShowSettings(false);
+          setSettingsTab("config");
           setRuntimeConfig(loadCommandConfig(context.cwd, runtimeConfig));
         }}
       />

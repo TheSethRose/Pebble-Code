@@ -40,7 +40,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - extension loading
 - advanced workflows
 - end-to-end validation
-- build health
+- integration coverage and operational hardening
 
 ## Honest current state
 
@@ -56,15 +56,17 @@ But the current repo is still **far from reference breadth**, especially in:
 - Trust/config/instruction loading exists
 - Permission manager exists and is partly wired into engine execution
 - Session store and compaction helpers exist
+- Interactive and headless runtimes persist session transcripts and support basic resume flows
 - Basic Ink REPL exists and can invoke the engine
-- UI now exposes trust/session startup chrome and recent-session history
+- UI now exposes trust/session startup chrome, recent-session history, and a tabbed settings panel
+- Settings now support provider/model selection plus provider/model list filtering
 
 ### What is partial or weak
 
 - REPL is minimal and lacks rich terminal UX
 - Headless mode exists but is still thin compared to the docs promise
 - `/memory` is still a thin session-backed status view, not a full memory system
-- Persistence exists but is not fully wired into runtime flow
+- Persistence is wired for session storage and resume, but memory loading/injection is still placeholder-heavy
 - Compaction exists but is not triggered automatically by runtime
 - AskUserQuestionTool returns structured prompt data but not a full interactive approval flow
 - Todo state is in-memory only
@@ -99,6 +101,8 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] `/clear` works
 - [x] `/exit` works
 - [x] `/config` works
+- [x] `/login` works
+- [x] `/provider` works
 - [x] `/model` works
 - [x] command aliases work
 - [x] command discovery through `/help` works
@@ -131,7 +135,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] runtime boot is dynamically loaded after fast-path checks
 - [x] interactive path starts the runtime
 - [x] headless path starts the runtime
-- [ ] `--resume` is actually wired into a resume flow
+- [x] `--resume` is actually wired into a resume flow
 - [ ] SDK-specific entrypoint/runtime surface exists beyond the basic CLI path
 - [ ] entrypoint behavior is covered by smoke tests
 
@@ -157,9 +161,9 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] compaction helper code exists
 - [x] token accounting helper code exists
 - [x] cost tracking helper code exists
-- [ ] runtime writes active conversations to session storage during real use
-- [ ] runtime can continue the most recent session
-- [ ] runtime can resume a session by ID
+- [x] runtime writes active conversations to session storage during real use
+- [x] runtime can continue the most recent session
+- [x] runtime can resume a session by ID
 - [ ] runtime exposes memory loading/injection beyond placeholders
 - [ ] compaction is automatically triggered in long conversations
 
@@ -172,7 +176,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] primary provider supports non-streaming responses
 - [x] primary provider supports streaming text responses
 - [x] provider configuration reads from environment variables
-- [ ] provider auth/setup UX exists in the product
+- [x] provider auth/setup UX exists in the product
 - [ ] provider fallback behavior is implemented and tested
 - [ ] multi-provider support exists beyond the primary adapter
 - [ ] provider failure scenarios are covered by tests
@@ -187,8 +191,8 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] headless runtime path exists
 - [x] interactive runtime path exists
 - [ ] runtime loads extensions/hooks/background workflows during boot
-- [ ] runtime persists sessions as part of normal CLI execution
-- [ ] runtime resume flow is implemented end-to-end
+- [x] runtime persists sessions as part of normal CLI execution
+- [x] runtime resume flow is implemented end-to-end
 - [ ] runtime trust/permission behavior is validated through full interactive flows
 
 ## Tools
@@ -218,10 +222,12 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] basic engine invocation from the REPL exists
 - [x] basic tool activity messages are shown
 - [x] basic processing/error states are shown
-- [ ] UI has a dedicated prompt input component system
+- [x] UI has a dedicated prompt input component system
 - [ ] UI has a real streaming renderer instead of a minimal flat list
 - [ ] UI has permission approval dialogs / prompts
 - [x] UI has trust/onboarding/startup surfaces
+- [x] UI has a tabbed settings panel for config/provider/model/API key management
+- [x] UI settings support searchable/filterable provider and model selection
 - [x] UI has session resume/history UI
 - [ ] UI has richer message rendering for tools, progress, and errors
 - [ ] UI quality is anywhere close to the reference snapshot breadth
@@ -246,11 +252,11 @@ But the current repo is still **far from reference breadth**, especially in:
 
 These are the next honest priority slices if we want the repo to materially close the gap with the reference snapshot:
 
-1. **Fix the build** so `bun run build` works again
-2. **Finish runtime wiring** for persistence and resume
-3. **Make the REPL meaningfully usable** with better streaming, approvals, and session UX
-4. **Turn extensions from contracts into runtime behavior**
-5. **Add real integration tests** for CLI/headless/engine flows
+1. **Add real integration and smoke coverage** for CLI, headless, REPL, and resume flows
+2. **Make the REPL meaningfully usable** with better streaming, approvals, and richer message rendering
+3. **Turn extensions from contracts into runtime behavior**
+4. **Wire automatic compaction and real memory loading/injection**
+5. **Expand provider resilience** with fallback behavior, multi-provider support, and failure-path tests
 
 ## Success criteria for the next milestone
 

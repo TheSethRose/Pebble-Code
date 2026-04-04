@@ -20,7 +20,7 @@ import {
   OPENROUTER_PROVIDER_ID,
 } from "../constants/openrouter.js";
 
-type TabId = "config" | "provider" | "model" | "api-key";
+export type TabId = "config" | "provider" | "model" | "api-key";
 
 // ---------------------------------------------------------------------------
 // OpenRouter model fetching
@@ -142,6 +142,13 @@ function ConfigTab({
   );
 }
 
+const PROVIDER_MANUAL_VALUE = "__manual_provider__";
+
+const PROVIDER_OPTIONS: Array<{ label: string; value: string }> = [
+  { label: "OpenRouter  (openrouter.ai)", value: "openrouter" },
+  { label: "⌨  Type provider ID manually…", value: PROVIDER_MANUAL_VALUE },
+];
+
 function ProviderTab({
   settings,
   onSave,
@@ -150,8 +157,50 @@ function ProviderTab({
   onSave: (s: Settings) => void;
 }) {
   const [message, setMessage] = useState("");
+  const [showManual, setShowManual] = useState(false);
+  const [filterQuery, setFilterQuery] = useState("");
 
-  const handleSubmit = useCallback(
+  const resolved = resolveProviderConfig(settings);
+
+  const filteredProviderOptions = useMemo(() => {
+    if (!filterQuery.trim()) return PROVIDER_OPTIONS;
+    const q = filterQuery.toLowerCase();
+    return PROVIDER_OPTIONS.filter(
+      (opt) => opt.value === PROVIDER_MANUAL_VALUE || opt.label.toLowerCase().includes(q),
+    );
+  }, [filterQuery]);
+
+  // Capture printable characters + backspace for filtering when showing list
+  useInput(
+    (char, key) => {
+      if (key.ctrl || key.meta || key.tab || key.escape) return;
+      if (key.return || key.upArrow || key.downArrow || key.leftArrow || key.rightArrow) return;
+      if (key.backspace || key.delete) {
+        setFilterQuery((q) => q.slice(0, -1));
+        return;
+      }
+      if (char && char.charCodeAt(0) >= 32) {
+        setFilterQuery((q) => q + char);
+      }
+    },
+    { isActive: !showManual },
+  );
+
+  const handleProviderSelect = useCallback(
+    (value: string) => {
+      if (value === PROVIDER_MANUAL_VALUE) {
+        setShowManual(true);
+        return;
+      }
+      const provider = normalizeProviderId(value);
+      const next = ensureProviderDefaults({ ...settings, provider });
+      onSave(next);
+      setMessage(`Provider set to ${provider}`);
+    },
+    [settings, onSave],
+  );
+
+  const handleManualSubmit = useCallback(
     (value: string) => {
       const provider = normalizeProviderId(value);
       if (!isSupportedProvider(provider)) {
@@ -165,21 +214,46 @@ function ProviderTab({
     [settings, onSave],
   );
 
-  const resolved = resolveProviderConfig(settings);
-
   return (
     <Box flexDirection="column">
       <Text bold color="cyan">Provider</Text>
       <Box flexDirection="column" marginTop={1}>
         <Text>Current: {resolved.providerLabel} ({resolved.providerId})</Text>
         <Text>Base URL: {resolved.baseUrl}</Text>
-        <Box marginTop={1}>
-          <Text color="cyan">{"› "} </Text>
-          <TextInput
-            onSubmit={handleSubmit}
-            placeholder="Provider (e.g. openrouter)"
-          />
-        </Box>
+
+        {!showManual && (
+          <Box flexDirection="column" marginTop={1}>
+            <Box>
+              <Text dimColor>Filter: </Text>
+              <Text color="cyan">{filterQuery}</Text>
+              <Text dimColor>█</Text>
+            </Box>
+            <Box marginTop={1}>
+              <Select
+                key={filterQuery}
+                options={filteredProviderOptions}
+                visibleOptionCount={5}
+                defaultValue={resolved.providerId}
+                onChange={handleProviderSelect}
+                highlightText={filterQuery || undefined}
+              />
+            </Box>
+          </Box>
+        )}
+
+        {showManual && (
+          <Box flexDirection="column" marginTop={1}>
+            <Text dimColor>Provider ID:</Text>
+            <Box marginTop={1}>
+              <Text color="cyan">{"› "} </Text>
+              <TextInput
+                onSubmit={handleManualSubmit}
+                placeholder="Provider (e.g. openrouter)"
+              />
+            </Box>
+          </Box>
+        )}
+
         {message && (
           <Box marginTop={1}>
             <Text color={message.startsWith("Unsupported") ? "red" : "green"}>
@@ -189,7 +263,11 @@ function ProviderTab({
         )}
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>Enter to save · Shift+Tab / Tab to switch sections</Text>
+        <Text dimColor>
+          {showManual
+            ? "Enter to save · Shift+Tab / Tab to switch sections"
+            : "Type to filter · ↑↓ navigate · Enter select · Tab to switch sections"}
+        </Text>
       </Box>
     </Box>
   );
@@ -207,6 +285,7 @@ function ModelTab({
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [showManual, setShowManual] = useState(false);
+  const [filterQuery, setFilterQuery] = useState("");
 
   const resolved = resolveProviderConfig(settings);
 
@@ -236,6 +315,32 @@ function ModelTab({
     return opts;
   }, [models]);
 
+  const filteredOptions = useMemo(() => {
+    if (!filterQuery.trim()) return modelOptions;
+    const q = filterQuery.toLowerCase();
+    return modelOptions.filter(
+      (opt) => opt.value === MANUAL_VALUE || opt.label.toLowerCase().includes(q),
+    );
+  }, [modelOptions, filterQuery]);
+
+  const showPicker = !showManual && models.length > 0 && !loading;
+
+  // Capture printable characters + backspace for filtering when picker is visible
+  useInput(
+    (char, key) => {
+      if (key.ctrl || key.meta || key.tab || key.escape) return;
+      if (key.return || key.upArrow || key.downArrow || key.leftArrow || key.rightArrow) return;
+      if (key.backspace || key.delete) {
+        setFilterQuery((q) => q.slice(0, -1));
+        return;
+      }
+      if (char && char.charCodeAt(0) >= 32) {
+        setFilterQuery((q) => q + char);
+      }
+    },
+    { isActive: showPicker },
+  );
+
   const handleSelectChange = useCallback(
     (value: string) => {
       if (value === MANUAL_VALUE) {
@@ -262,7 +367,9 @@ function ModelTab({
     [settings, onSave],
   );
 
-  const showPicker = !showManual && models.length > 0 && !loading;
+  const matchCount = filterQuery.trim()
+    ? filteredOptions.filter((o) => o.value !== MANUAL_VALUE).length
+    : models.length;
 
   return (
     <Box flexDirection="column">
@@ -283,30 +390,8 @@ function ModelTab({
         )}
 
         {!resolved.apiKey && !loading && (
-          <Box marginTop={1}>
+          <Box flexDirection="column" marginTop={1}>
             <Text color="yellow">No API key — configure via the API Key tab to load model list.</Text>
-          </Box>
-        )}
-
-        {showPicker && (
-          <Box flexDirection="column" marginTop={1}>
-            <Text dimColor>↑↓ navigate · Enter select · {models.length} models available</Text>
-            <Box marginTop={1}>
-              <Select
-                options={modelOptions}
-                visibleOptionCount={10}
-                defaultValue={resolved.model}
-                onChange={handleSelectChange}
-              />
-            </Box>
-          </Box>
-        )}
-
-        {(showManual || (!loading && !showPicker && !loadError && resolved.apiKey)) && (
-          <Box flexDirection="column" marginTop={1}>
-            {showManual && models.length > 0 && (
-              <Text dimColor>Manual entry (Tab back to model list):</Text>
-            )}
             <Box marginTop={1}>
               <Text color="cyan">{"› "} </Text>
               <TextInput
@@ -317,9 +402,37 @@ function ModelTab({
           </Box>
         )}
 
-        {!resolved.apiKey && !loading && (
-          <Box marginTop={1}>
+        {showPicker && (
+          <Box flexDirection="column" marginTop={1}>
             <Box>
+              <Text dimColor>Filter: </Text>
+              <Text color="cyan">{filterQuery}</Text>
+              <Text dimColor>█  </Text>
+              <Text dimColor>
+                {filterQuery.trim()
+                  ? `${matchCount} of ${models.length} models`
+                  : `${models.length} models · type to filter`}
+              </Text>
+            </Box>
+            <Box marginTop={1}>
+              <Select
+                key={filterQuery}
+                options={filteredOptions}
+                visibleOptionCount={10}
+                defaultValue={resolved.model}
+                onChange={handleSelectChange}
+                highlightText={filterQuery || undefined}
+              />
+            </Box>
+          </Box>
+        )}
+
+        {(showManual || (!loading && !showPicker && !loadError && resolved.apiKey)) && (
+          <Box flexDirection="column" marginTop={1}>
+            {showManual && models.length > 0 && (
+              <Text dimColor>Manual entry:</Text>
+            )}
+            <Box marginTop={1}>
               <Text color="cyan">{"› "} </Text>
               <TextInput
                 onSubmit={handleTextSubmit}
@@ -338,7 +451,11 @@ function ModelTab({
         )}
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>Enter to save · Shift+Tab / Tab to switch sections</Text>
+        <Text dimColor>
+          {showPicker
+            ? "Type to filter · ↑↓ navigate · Enter select · Tab to switch sections"
+            : "Enter to save · Tab to switch sections"}
+        </Text>
       </Box>
     </Box>
   );

@@ -16,7 +16,6 @@ import {
   type Settings,
 } from "../runtime/config.js";
 import { findProjectRoot } from "../runtime/trust.js";
-import { resolveProviderConfig } from "../providers/config.js";
 
 /**
  * Register all built-in commands.
@@ -27,6 +26,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register(createExitCommand());
   registry.register(createLoginCommand());
   registry.register(createConfigCommand());
+  registry.register(createProviderCommand());
   registry.register(createPermissionsCommand());
   registry.register(createModelCommand());
   registry.register(createResumeCommand());
@@ -156,7 +156,21 @@ function createConfigCommand(): Command {
     usage: "/config",
     modes: ["interactive"],
     execute: (_args, _ctx): CommandResult => {
-      return { success: true, output: "", data: { action: "open-settings" } };
+      return { success: true, output: "", data: { action: "open-settings", defaultTab: "config" } };
+    },
+  };
+}
+
+function createProviderCommand(): Command {
+  return {
+    name: "provider",
+    aliases: ["p"],
+    description: "Switch AI provider",
+    type: "ui",
+    usage: "/provider",
+    modes: ["interactive"],
+    execute: (_args, _ctx): CommandResult => {
+      return { success: true, output: "", data: { action: "open-settings", defaultTab: "provider" } };
     },
   };
 }
@@ -174,13 +188,8 @@ function createLoginCommand(): Command {
       if (!trimmed) {
         return {
           success: true,
-          output: [
-            "Usage:",
-            "  /login <api-key>",
-            "  /login openrouter <api-key>",
-            "",
-            `Pebble defaults to ${OPENROUTER_PROVIDER_ID}. The key is stored in ${getSettingsPath(ctx.cwd)}.`,
-          ].join("\n"),
+          output: "",
+          data: { action: "open-settings", defaultTab: "api-key" },
         };
       }
 
@@ -256,10 +265,10 @@ function createModelCommand(): Command {
         );
       }
 
-      const resolved = resolveProviderConfig(loadProjectSettings(ctx));
       return {
         success: true,
-        output: `Current model: ${resolved.model}`,
+        output: "",
+        data: { action: "open-settings", defaultTab: "model" },
       };
     },
   };
