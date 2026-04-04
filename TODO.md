@@ -220,12 +220,12 @@ Checked items below mean Pebble now has real config/runtime wiring for that prov
 - [x] implement StepFun
 - [ ] implement BytePlus
 - [x] implement Volcengine / Doubao
-- [ ] implement Xiaomi
+- [x] implement Xiaomi
 - [ ] implement OpenCode
 - [ ] implement OpenCode Go
 - [x] implement Kilocode
 - [ ] implement Synthetic
-- [ ] implement Venice
+- [x] implement Venice
 - [ ] implement Vercel AI Gateway
 - [ ] implement Cloudflare AI Gateway
 - [x] implement Perplexity

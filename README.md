@@ -214,6 +214,15 @@ scripts/        # Build and automation helpers
 - `tools/` exposes permission-aware capabilities to the engine
 - `ui/` consumes runtime state and engine events; owns no policy or storage
 
+## Documentation Suite
+
+Pebble now includes a small documentation-suite spine so the repo stays easier to navigate and maintain over time.
+
+- [`docs/DOCS_DIRECTORY.md`](docs/DOCS_DIRECTORY.md) — curated starting points for the most-used docs
+- [`docs/DOCS_HUB.md`](docs/DOCS_HUB.md) — exhaustive map of the Markdown docs suite
+- [`docs/DOCS_MAINTENANCE.md`](docs/DOCS_MAINTENANCE.md) — canonical ownership and update triggers for self-documenting maintenance
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/CODEBASE_TREE.md`](docs/CODEBASE_TREE.md) — the main system and structure references
+
 ### Extensibility
 
 **Skills** — Domain-specific behavior packages that inject system prompt fragments and local constraints. Loaded from user or project directories.

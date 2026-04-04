@@ -138,6 +138,18 @@ describe("provider config resolution", () => {
       model: "kilocode/kilo/auto",
       baseUrl: "https://api.kilo.ai/api/gateway",
     },
+    {
+      provider: "venice",
+      credential: "venice_test_token",
+      model: "venice/kimi-k2-5",
+      baseUrl: "https://api.venice.ai/api/v1",
+    },
+    {
+      provider: "xiaomi",
+      credential: "xiaomi_test_token",
+      model: "xiaomi/mimo-v2-flash",
+      baseUrl: "https://api.xiaomimimo.com/v1",
+    },
   ] as const;
 
   for (const providerCase of promotedProviders) {
@@ -193,6 +205,8 @@ describe("provider config resolution", () => {
     expect(listed.some((provider) => provider.id === "groq" && provider.source === "builtin")).toBe(true);
     expect(listed.some((provider) => provider.id === "huggingface" && provider.source === "builtin")).toBe(true);
     expect(listed.some((provider) => provider.id === "zai" && provider.source === "builtin")).toBe(true);
+    expect(listed.some((provider) => provider.id === "venice" && provider.source === "builtin")).toBe(true);
+    expect(listed.some((provider) => provider.id === "xiaomi" && provider.source === "builtin")).toBe(true);
     expect(listed.some((provider) => provider.id === "echo-ext" && provider.source === "extension")).toBe(true);
   });
 });

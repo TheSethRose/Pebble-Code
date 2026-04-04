@@ -518,10 +518,16 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     authKind: "api-key",
     help: "Pebble has cataloged Synthetic, but the built-in runtime still needs an Anthropic-compatible adapter instead of the shared OpenAI-compatible transport.",
   }),
-  catalogOnly("venice", "Venice", {
+  openAiCompatible("venice", "Venice", {
     envKeys: ["VENICE_API_KEY"],
-    authKind: "api-key",
-    help: "Pebble has cataloged Venice, but the built-in runtime still needs a verified provider-specific endpoint/default-model path.",
+    defaultModel: "venice/kimi-k2-5",
+    defaultBaseUrl: "https://api.venice.ai/api/v1",
+    exampleModels: [
+      "venice/kimi-k2-5",
+      "venice/claude-opus-4-6",
+      "venice/qwen3-coder-480b-a35b-instruct",
+    ],
+    help: "Venice is wired through its documented OpenAI-compatible /api/v1 endpoint. The mirrored docs note that some models disable tools or have provider-specific max-token quirks, so live smoke tests are still pending.",
   }),
   catalogOnly("vercel", "Vercel AI", {
     envKeys: ["VERCEL_API_KEY"],
@@ -534,10 +540,16 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     authKind: "gateway",
     help: "Pebble has cataloged Vercel AI Gateway, but the built-in runtime still needs gateway-specific auth/header handling.",
   }),
-  catalogOnly("xiaomi", "Xiaomi", {
+  openAiCompatible("xiaomi", "Xiaomi", {
     envKeys: ["XIAOMI_API_KEY"],
-    authKind: "api-key",
-    help: "Pebble has cataloged Xiaomi, but the built-in runtime still needs a verified provider-specific endpoint/default-model path.",
+    defaultModel: "xiaomi/mimo-v2-flash",
+    defaultBaseUrl: "https://api.xiaomimimo.com/v1",
+    exampleModels: [
+      "xiaomi/mimo-v2-flash",
+      "xiaomi/mimo-v2-pro",
+      "xiaomi/mimo-v2-omni",
+    ],
+    help: "Xiaomi MiMo is wired through its documented OpenAI-compatible /v1 endpoint. Live credential smoke tests are still pending.",
   }),
   catalogOnly("zenmux", "ZenMux", {
     envKeys: ["ZENMUX_API_KEY"],

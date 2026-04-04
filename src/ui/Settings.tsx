@@ -30,6 +30,10 @@ import {
   OPENROUTER_DEFAULT_BASE_URL,
   OPENROUTER_PROVIDER_ID,
 } from "../constants/openrouter.js";
+import {
+  getProviderSelectionAuthFollowUp,
+  type ProviderAuthFollowUp,
+} from "./settingsFlow.js";
 
 export type TabId = "config" | "provider" | "model" | "api-key";
 
@@ -202,10 +206,12 @@ function ProviderTab({
   context,
   settings,
   onSave,
+  onOpenAuth,
 }: {
   context: CommandContext;
   settings: Settings;
   onSave: (s: Settings) => void;
+  onOpenAuth: (followUp: ProviderAuthFollowUp) => void;
 }) {
   const [message, setMessage] = useState("");
   const [showManual, setShowManual] = useState(false);
@@ -251,7 +257,13 @@ function ProviderTab({
         return;
       }
       const provider = normalizeProviderId(value);
-      if (provider === settings.provider) return;
+      if (provider === settings.provider) {
+        const followUp = getProviderSelectionAuthFollowUp(settings, provider);
+        if (followUp) {
+          onOpenAuth(followUp);
+        }
+        return;
+      }
       const next = ensureProviderDefaults({
         ...settings,
         provider,
@@ -259,9 +271,14 @@ function ProviderTab({
         baseUrl: undefined,
       });
       onSave(next);
+      const followUp = getProviderSelectionAuthFollowUp(next, provider);
+      if (followUp) {
+        onOpenAuth(followUp);
+        return;
+      }
       setMessage(`Provider set to ${provider}`);
     },
-    [settings, onSave],
+    [onOpenAuth, onSave, settings],
   );
 
   const handleManualSubmit = useCallback(
@@ -278,9 +295,14 @@ function ProviderTab({
         baseUrl: undefined,
       });
       onSave(next);
+      const followUp = getProviderSelectionAuthFollowUp(next, provider);
+      if (followUp) {
+        onOpenAuth(followUp);
+        return;
+      }
       setMessage(`Provider set to ${provider}`);
     },
-    [settings, onSave],
+    [onOpenAuth, onSave, settings],
   );
 
   return (
@@ -346,10 +368,12 @@ function ModelTab({
   context,
   settings,
   onSave,
+  onOpenAuth,
 }: {
   context: CommandContext;
   settings: Settings;
   onSave: (s: Settings) => void;
+  onOpenAuth: (followUp: ProviderAuthFollowUp) => void;
 }) {
   const [message, setMessage] = useState("");
   const [models, setModels] = useState<ProviderModel[]>([]);
@@ -493,6 +517,17 @@ function ModelTab({
           baseUrl: undefined,
         });
         onSave(next);
+        const followUp = getProviderSelectionAuthFollowUp(next, provider);
+        if (followUp) {
+          onOpenAuth(followUp);
+          return;
+        }
+      } else {
+        const followUp = getProviderSelectionAuthFollowUp(settings, provider);
+        if (followUp) {
+          onOpenAuth(followUp);
+          return;
+        }
       }
 
       setPhase("model");
@@ -662,16 +697,30 @@ function ModelTab({
 function ApiKeyTab({
   settings,
   onSave,
+  initialProviderId,
+  initialPhase = "provider",
+  notice,
 }: {
   settings: Settings;
   onSave: (s: Settings) => void;
+  initialProviderId?: string;
+  initialPhase?: "provider" | "credential";
+  notice?: string;
 }) {
   const [message, setMessage] = useState("");
-  const [phase, setPhase] = useState<"provider" | "credential">("provider");
+  const [phase, setPhase] = useState<"provider" | "credential">(initialPhase);
   const [filterQuery, setFilterQuery] = useState("");
   const [selectedProviderId, setSelectedProviderId] = useState(
-    normalizeProviderId(settings.provider),
+    normalizeProviderId(initialProviderId ?? settings.provider),
   );
+
+  useEffect(() => {
+    setSelectedProviderId(normalizeProviderId(initialProviderId ?? settings.provider));
+  }, [initialProviderId, settings.provider]);
+
+  useEffect(() => {
+    setPhase(initialPhase);
+  }, [initialPhase]);
 
   const providerOptions = useMemo(() => buildBuiltinProviderOptions(), []);
   const filteredProviderOptions = useMemo(() => {
@@ -768,6 +817,11 @@ function ApiKeyTab({
           </>
         ) : (
           <>
+            {notice && (
+              <Box marginBottom={1}>
+                <Text color="yellow">{notice}</Text>
+              </Box>
+            )}
             <Text>Provider: {selectedDefinition?.label ?? resolved.providerLabel} ({selectedProviderId})</Text>
             <Text>Auth mode: {getProviderAuthDescription(selectedDefinition)}</Text>
             <Text>
@@ -830,6 +884,7 @@ export function Settings({
     ensureProviderDefaults(loadSettingsForCwd(context.cwd)),
   );
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
+  const [authFollowUp, setAuthFollowUp] = useState<ProviderAuthFollowUp | null>(null);
 
   const handleSave = useCallback(
     (next: Settings) => {
@@ -867,6 +922,11 @@ export function Settings({
   const settingsPath = getSettingsPath(context.cwd);
   const projectSettingsPath = getProjectSettingsPath(context.cwd);
 
+  const openAuthTab = useCallback((followUp: ProviderAuthFollowUp) => {
+    setAuthFollowUp(followUp);
+    setActiveTab("api-key");
+  }, []);
+
   return (
     <Box
       flexDirection="column"
@@ -900,13 +960,29 @@ export function Settings({
           />
         )}
         {activeTab === "provider" && (
-          <ProviderTab context={context} settings={settings} onSave={handleSave} />
+          <ProviderTab
+            context={context}
+            settings={settings}
+            onSave={handleSave}
+            onOpenAuth={openAuthTab}
+          />
         )}
         {activeTab === "model" && (
-          <ModelTab context={context} settings={settings} onSave={handleSave} />
+          <ModelTab
+            context={context}
+            settings={settings}
+            onSave={handleSave}
+            onOpenAuth={openAuthTab}
+          />
         )}
         {activeTab === "api-key" && (
-          <ApiKeyTab settings={settings} onSave={handleSave} />
+          <ApiKeyTab
+            settings={settings}
+            onSave={handleSave}
+            initialProviderId={authFollowUp?.providerId}
+            initialPhase={authFollowUp ? "credential" : "provider"}
+            notice={authFollowUp?.notice}
+          />
         )}
       </Box>
 
