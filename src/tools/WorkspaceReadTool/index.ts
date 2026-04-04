@@ -31,57 +31,79 @@ const booleanish = z.preprocess((value) => {
   return value;
 }, z.boolean());
 
+const numberish = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    return value;
+  }
+
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : value;
+}, z.number());
+
+function numberField(description: string) {
+  return numberish.describe(description);
+}
+
+function booleanField(description: string) {
+  return booleanish.describe(description);
+}
+
 const WorkspaceReadInputSchema = z.discriminatedUnion("action", [
   z.object({
-    action: z.literal("read_file"),
-    file_path: z.string(),
-    start_line: z.number().optional(),
-    end_line: z.number().optional(),
+    action: z.literal("read_file").describe("Read file contents when you already know the file path."),
+    file_path: z.string().describe("File path to read. Prefer a repo-relative path like src/index.ts or an absolute path."),
+    start_line: numberField("Optional 1-indexed start line. Pass a JSON number such as 1 when you want a partial read.").optional(),
+    end_line: numberField("Optional 1-indexed inclusive end line. Pass a JSON number such as 200 when you want a partial read.").optional(),
   }),
   z.object({
-    action: z.literal("list_directory"),
-    path: z.string().optional(),
-    include_hidden: booleanish.optional(),
-    max_results: z.number().optional(),
+    action: z.literal("list_directory").describe("List the immediate children of a directory, not a recursive tree."),
+    path: z.string().optional().describe("Directory to inspect. Defaults to the current working directory."),
+    include_hidden: booleanField("Whether to include dotfiles and hidden entries. Prefer a JSON boolean like true or false.").optional(),
+    max_results: numberField("Optional maximum number of entries to return. Keep this small when you only need a quick sample.").optional(),
   }),
   z.object({
-    action: z.literal("glob"),
-    pattern: z.string(),
-    path: z.string().optional(),
-    max_results: z.number().optional(),
+    action: z.literal("glob").describe("Find files by path pattern when you know the filename or folder shape."),
+    pattern: z.string().describe("Glob pattern such as src/** or **/*.{ts,tsx}."),
+    path: z.string().optional().describe("Optional directory to scope the glob search."),
+    max_results: numberField("Optional maximum number of matching paths to return.").optional(),
   }),
   z.object({
-    action: z.literal("grep"),
-    pattern: z.string(),
-    path: z.string().optional(),
-    include: z.string().optional(),
-    is_regex: booleanish.optional(),
-    case_sensitive: booleanish.optional(),
-    max_results: z.number().optional(),
+    action: z.literal("grep").describe("Search file contents for exact text or a regex pattern."),
+    pattern: z.string().describe("Text or regex pattern to search for."),
+    path: z.string().optional().describe("Optional directory to search within."),
+    include: z.string().optional().describe("Optional glob pattern to restrict matching files, such as src/**/*.ts."),
+    is_regex: booleanField("Whether pattern should be treated as a regex.").optional(),
+    case_sensitive: booleanField("Whether the search should be case-sensitive.").optional(),
+    max_results: numberField("Optional maximum number of matches to return.").optional(),
   }),
   z.object({
-    action: z.literal("project_structure"),
-    path: z.string().optional(),
-    max_depth: z.number().optional(),
-    include_hidden: booleanish.optional(),
-    max_entries_per_directory: z.number().optional(),
+    action: z.literal("project_structure").describe("Generate a recursive tree view for a folder when you need a quick structural overview."),
+    path: z.string().optional().describe("Directory to render as a tree. Defaults to the current working directory."),
+    max_depth: numberField("Optional recursion depth. Prefer a small JSON number such as 2 or 3 for an overview.").optional(),
+    include_hidden: booleanField("Whether to include hidden files and directories in the tree.").optional(),
+    max_entries_per_directory: numberField("Optional cap for how many children to include per directory before truncating.").optional(),
   }),
   z.object({
-    action: z.literal("tool_search"),
-    query: z.string().optional(),
-    include_hidden: booleanish.optional(),
+    action: z.literal("tool_search").describe("Search the available Pebble tools by name, alias, or category."),
+    query: z.string().optional().describe("Optional text query to filter tools. Leave empty to list visible tools."),
+    include_hidden: booleanField("Whether to include hidden/internal tools in the results.").optional(),
   }),
   z.object({
-    action: z.literal("summarize_path"),
-    path: z.string(),
+    action: z.literal("summarize_path").describe("Summarize a file or directory path with metadata and a short preview."),
+    path: z.string().describe("Path to summarize."),
   }),
   z.object({
-    action: z.literal("git_inspect"),
-    mode: z.enum(["status", "diff", "staged-diff", "changed-files"]).optional(),
+    action: z.literal("git_inspect").describe("Inspect repository status or diff information."),
+    mode: z.enum(["status", "diff", "staged-diff", "changed-files"]).optional().describe("Git inspection mode. Defaults to status."),
   }),
   z.object({
-    action: z.literal("diagnostics"),
-    command: z.enum(["typecheck", "build", "test"]).optional(),
+    action: z.literal("diagnostics").describe("Run a common workspace verification command."),
+    command: z.enum(["typecheck", "build", "test"]).optional().describe("Verification command to run. Defaults to typecheck."),
   }),
 ]);
 
@@ -96,7 +118,7 @@ export class WorkspaceReadTool implements Tool {
     "ToolSearch",
     "WorkspaceInspect",
   ];
-  description = "Inspect the workspace through a single read surface for files, directories, glob/grep search, tool discovery, git inspection, diagnostics, and path summaries.";
+  description = "Inspect the workspace through a single read surface. Choose `read_file` for file contents, `list_directory` for immediate children, `project_structure` for a tree overview, `glob` for filename/path matching, `grep` for text search, `tool_search` for discovering tools, `summarize_path` for quick metadata, `git_inspect` for repo state, and `diagnostics` for typecheck/build/test. Prefer repo-relative or absolute paths and JSON-typed booleans/numbers when possible. For high-level overview requests, gather a small number of broad reads first, then answer instead of repeatedly enumerating more directories once you already have enough context.";
   category = "workspace-read" as const;
   capability = "workspace-read" as const;
   inputSchema = WorkspaceReadInputSchema;

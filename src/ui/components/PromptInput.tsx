@@ -45,22 +45,21 @@ export function PromptInput({
   suggestions = [],
   selectedSuggestionIndex = 0,
 }: PromptInputProps) {
-  const statusLabel = disabled ? statusText || "Waiting for input…" : isProcessing ? statusText || "Thinking…" : "Ready";
+  const statusLabel = disabled ? statusText || "Waiting for input…" : isProcessing ? statusText || "Working…" : "Ready";
   const promptGlyph = isProcessing ? "…" : "❯";
   const sessionLabel = sessionId ? sessionId.slice(0, 8) : "new session";
   const rule = "─".repeat(Math.max(24, width - 2));
   const actionLabel = disabled
     ? "Pebble is waiting for your answer…"
     : isProcessing
-      ? "Pebble is working…"
+      ? statusText || "Working…"
       : "Ask Pebble anything…";
   const actionHint = disabled
     ? "Answer above to continue"
-    : isProcessing
-      ? "Streaming results below"
-      : "Enter sends · / shows commands";
+    : "Enter sends · / shows commands";
   const actionColor = disabled || isProcessing ? "yellow" : "cyan";
   const showActionRow = disabled || isProcessing;
+  const footerStatusLabel = isProcessing && !disabled ? "" : statusLabel;
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -88,11 +87,11 @@ export function PromptInput({
       <Text color="gray">{rule}</Text>
 
       {showActionRow && (
-        <Box justifyContent="space-between" paddingX={1}>
+        <Box justifyContent={actionHint ? "space-between" : "flex-start"} paddingX={1}>
           <Text color={actionColor} bold>
             {actionLabel}
           </Text>
-          <Text color="gray">{actionHint}</Text>
+          {actionHint ? <Text color="gray">{actionHint}</Text> : null}
         </Box>
       )}
 
@@ -114,7 +113,7 @@ export function PromptInput({
             defaultValue={defaultValue}
             onSubmit={onSubmit}
             onChange={onChange}
-            placeholder={isProcessing ? "Pebble is working…" : "Ask Pebble anything…"}
+            placeholder={isProcessing ? "" : "Ask Pebble anything…"}
           />
         )}
       </Box>
@@ -123,7 +122,7 @@ export function PromptInput({
 
       <Box justifyContent="space-between" paddingX={1}>
         <Text color={isProcessing || disabled ? "yellow" : "gray"}>
-          {statusLabel}
+          {footerStatusLabel}
           {!isProcessing && !disabled ? " · Enter sends · Tab ⇄ sessions" : ""}
         </Text>
         <Text color="gray">

@@ -330,6 +330,31 @@ describe("capability tool registry and alias resolution", () => {
       },
     });
   });
+
+  test("WorkspaceRead provider definition exposes action-picking guidance to the model", () => {
+    const engine = new QueryEngine({
+      provider: new ScriptedProvider(() => ({
+        text: "done",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      })),
+      tools: [new WorkspaceReadTool()],
+    });
+
+    const defs = (engine as any).getProviderToolDefinitions() as Array<{
+      name: string;
+      description: string;
+      inputSchema: Record<string, unknown>;
+    }>;
+    const workspaceRead = defs.find((definition) => definition.name === "WorkspaceRead");
+
+    expect(workspaceRead).toBeDefined();
+    expect(workspaceRead?.description).toContain("project_structure");
+    expect(workspaceRead?.description).toContain("JSON-typed booleans/numbers");
+    expect(JSON.stringify(workspaceRead?.inputSchema ?? {})).toContain("Optional recursion depth");
+    expect(JSON.stringify(workspaceRead?.inputSchema ?? {})).toContain("Read file contents when you already know the file path");
+  });
 });
 
 describe("capability tool implementations", () => {
@@ -355,6 +380,34 @@ describe("capability tool implementations", () => {
     expect(hiddenOn.success).toBe(true);
     expect(hiddenOn.output).toContain("visible.txt");
     expect(hiddenOn.output).toContain(".hidden.txt");
+  });
+
+  test("WorkspaceRead tolerates numeric string fields for project structure and limits", async () => {
+    const projectDir = createTempProject("pebble-tools-workspace-read-numberish-");
+    mkdirSync(join(projectDir, "src", "nested", "deeper"), { recursive: true });
+    writeFileSync(join(projectDir, "src", "nested", "deeper", "file.txt"), "hello\n", "utf-8");
+    writeFileSync(join(projectDir, "one.txt"), "1\n", "utf-8");
+    writeFileSync(join(projectDir, "two.txt"), "2\n", "utf-8");
+    writeFileSync(join(projectDir, "three.txt"), "3\n", "utf-8");
+
+    const tool = new WorkspaceReadTool();
+    const projectStructure = await tool.execute(
+      { action: "project_structure", path: ".", max_depth: "2", max_entries_per_directory: "20" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+    const directoryListing = await tool.execute(
+      { action: "list_directory", path: ".", max_results: "2" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(projectStructure.success).toBe(true);
+    expect(projectStructure.output).toContain("src/");
+    expect(projectStructure.output).toContain("nested/");
+    expect(projectStructure.output).not.toContain("deeper/");
+
+    expect(directoryListing.success).toBe(true);
+    expect(directoryListing.data).toMatchObject({ count: 2 });
+    expect(directoryListing.output.split("\n")).toHaveLength(2);
   });
 
   test("MemoryTool can manage session memory and notes", async () => {

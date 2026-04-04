@@ -3,6 +3,7 @@ import { Box, Text, useInput } from "ink";
 import { TextInput, Select } from "@inkjs/ui";
 import type { CommandContext } from "../commands/types.js";
 import {
+  getProjectSettingsPath,
   loadSettingsForCwd,
   saveSettingsForCwd,
   getSettingsPath,
@@ -109,11 +110,13 @@ function ConfigTab({
   context,
   settings,
   settingsPath,
+  projectSettingsPath,
   cwd,
 }: {
   context: CommandContext;
   settings: Settings;
   settingsPath: string;
+  projectSettingsPath: string;
   cwd: string;
 }) {
   const resolved = resolveRuntimeProvider(settings, {}, context.extensionProviders ?? []);
@@ -122,7 +125,8 @@ function ConfigTab({
       <Text bold color="cyan">Status</Text>
       <Box flexDirection="column" marginTop={1}>
         <Text>Working directory: {cwd}</Text>
-        <Text>Settings file: {settingsPath}</Text>
+        <Text>Project defaults: {projectSettingsPath}</Text>
+        <Text>User settings: {settingsPath}</Text>
         <Text>Permission mode: {settings.permissionMode}</Text>
         <Text>Max turns: {settings.maxTurns ?? 50}</Text>
         <Text>Telemetry: {settings.telemetryEnabled ? "enabled" : "disabled"}</Text>
@@ -502,7 +506,7 @@ function ApiKeyTab({
         apiKey: value.trim(),
       });
       onSave(next);
-      setMessage("API key saved to settings");
+      setMessage("API key saved to Pebble settings");
     },
     [settings, onSave],
   );
@@ -524,7 +528,7 @@ function ApiKeyTab({
           <Text color="cyan">{"› "} </Text>
           <TextInput
             onSubmit={handleSubmit}
-            placeholder="API key (saved to settings.json)"
+            placeholder="API key (saved to ~/.pebble/settings.json)"
           />
         </Box>
         {message && (
@@ -586,6 +590,7 @@ export function Settings({
   );
 
   const settingsPath = getSettingsPath(context.cwd);
+  const projectSettingsPath = getProjectSettingsPath(context.cwd);
 
   return (
     <Box
@@ -615,6 +620,7 @@ export function Settings({
             context={context}
             settings={settings}
             settingsPath={settingsPath}
+            projectSettingsPath={projectSettingsPath}
             cwd={context.cwd}
           />
         )}

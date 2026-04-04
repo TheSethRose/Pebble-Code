@@ -1,4 +1,4 @@
-import { afterEach, test, expect, describe } from "bun:test";
+import { afterAll, afterEach, test, expect, describe } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -6,9 +6,17 @@ import { CommandRegistry } from "../src/commands/registry";
 import { registerBuiltinCommands } from "../src/commands/builtins";
 import { SessionStore } from "../src/persistence/sessionStore";
 import type { CommandContext } from "../src/commands/types";
-import { getSettingsPath } from "../src/runtime/config";
+import {
+  getProjectSettingsPath,
+  getSettingsPath,
+  loadSettingsForCwd,
+} from "../src/runtime/config";
 
 const tempDirs: string[] = [];
+const previousPebbleHome = process.env.PEBBLE_HOME;
+const pebbleHomeDir = mkdtempSync(join(tmpdir(), "pebble-command-home-"));
+
+process.env.PEBBLE_HOME = pebbleHomeDir;
 
 function createCommandContext(overrides: Partial<CommandContext> = {}): CommandContext {
   return {
@@ -40,6 +48,14 @@ afterEach(() => {
       rmSync(dir, { recursive: true, force: true });
     }
   }
+
+  rmSync(pebbleHomeDir, { recursive: true, force: true });
+  mkdirSync(pebbleHomeDir, { recursive: true });
+});
+
+afterAll(() => {
+  process.env.PEBBLE_HOME = previousPebbleHome;
+  rmSync(pebbleHomeDir, { recursive: true, force: true });
 });
 
 describe("Command Registry", () => {
@@ -213,7 +229,7 @@ describe("Command Registry", () => {
     expect(store.loadTranscript(session.id)?.memory).toBeUndefined();
   });
 
-  test("/login persists an OpenRouter API key in project settings", async () => {
+  test("/login persists an OpenRouter API key in ~/.pebble settings", async () => {
     const registry = new CommandRegistry();
     registerBuiltinCommands(registry);
 
@@ -227,18 +243,113 @@ describe("Command Registry", () => {
     expect(result.success).toBe(true);
     const settingsPath = getSettingsPath(tempDir);
     expect(existsSync(settingsPath)).toBe(true);
+    expect(settingsPath.startsWith(pebbleHomeDir)).toBe(true);
+    expect(existsSync(join(tempDir, ".pebble", "settings.json"))).toBe(false);
 
     const saved = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
-      provider: string;
       apiKey: string;
-      model: string;
-      baseUrl: string;
+      provider?: string;
+      model?: string;
+      baseUrl?: string;
     };
 
-    expect(saved.provider).toBe("openrouter");
     expect(saved.apiKey).toBe("sk-or-v1-test-key");
-    expect(saved.model).toBe("openrouter/auto");
-    expect(saved.baseUrl).toBe("https://openrouter.ai/api/v1");
+    expect(saved.provider).toBeUndefined();
+    expect(saved.model).toBeUndefined();
+    expect(saved.baseUrl).toBeUndefined();
+
+    const loaded = loadSettingsForCwd(tempDir);
+    expect(loaded.provider).toBe("openrouter");
+    expect(loaded.model).toBe("openrouter/auto");
+    expect(loaded.baseUrl).toBe("https://openrouter.ai/api/v1");
+  });
+
+  test("migrates legacy workspace settings into ~/.pebble and deletes the leaked copy", () => {
+    const tempDir = createTempProjectDir("pebble-command-migrate-");
+    const legacySettingsPath = join(tempDir, ".pebble", "settings.json");
+    mkdirSync(join(tempDir, ".pebble"), { recursive: true });
+    writeFileSync(
+      legacySettingsPath,
+      JSON.stringify({ provider: "openrouter", apiKey: "legacy-secret" }, null, 2),
+      "utf-8",
+    );
+
+    const loaded = loadSettingsForCwd(tempDir);
+    const migratedSettingsPath = getSettingsPath(tempDir);
+
+    expect(loaded.apiKey).toBe("legacy-secret");
+    expect(migratedSettingsPath.startsWith(pebbleHomeDir)).toBe(true);
+    expect(existsSync(migratedSettingsPath)).toBe(true);
+    expect(existsSync(legacySettingsPath)).toBe(false);
+
+    const migrated = JSON.parse(readFileSync(migratedSettingsPath, "utf-8")) as {
+      provider: string;
+      apiKey: string;
+    };
+    expect(migrated.provider).toBe("openrouter");
+    expect(migrated.apiKey).toBe("legacy-secret");
+  });
+
+  test("loads committed repo defaults from .pebble/project-settings.json", () => {
+    const tempDir = createTempProjectDir("pebble-command-project-defaults-");
+    const projectSettingsPath = getProjectSettingsPath(tempDir);
+    mkdirSync(join(tempDir, ".pebble"), { recursive: true });
+    writeFileSync(
+      projectSettingsPath,
+      JSON.stringify({
+        model: "openrouter/project-default",
+        maxTurns: 12,
+        telemetryEnabled: true,
+      }, null, 2),
+      "utf-8",
+    );
+
+    const loaded = loadSettingsForCwd(tempDir);
+
+    expect(loaded.model).toBe("openrouter/project-default");
+    expect(loaded.maxTurns).toBe(12);
+    expect(loaded.telemetryEnabled).toBe(true);
+  });
+
+  test("saves only user overrides to ~/.pebble when repo defaults exist", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-user-overrides-");
+    const projectSettingsPath = getProjectSettingsPath(tempDir);
+    mkdirSync(join(tempDir, ".pebble"), { recursive: true });
+    writeFileSync(
+      projectSettingsPath,
+      JSON.stringify({
+        provider: "openrouter",
+        model: "openrouter/project-default",
+        baseUrl: "https://openrouter.ai/api/v1",
+        maxTurns: 22,
+        telemetryEnabled: false,
+        fullscreenRenderer: true,
+      }, null, 2),
+      "utf-8",
+    );
+
+    const result = await registry.execute("login", "openrouter sk-or-v1-test-key", createCommandContext({
+      cwd: tempDir,
+      config: { provider: "openrouter" },
+    }));
+
+    expect(result.success).toBe(true);
+
+    const userSettingsPath = getSettingsPath(tempDir);
+    const saved = JSON.parse(readFileSync(userSettingsPath, "utf-8")) as Record<string, unknown>;
+
+    expect(saved.apiKey).toBe("sk-or-v1-test-key");
+    expect(saved.model).toBeUndefined();
+    expect(saved.baseUrl).toBeUndefined();
+    expect(saved.maxTurns).toBeUndefined();
+
+    const loaded = loadSettingsForCwd(tempDir);
+    expect(loaded.apiKey).toBe("sk-or-v1-test-key");
+    expect(loaded.model).toBe("openrouter/project-default");
+    expect(loaded.maxTurns).toBe(22);
   });
 
   test("/config opens the settings UI", async () => {

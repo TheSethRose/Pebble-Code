@@ -95,7 +95,7 @@ describe("TranscriptView", () => {
     });
     const flat = flattenText(element);
 
-    expect(flat).toContain("Ask Pebble anything, or use /help for commands");
+    expect(flat).toContain("Ask Pebble anything, or use /help");
     expect(flat).not.toContain("a few strong starting points");
   });
 
@@ -138,7 +138,7 @@ describe("TranscriptView", () => {
     expect(getTranscriptLineCount(messages, 80)).toBe(6);
   });
 
-  test("collapses consecutive progress messages to the latest one", () => {
+  test("omits progress messages from the transcript", () => {
     const messages = [
       createMessage("progress", "Turn 1/50", { turnNumber: 1 }),
       createMessage("progress", "Turn 2/50", { turnNumber: 2 }),
@@ -149,9 +149,10 @@ describe("TranscriptView", () => {
     const element = TranscriptView({ messages });
     const flat = flattenText(element);
 
-    expect(getTranscriptLineCount(messages, 80)).toBe(3);
-    expect(flat).toContain("Turn 3/50");
+    expect(getTranscriptLineCount(messages, 80)).toBe(1);
     expect(flat).not.toContain("Turn 1/50");
+    expect(flat).not.toContain("Turn 3/50");
+    expect(flat).toContain("Done");
   });
 
   test("shows tool output while processing, then collapses it after completion", () => {
@@ -186,6 +187,22 @@ describe("TranscriptView", () => {
     expect(flat).not.toContain("**");
     expect(segments.some((segment) => segment.text.includes("Title") && segment.bold)).toBe(true);
     expect(segments.some((segment) => segment.text === "bold" && segment.bold)).toBe(true);
+  });
+
+  test("renders markdown tables as aligned terminal tables", () => {
+    const element = TranscriptView({
+      messages: [createMessage("assistant", "| Name | Score |\n| :--- | ---: |\n| Ada | 99 |\n| Bob | 7 |")],
+      width: 80,
+    });
+    const rows = collectRenderedRows(element);
+    const segments = collectTextSegments(element);
+
+    expect(rows.some((row) => row.includes("┌"))).toBe(true);
+    expect(rows.some((row) => row.includes("│ Name"))).toBe(true);
+    expect(rows.some((row) => row.includes("│ Ada"))).toBe(true);
+    expect(rows.some((row) => row.includes("99 │"))).toBe(true);
+    expect(rows.join("\n")).not.toContain("| :--- | ---: |");
+    expect(segments.some((segment) => segment.text.includes("Name") && segment.bold)).toBe(true);
   });
 
   test("uses blinking dot indicators for in-progress transcript rows", () => {
@@ -400,6 +417,41 @@ function flattenText(element: React.ReactElement): string {
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function collectRenderedRows(element: React.ReactElement): string[] {
+  const props = element.props as { children?: React.ReactNode };
+  return React.Children.toArray(props.children)
+    .filter((child): child is React.ReactElement => React.isValidElement(child))
+    .map((child) => flattenTextRaw(child));
+}
+
+function flattenTextRaw(element: React.ReactElement): string {
+  const parts: string[] = [];
+
+  function walk(node: unknown) {
+    if (typeof node === "string") {
+      parts.push(node);
+      return;
+    }
+
+    if (typeof node === "number") {
+      parts.push(String(node));
+      return;
+    }
+
+    if (!React.isValidElement(node)) {
+      return;
+    }
+
+    const props = node.props as Record<string, unknown>;
+    if (typeof props.children !== "undefined") {
+      React.Children.forEach(props.children as React.ReactNode, walk);
+    }
+  }
+
+  walk(element);
+  return parts.join("");
 }
 
 function collectTextSegments(element: React.ReactElement): Array<{ text: string; bold?: boolean; italic?: boolean; color?: string; backgroundColor?: string }> {

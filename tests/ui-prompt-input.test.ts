@@ -17,7 +17,7 @@ describe("PromptInput", () => {
     expect(flat.match(/─{10,}/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 
-  test("still shows the working status row when processing", () => {
+  test("shows a single clean working status when processing", () => {
     const flat = normalizeWhitespace(flattenText(
       PromptInput({
         isProcessing: true,
@@ -26,8 +26,24 @@ describe("PromptInput", () => {
       }),
     ));
 
-    expect(flat).toContain("Pebble is working…");
-    expect(flat).toContain("Streaming results below");
+    expect(flat).toContain("Working…");
+    expect(flat).not.toContain("Pebble is working…");
+    expect(flat).not.toContain("Thinking…");
+    expect(flat).not.toContain("Streaming results below");
+  });
+
+  test("renders a custom in-flight status label when one is provided", () => {
+    const flat = normalizeWhitespace(flattenText(
+      PromptInput({
+        isProcessing: true,
+        statusText: "Inspecting workspace · action: project_structure, path: .",
+        onSubmit: () => {},
+        width: 80,
+      }),
+    ));
+
+    expect(flat).toContain("Inspecting workspace · action: project_structure, path: .");
+    expect(flat).not.toContain("Pebble is working…");
   });
 });
 

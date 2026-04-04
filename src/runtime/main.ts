@@ -12,7 +12,7 @@ import { getFeatureSummary, isFeatureEnabled } from "../build/featureFlags.js";
 import { buildRuntimeConfig } from "./config.js";
 import { PermissionManager } from "./permissionManager.js";
 import { createHookRegistry, type HookContext, type HookRegistry } from "./hooks.js";
-import { loadRepositoryInstructions, formatInstructions } from "./instructions.js";
+import { loadRepositoryInstructions, formatInstructions, loadPromptFiles, formatPromptFiles } from "./instructions.js";
 import {
   createProjectSessionStore,
   createOrResumeSession,
@@ -79,10 +79,16 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
     projectRoot: config.trust.projectRoot,
   });
 
-  // Phase 4: Load repository instructions
+  // Phase 4: Load repository instructions and prompt files
   const instructions = formatInstructions(config.instructions);
   if (instructions) {
     console.error(`Loaded ${config.instructions.length} instruction file(s)`);
+  }
+
+  const promptFiles = loadPromptFiles(config.trust.projectRoot);
+  const promptContent = formatPromptFiles(promptFiles);
+  if (promptFiles.length > 0) {
+    console.error(`Loaded ${promptFiles.length} prompt file(s) from .pebble/prompts/`);
   }
 
   const extensionDirs = getDefaultExtensionDirs(cwd);
@@ -101,7 +107,7 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
   );
   const extensionCommandNames = integrations.commands.map((command) => command.name);
   const hookRegistry = createHookRegistry(integrations.extensions);
-  const systemPrompt = mergeRuntimeInstructions(instructions, integrations.skills);
+  const systemPrompt = mergeRuntimeInstructions(promptContent, instructions, integrations.skills);
 
   const backgroundSessionManager = new BackgroundSessionManager(join(config.trust.projectRoot, ".pebble", "background-sessions"));
   const worktreeManager = new WorktreeManager({
@@ -372,9 +378,9 @@ async function runInteractive(
   return startREPL(context);
 }
 
-function mergeRuntimeInstructions(baseInstructions: string, skills: RuntimeIntegrations["skills"]): string {
+function mergeRuntimeInstructions(promptContent: string, baseInstructions: string, skills: RuntimeIntegrations["skills"]): string {
   const skillInstructions = composeSkillInstructions(skills);
-  return [baseInstructions.trim(), skillInstructions.trim()].filter(Boolean).join("\n\n");
+  return [promptContent.trim(), baseInstructions.trim(), skillInstructions.trim()].filter(Boolean).join("\n\n");
 }
 
 function normalizeHeadlessFormat(format?: string): HeadlessFormat {

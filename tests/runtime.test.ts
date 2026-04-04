@@ -1,7 +1,7 @@
 import React from "react";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { PassThrough } from "node:stream";
 import { render } from "ink";
@@ -13,8 +13,13 @@ import type { CommandContext } from "../src/commands/types";
 import { App } from "../src/ui/App";
 import type { Message } from "../src/engine/types";
 import type { Provider, ProviderCapabilities, ProviderOptions, StreamChunk } from "../src/providers/types";
+import { getSettingsPath } from "../src/runtime/config";
 
 const tempDirs: string[] = [];
+const previousPebbleHome = process.env.PEBBLE_HOME;
+const pebbleHomeDir = mkdtempSync(join(tmpdir(), "pebble-runtime-home-"));
+
+process.env.PEBBLE_HOME = pebbleHomeDir;
 
 function createTempProject(
   prefix: string,
@@ -28,9 +33,9 @@ function createTempProject(
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name: prefix }, null, 2), "utf-8");
 
   if (options.settings) {
-    const pebbleDir = join(dir, ".pebble");
-    mkdirSync(pebbleDir, { recursive: true });
-    writeFileSync(join(pebbleDir, "settings.json"), JSON.stringify(options.settings, null, 2), "utf-8");
+    const settingsPath = getSettingsPath(dir);
+    mkdirSync(dirname(settingsPath), { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify(options.settings, null, 2), "utf-8");
   }
 
   return dir;
@@ -84,6 +89,14 @@ afterEach(() => {
       rmSync(dir, { recursive: true, force: true });
     }
   }
+
+  rmSync(pebbleHomeDir, { recursive: true, force: true });
+  mkdirSync(pebbleHomeDir, { recursive: true });
+});
+
+afterAll(() => {
+  process.env.PEBBLE_HOME = previousPebbleHome;
+  rmSync(pebbleHomeDir, { recursive: true, force: true });
 });
 
 describe("headless runtime", () => {
@@ -420,6 +433,91 @@ export default {
 
     expect(secondRun.result).toBe(0);
     expect(secondRun.stdout.join("\n")).toContain("1. [not-started] persisted todo");
+  });
+
+  test("loads .pebble/prompts/ files into the system prompt", async () => {
+    const projectDir = createTempProject("pebble-runtime-prompts-", {
+      settings: {
+        provider: "prompt-check-ext",
+      },
+    });
+
+    const extensionsDir = join(projectDir, "extensions");
+    mkdirSync(extensionsDir, { recursive: true });
+
+    writeFileSync(
+      join(extensionsDir, "provider.ts"),
+      `
+class PromptCheckProvider {
+  id = "prompt-check-ext";
+  name = "Prompt Check Provider";
+  model = "prompt-check-model";
+
+  getCapabilities() {
+    return {
+      streaming: true,
+      toolUse: false,
+      systemPrompt: true,
+      multimodal: false,
+      maxContextTokens: 4096,
+      maxOutputTokens: 1024,
+      parallelToolCalls: false,
+    };
+  }
+
+  async complete(_messages, options) {
+    const prompt = options?.systemPrompt ?? "";
+    const hasIdentity = prompt.includes("I am TestBot");
+    const hasSafety = prompt.includes("always confirm destructive actions");
+    return {
+      text: hasIdentity && hasSafety ? "prompt files loaded" : "missing prompt files",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 1, outputTokens: 1 },
+    };
+  }
+
+  async *stream(_messages, options) {
+    const prompt = options?.systemPrompt ?? "";
+    const hasIdentity = prompt.includes("I am TestBot");
+    const hasSafety = prompt.includes("always confirm destructive actions");
+    const text = hasIdentity && hasSafety ? "prompt files loaded" : "missing prompt files";
+    yield { textDelta: text, done: true, metadata: { stopReason: "end_turn" } };
+  }
+
+  isConfigured() {
+    return true;
+  }
+}
+
+export default {
+  metadata: {
+    id: "prompt-check-extension",
+    name: "Prompt Check Extension",
+    version: "1.0.0"
+  },
+  providers: [new PromptCheckProvider()],
+};
+      `.trim(),
+      "utf-8",
+    );
+
+    const promptsDir = join(projectDir, ".pebble", "prompts");
+    mkdirSync(promptsDir, { recursive: true });
+    writeFileSync(join(promptsDir, "identity.md"), "# Identity\n\nI am TestBot, a test agent.", "utf-8");
+    writeFileSync(join(promptsDir, "safety.md"), "# Safety\n\nYou must always confirm destructive actions.", "utf-8");
+
+    const { result: exitCode, stdout, stderr } = await captureConsole(() =>
+      run({
+        headless: true,
+        prompt: "hello",
+        cwd: projectDir,
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout[0]).toContain("prompt files loaded");
+    expect(stderr.some((line) => line.includes("prompt file(s)"))).toBe(true);
   });
 });
 

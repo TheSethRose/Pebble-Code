@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 import type { DisplayMessage } from "../types.js";
 import { VISIBLE_MESSAGE_COUNT } from "../types.js";
 import { PEBBLE_ASCII_LOGO_LINES, truncateMiddle } from "./WelcomeHeader.js";
+import { summarizeToolArgs } from "../toolStatus.js";
 
 interface TranscriptViewProps {
   messages: DisplayMessage[];
@@ -56,6 +57,8 @@ type RowStyle = Omit<TranscriptSpan, "text">;
 interface StyledLine {
   spans: TranscriptSpan[];
 }
+
+type TableAlignment = "left" | "center" | "right";
 
 /**
  * Deterministic line-virtualized transcript viewport.
@@ -208,7 +211,7 @@ function buildBannerRows(
 
   rows.push({
     key: "banner:hint",
-    segments: [createSpan("Ask Pebble anything, or use /help for commands", { color: "gray" })],
+    segments: [createSpan("Ask Pebble anything, or use /help", { color: "gray" })],
   });
 
   return rows;
@@ -233,17 +236,9 @@ function groupMessages(messages: DisplayMessage[]): GroupedItem[] {
     }
 
     if (message.role === "progress") {
-      let latest = message;
       while (index + 1 < messages.length && messages[index + 1]?.role === "progress") {
         index += 1;
-        latest = messages[index]!;
       }
-
-      items.push({
-        type: "single",
-        key: buildMessageKey(latest, index),
-        message: latest,
-      });
       index += 1;
       continue;
     }
@@ -314,7 +309,7 @@ function messageToRows(
 
     case "tool": {
       const toolName = meta?.toolName ?? message.content;
-      const header = compactParts([toolName, meta?.toolArgs ? compactArgs(meta.toolArgs) : ""]);
+      const header = compactParts([toolName, summarizeToolArgs(meta?.toolArgs, 60)]);
       pushWrappedRows(
         rows,
         keyBase,
@@ -380,10 +375,6 @@ function messageToRows(
     }
 
     case "progress":
-      rows.push({
-        key: keyBase,
-        segments: [createSpan(`${getStatusDot("in-progress", blinkPhase)} ${meta?.turnNumber != null ? `[turn ${meta.turnNumber}] ` : ""}${message.content}`, { color: "cyan", dimColor: true })],
-      });
       return rows;
 
     case "error":
@@ -410,7 +401,9 @@ function pushWrappedRows(
   const continuationWidth = stringWidth(continuationPrefix);
   const firstLineWidth = Math.max(8, width - prefixWidth - 2);
   const nextLineWidth = Math.max(8, width - continuationWidth - 2);
-  const sourceLines = options.markdown ? renderMarkdownLines(text, style) : renderPlainLines(text, style);
+  const sourceLines = options.markdown
+    ? renderMarkdownLines(text, style, Math.min(firstLineWidth, nextLineWidth))
+    : renderPlainLines(text, style);
 
   sourceLines.forEach((sourceLine, lineIndex) => {
     const wrapped = wrapStyledLine(sourceLine.spans, lineIndex === 0 ? firstLineWidth : nextLineWidth);
@@ -429,12 +422,14 @@ function renderPlainLines(text: string, style: RowStyle): StyledLine[] {
   return sourceLines.map((line) => ({ spans: [createSpan(line, style)] }));
 }
 
-function renderMarkdownLines(text: string, style: RowStyle): StyledLine[] {
+function renderMarkdownLines(text: string, style: RowStyle, maxWidth = Number.POSITIVE_INFINITY): StyledLine[] {
   const sourceLines = text.length === 0 ? [""] : text.split("\n");
   const rendered: StyledLine[] = [];
   let inCodeBlock = false;
 
-  for (const sourceLine of sourceLines) {
+  for (let index = 0; index < sourceLines.length; index += 1) {
+    const sourceLine = sourceLines[index] ?? "";
+
     if (/^\s*```/.test(sourceLine)) {
       inCodeBlock = !inCodeBlock;
       continue;
@@ -442,6 +437,13 @@ function renderMarkdownLines(text: string, style: RowStyle): StyledLine[] {
 
     if (inCodeBlock) {
       rendered.push({ spans: [createSpan(sourceLine, { ...style, color: style.color ?? "cyan" })] });
+      continue;
+    }
+
+    const tableBlock = consumeMarkdownTable(sourceLines, index, style, maxWidth);
+    if (tableBlock) {
+      rendered.push(...tableBlock.lines);
+      index = tableBlock.nextIndex;
       continue;
     }
 
@@ -477,6 +479,277 @@ function renderMarkdownLines(text: string, style: RowStyle): StyledLine[] {
   }
 
   return rendered.length > 0 ? rendered : [{ spans: [createSpan("", style)] }];
+}
+
+function consumeMarkdownTable(
+  sourceLines: string[],
+  startIndex: number,
+  style: RowStyle,
+  maxWidth: number,
+): { lines: StyledLine[]; nextIndex: number } | null {
+  const headerLine = sourceLines[startIndex];
+  const separatorLine = sourceLines[startIndex + 1];
+  if (!headerLine || !separatorLine) {
+    return null;
+  }
+
+  const headerCells = splitMarkdownTableRow(headerLine);
+  const separatorCells = splitMarkdownTableRow(separatorLine);
+  if (
+    headerCells.length === 0
+    || headerCells.length !== separatorCells.length
+    || !separatorCells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()))
+  ) {
+    return null;
+  }
+
+  const rows: string[][] = [headerCells];
+  let endIndex = startIndex + 2;
+  while (endIndex < sourceLines.length) {
+    const candidate = splitMarkdownTableRow(sourceLines[endIndex] ?? "");
+    if (candidate.length !== headerCells.length) {
+      break;
+    }
+
+    rows.push(candidate);
+    endIndex += 1;
+  }
+
+  if (rows.length === 1) {
+    return null;
+  }
+
+  return {
+    lines: renderTableBlock(rows, separatorCells.map(parseTableAlignment), style, maxWidth),
+    nextIndex: endIndex - 1,
+  };
+}
+
+function splitMarkdownTableRow(line: string): string[] {
+  if (!line.includes("|")) {
+    return [];
+  }
+
+  let value = line.trim();
+  if (value.startsWith("|")) {
+    value = value.slice(1);
+  }
+  if (value.endsWith("|")) {
+    value = value.slice(0, -1);
+  }
+
+  const cells: string[] = [];
+  let current = "";
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "\\" && value[index + 1] === "|") {
+      current += "|";
+      index += 1;
+      continue;
+    }
+
+    if (char === "|") {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  cells.push(current.trim());
+  return cells;
+}
+
+function parseTableAlignment(value: string): TableAlignment {
+  const trimmed = value.trim();
+  const startsWithColon = trimmed.startsWith(":");
+  const endsWithColon = trimmed.endsWith(":");
+
+  if (startsWithColon && endsWithColon) {
+    return "center";
+  }
+
+  if (endsWithColon) {
+    return "right";
+  }
+
+  return "left";
+}
+
+function renderTableBlock(
+  rows: string[][],
+  alignments: TableAlignment[],
+  style: RowStyle,
+  maxWidth: number,
+): StyledLine[] {
+  const columnCount = rows[0]?.length ?? 0;
+  if (columnCount === 0) {
+    return [{ spans: [createSpan("", style)] }];
+  }
+
+  const parsedRows = rows.map((cells, rowIndex) =>
+    cells.map((cell) => parseInlineMarkdown(cell, rowIndex === 0 ? { ...style, bold: true } : style))
+  );
+  const naturalWidths = Array.from({ length: columnCount }, (_, columnIndex) =>
+    Math.max(1, ...parsedRows.map((row) => spansWidth(row[columnIndex] ?? [createSpan("")])))
+  );
+  const fittedWidths = fitTableColumnWidths(naturalWidths, maxWidth);
+  if (!fittedWidths) {
+    return rows.map((cells, rowIndex) => ({
+      spans: parseInlineMarkdown(cells.join(" | "), rowIndex === 0 ? { ...style, bold: true } : style),
+    }));
+  }
+
+  const borderStyle: RowStyle = { color: style.color, dimColor: style.dimColor };
+  const rendered: StyledLine[] = [
+    { spans: buildTableBorder("top", fittedWidths, borderStyle) },
+    { spans: buildTableContentRow(parsedRows[0] ?? [], fittedWidths, alignments, borderStyle) },
+    { spans: buildTableBorder("header", fittedWidths, borderStyle) },
+  ];
+
+  parsedRows.slice(1).forEach((row, rowIndex, array) => {
+    rendered.push({ spans: buildTableContentRow(row, fittedWidths, alignments, borderStyle) });
+    if (rowIndex < array.length - 1) {
+      rendered.push({ spans: buildTableBorder("middle", fittedWidths, borderStyle) });
+    }
+  });
+
+  rendered.push({ spans: buildTableBorder("bottom", fittedWidths, borderStyle) });
+  return rendered;
+}
+
+function fitTableColumnWidths(widths: number[], maxWidth: number): number[] | null {
+  const borderWidth = widths.length * 3 + 1;
+  const available = Math.max(0, maxWidth - borderWidth);
+  if (available < widths.length) {
+    return null;
+  }
+
+  const fitted = [...widths];
+  const minimumWidth = available >= widths.length * 3 ? 3 : 1;
+  let total = fitted.reduce((sum, width) => sum + width, 0);
+
+  while (total > available) {
+    const maxWidthValue = Math.max(...fitted);
+    const columnIndex = fitted.findIndex((width) => width === maxWidthValue);
+    const currentWidth = columnIndex >= 0 ? fitted[columnIndex] : undefined;
+    if (columnIndex < 0 || typeof currentWidth !== "number" || currentWidth <= minimumWidth) {
+      break;
+    }
+
+    fitted[columnIndex] = currentWidth - 1;
+    total -= 1;
+  }
+
+  if (total > available) {
+    return null;
+  }
+
+  return fitted;
+}
+
+function buildTableBorder(
+  kind: "top" | "header" | "middle" | "bottom",
+  widths: number[],
+  style: RowStyle,
+): TranscriptSpan[] {
+  const glyphs = {
+    top: { left: "┌", middle: "┬", right: "┐" },
+    header: { left: "├", middle: "┼", right: "┤" },
+    middle: { left: "├", middle: "┼", right: "┤" },
+    bottom: { left: "└", middle: "┴", right: "┘" },
+  }[kind];
+
+  const spans: TranscriptSpan[] = [createSpan(glyphs.left, style)];
+  widths.forEach((width, index) => {
+    spans.push(createSpan("─".repeat(width + 2), style));
+    spans.push(createSpan(index === widths.length - 1 ? glyphs.right : glyphs.middle, style));
+  });
+  return spans;
+}
+
+function buildTableContentRow(
+  row: TranscriptSpan[][],
+  widths: number[],
+  alignments: TableAlignment[],
+  borderStyle: RowStyle,
+): TranscriptSpan[] {
+  const spans: TranscriptSpan[] = [createSpan("│", borderStyle)];
+
+  widths.forEach((width, index) => {
+    spans.push(...padTableCell(row[index] ?? [createSpan("")], width, alignments[index] ?? "left", borderStyle));
+    spans.push(createSpan("│", borderStyle));
+  });
+
+  return mergeAdjacentSpans(spans);
+}
+
+function padTableCell(
+  cellSpans: TranscriptSpan[],
+  width: number,
+  alignment: TableAlignment,
+  borderStyle: RowStyle,
+): TranscriptSpan[] {
+  const content = truncateStyledSpans(cellSpans, width);
+  const contentWidth = spansWidth(content);
+  const remaining = Math.max(0, width - contentWidth);
+  const leftPadding = alignment === "right"
+    ? remaining
+    : alignment === "center"
+      ? Math.floor(remaining / 2)
+      : 0;
+  const rightPadding = remaining - leftPadding;
+
+  return mergeAdjacentSpans([
+    createSpan(" ", borderStyle),
+    createSpan(" ".repeat(leftPadding), borderStyle),
+    ...content,
+    createSpan(" ".repeat(rightPadding), borderStyle),
+    createSpan(" ", borderStyle),
+  ]);
+}
+
+function truncateStyledSpans(spans: TranscriptSpan[], width: number): TranscriptSpan[] {
+  if (width <= 0) {
+    return [createSpan("")];
+  }
+
+  if (spansWidth(spans) <= width) {
+    return spans;
+  }
+
+  const ellipsis = width > 1 ? "…" : "";
+  const targetWidth = Math.max(0, width - stringWidth(ellipsis));
+  const result: TranscriptSpan[] = [];
+  let consumed = 0;
+
+  for (const span of spans) {
+    if (consumed >= targetWidth) {
+      break;
+    }
+
+    const remaining = targetWidth - consumed;
+    const [head] = splitTextByWidth(span.text, remaining);
+    if (head.length === 0) {
+      continue;
+    }
+
+    result.push(createSpan(head, span));
+    consumed += stringWidth(head);
+  }
+
+  if (ellipsis) {
+    const ellipsisSource = result[result.length - 1] ?? spans[0] ?? createSpan("");
+    result.push(createSpan(ellipsis, ellipsisSource));
+  }
+
+  return mergeAdjacentSpans(result);
+}
+
+function spansWidth(spans: TranscriptSpan[]): number {
+  return spans.reduce((total, span) => total + stringWidth(span.text), 0);
 }
 
 function parseInlineMarkdown(text: string, style: RowStyle): TranscriptSpan[] {
@@ -681,16 +954,6 @@ function stringWidth(value: string): number {
 
 function appendCursor(value: string): string {
   return value.length > 0 ? `${value}▍` : "▍";
-}
-
-function compactArgs(args: Record<string, unknown>, maxLen = 60): string {
-  const parts: string[] = [];
-  for (const [key, value] of Object.entries(args)) {
-    const rendered = typeof value === "string" ? value : JSON.stringify(value);
-    parts.push(`${key}: ${rendered}`);
-  }
-  const joined = parts.join(", ");
-  return joined.length > maxLen ? `${joined.slice(0, maxLen - 1)}…` : joined;
 }
 
 function compactParts(values: Array<string | undefined>): string {

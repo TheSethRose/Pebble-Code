@@ -190,6 +190,88 @@ But the current repo is still **far from reference breadth**, especially in:
 - [ ] provider resolution records which provider/model actually answered for debug and headless reporting
 - [ ] provider failure scenarios are covered by tests
 
+### Provider coverage backlog
+
+Source-backed inventory and implementation notes live in `docs/PROVIDERS.md`.
+Every provider task below should check `docs/PROVIDERS.md` first for auth type, env/config inputs, model refs, routing quirks, and Pebble-specific implementation guidance.
+
+#### API-key and token providers
+
+- [ ] implement OpenAI
+- [ ] implement Anthropic
+- [ ] implement OpenRouter
+- [ ] implement Google Gemini API-key mode
+- [ ] implement xAI
+- [ ] implement Groq
+- [ ] implement Mistral
+- [ ] implement DeepSeek
+- [ ] implement Together AI
+- [ ] implement NVIDIA
+- [ ] implement Hugging Face
+- [ ] implement Qianfan
+- [ ] implement Z.AI / GLM
+- [ ] implement Qwen / Model Studio
+- [ ] implement Moonshot / Kimi
+- [ ] implement MiniMax API-key mode
+- [ ] implement Chutes API-key mode
+- [ ] implement StepFun
+- [ ] implement BytePlus
+- [ ] implement Volcengine / Doubao
+- [ ] implement Xiaomi
+- [ ] implement OpenCode
+- [ ] implement OpenCode Go
+- [ ] implement Kilocode
+- [ ] implement Synthetic
+- [ ] implement Venice
+- [ ] implement Vercel AI Gateway
+- [ ] implement Cloudflare AI Gateway
+- [ ] implement Perplexity
+- [ ] implement Deepgram
+- [ ] implement LiteLLM
+- [ ] implement Cohere
+- [ ] implement Cerebras
+- [ ] implement DeepInfra
+- [ ] implement Vercel AI provider
+- [ ] implement Kilo
+- [ ] implement ZenMux
+
+#### OAuth, device-flow, and browser-login providers
+
+- [ ] implement GitHub Copilot OAuth/device flow
+- [ ] implement OpenAI Codex / ChatGPT OAuth
+- [ ] implement Gemini CLI PKCE OAuth
+- [ ] implement Chutes OAuth
+- [ ] implement MiniMax Portal OAuth
+- [ ] implement Ollama Cloud + Local browser sign-in
+- [ ] implement GitLab OAuth
+
+#### Local, URL-only, and self-hosted providers
+
+- [ ] implement Ollama local runtime support
+- [ ] implement vLLM support
+- [ ] implement SGLang support
+- [ ] implement custom OpenAI-compatible endpoints
+
+#### Cloud-credential and enterprise-identity providers
+
+- [ ] implement Amazon Bedrock credential-chain support
+- [ ] implement Azure OpenAI API-key mode
+- [ ] implement Azure OpenAI Entra ID mode
+- [ ] implement Azure Cognitive Services support
+- [ ] implement Google Vertex AI support
+- [ ] implement Anthropic on Google Vertex support
+- [ ] implement Cloudflare Workers AI support
+- [ ] implement SAP AI Core service-key support
+- [ ] implement GitLab API-token mode
+
+#### Cross-cutting provider work
+
+- [ ] implement per-provider config/env resolution for every provider listed in `docs/PROVIDERS.md`
+- [ ] implement provider bootstrap and runtime selection for every provider listed in `docs/PROVIDERS.md`
+- [ ] implement streaming and non-streaming execution coverage for every provider listed in `docs/PROVIDERS.md`
+- [ ] implement actionable failure handling and fallback behavior for every provider listed in `docs/PROVIDERS.md`
+- [ ] add provider-specific tests for every provider listed in `docs/PROVIDERS.md`
+
 ## Runtime
 
 - [x] runtime boot path exists

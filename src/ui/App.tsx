@@ -37,6 +37,7 @@ import { PermissionPrompt } from "./components/PermissionPrompt.js";
 import { QuestionPrompt } from "./components/QuestionPrompt.js";
 import { Settings } from "./Settings.js";
 import type { TabId } from "./Settings.js";
+import { formatProgressStatus, formatToolStatus, resolveMaxTurns } from "./toolStatus.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -194,7 +195,7 @@ export function App({ context }: { context: CommandContext }) {
         } else {
           msgs.push({ role: "streaming", content: delta });
         }
-        return { ...prev, messages: msgs };
+        return { ...prev, messages: msgs, statusText: "Responding…" };
       });
       return;
     }
@@ -203,7 +204,7 @@ export function App({ context }: { context: CommandContext }) {
       const toolName = String(data.tool);
       setState((prev) => ({
         ...prev,
-        statusText: `Running: ${toolName}`,
+        statusText: formatToolStatus(toolName, data.input, "running"),
         messages: [
           ...finalizeStreamingMessages(prev.messages),
           {
@@ -227,7 +228,7 @@ export function App({ context }: { context: CommandContext }) {
       const isError = data.success === false;
       setState((prev) => ({
         ...prev,
-        statusText: "",
+        statusText: isError ? "" : formatToolStatus(toolName, data.input, "analyzing"),
         messages: [
           ...finalizeStreamingMessages(prev.messages),
           {
@@ -281,14 +282,10 @@ export function App({ context }: { context: CommandContext }) {
     if (event.type === "progress" && data) {
       setState((prev) => ({
         ...prev,
-        messages: [
-          ...finalizeStreamingMessages(prev.messages),
-          {
-            role: "progress",
-            content: `Turn ${String(data.turn ?? "")}/${String(data.maxTurns ?? "")}`,
-            meta: { turnNumber: typeof data.turn === "number" ? data.turn : undefined },
-          },
-        ],
+        statusText: formatProgressStatus(prev.statusText, {
+          turn: data.turn,
+          maxTurns: data.maxTurns,
+        }),
       }));
       return;
     }
@@ -462,6 +459,7 @@ export function App({ context }: { context: CommandContext }) {
     const permissionManager =
       context.permissionManager ??
       new PermissionManager({ mode: "always-ask", projectRoot: context.cwd });
+    const maxTurns = resolveMaxTurns(runtimeConfig.maxTurns, settings.maxTurns ?? 50);
 
     const resolvePermission = (request: PermissionRequest): Promise<import("../runtime/permissions.js").PermissionDecision> => {
       return new Promise((resolve) => {
@@ -505,7 +503,7 @@ export function App({ context }: { context: CommandContext }) {
     engineRef.current = new QueryEngine({
       provider: resolvedProvider.provider,
       tools,
-      maxTurns: 50,
+      maxTurns,
       systemPrompt: context.systemPrompt,
       permissionManager,
       cwd: context.cwd,
@@ -920,7 +918,7 @@ export function App({ context }: { context: CommandContext }) {
         isProcessing: true,
         messages: [...prev.messages, { role: "user", content: trimmed }],
         error: null,
-        statusText: "Thinking…",
+        statusText: "Working…",
       }));
 
       try {

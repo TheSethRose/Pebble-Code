@@ -1,6 +1,6 @@
 # Pebble Code
 
-> Great things start with the smallest pieces.
+> Great things often start with the smallest pieces.
 
 **Pebble Code** is a terminal-native AI coding agent for power users and automation pipelines. It gives you a fast interactive REPL, a headless execution mode, a multi-turn agent loop with real tool use, durable session persistence, and an explicit trust-aware permission model — all in a single binary.
 

@@ -5,6 +5,5 @@
   "telemetryEnabled": false,
   "maxTurns": 50,
   "fullscreenRenderer": true,
-  "apiKey": "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",
   "baseUrl": "https://openrouter.ai/api/v1"
 }

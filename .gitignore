@@ -57,6 +57,7 @@ repomix.config.*
 
 # Misc
 docs/
+TODO.md
 task_plan.md
 findings.md
 progress.md
@@ -64,7 +65,10 @@ progress.md
 # Local agent/runtime artifacts
 .github/
 .agents/
-.pebble/
+/.pebble/*
+!/.pebble/project-settings.json
+!/.pebble/prompts/
+!/.pebble/prompts/**
 /.pebble-permissions.jsonl
 .pebble/sessions/
 .pebble/test-command-memory/
