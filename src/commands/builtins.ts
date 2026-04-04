@@ -79,9 +79,9 @@ function ensureProviderDefaults(settings: Settings): Settings {
 
   return {
     ...settings,
-    provider: OPENROUTER_PROVIDER_ID,
-    model: settings.model?.trim() || OPENROUTER_DEFAULT_MODEL,
-    baseUrl: settings.baseUrl?.trim() || OPENROUTER_DEFAULT_BASE_URL,
+    provider,
+    model: settings.model?.trim(),
+    baseUrl: settings.baseUrl?.trim(),
   };
 }
 

@@ -49,6 +49,18 @@ export function PromptInput({
   const promptGlyph = isProcessing ? "…" : "❯";
   const sessionLabel = sessionId ? sessionId.slice(0, 8) : "new session";
   const rule = "─".repeat(Math.max(24, width - 2));
+  const actionLabel = disabled
+    ? "Pebble is waiting for your answer…"
+    : isProcessing
+      ? "Pebble is working…"
+      : "Ask Pebble anything…";
+  const actionHint = disabled
+    ? "Answer above to continue"
+    : isProcessing
+      ? "Streaming results below"
+      : "Enter sends · / shows commands";
+  const actionColor = disabled || isProcessing ? "yellow" : "cyan";
+  const showActionRow = disabled || isProcessing;
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -73,7 +85,16 @@ export function PromptInput({
         </Box>
       )}
 
-      <Text dimColor>{rule}</Text>
+      <Text color="gray">{rule}</Text>
+
+      {showActionRow && (
+        <Box justifyContent="space-between" paddingX={1}>
+          <Text color={actionColor} bold>
+            {actionLabel}
+          </Text>
+          <Text color="gray">{actionHint}</Text>
+        </Box>
+      )}
 
       {exitWarning && (
         <Box paddingLeft={1}>
@@ -82,28 +103,30 @@ export function PromptInput({
       )}
 
       <Box paddingLeft={1}>
-        <Text color={isProcessing ? "yellow" : "gray"} bold>
+        <Text color={isProcessing ? "yellow" : "cyan"} bold>
           {promptGlyph}{" "}
         </Text>
         {disabled ? (
-          <Text dimColor>Interactive prompt is temporarily paused above.</Text>
+          <Text color="gray">Interactive prompt is temporarily paused above.</Text>
         ) : (
           <TextInput
             key={`${isProcessing ? "busy" : "idle"}-${inputKey}`}
             defaultValue={defaultValue}
             onSubmit={onSubmit}
             onChange={onChange}
-            placeholder={isProcessing ? "working…" : "Ask anything or try /help"}
+            placeholder={isProcessing ? "Pebble is working…" : "Ask Pebble anything…"}
           />
         )}
       </Box>
 
+      <Text color="gray">{rule}</Text>
+
       <Box justifyContent="space-between" paddingX={1}>
-        <Text dimColor color={isProcessing ? "yellow" : undefined}>
+        <Text color={isProcessing || disabled ? "yellow" : "gray"}>
           {statusLabel}
-          {!isProcessing && !disabled ? " · Enter submits · Tab ⇄ sessions" : ""}
+          {!isProcessing && !disabled ? " · Enter sends · Tab ⇄ sessions" : ""}
         </Text>
-        <Text dimColor>
+        <Text color="gray">
           {model} · {sessionLabel} · {IS_MAC ? "⌘" : "Ctrl"}+P help
         </Text>
       </Box>

@@ -12,9 +12,9 @@ import {
   resolveProviderConfig,
   maskSecret,
 } from "../providers/config.js";
+import { listRuntimeProviders, resolveRuntimeProvider } from "../providers/runtime.js";
 import {
   normalizeProviderId,
-  isSupportedProvider,
   OPENROUTER_DEFAULT_MODEL,
   OPENROUTER_DEFAULT_BASE_URL,
   OPENROUTER_PROVIDER_ID,
@@ -65,9 +65,9 @@ function ensureProviderDefaults(settings: Settings): Settings {
   }
   return {
     ...settings,
-    provider: OPENROUTER_PROVIDER_ID,
-    model: settings.model?.trim() || OPENROUTER_DEFAULT_MODEL,
-    baseUrl: settings.baseUrl?.trim() || OPENROUTER_DEFAULT_BASE_URL,
+    provider,
+    model: settings.model?.trim(),
+    baseUrl: settings.baseUrl?.trim(),
   };
 }
 
@@ -106,15 +106,17 @@ function TabBar({
 }
 
 function ConfigTab({
+  context,
   settings,
   settingsPath,
   cwd,
 }: {
+  context: CommandContext;
   settings: Settings;
   settingsPath: string;
   cwd: string;
 }) {
-  const resolved = resolveProviderConfig(settings);
+  const resolved = resolveRuntimeProvider(settings, {}, context.extensionProviders ?? []);
   return (
     <Box flexDirection="column">
       <Text bold color="cyan">Status</Text>
@@ -144,15 +146,12 @@ function ConfigTab({
 
 const PROVIDER_MANUAL_VALUE = "__manual_provider__";
 
-const PROVIDER_OPTIONS: Array<{ label: string; value: string }> = [
-  { label: "OpenRouter  (openrouter.ai)", value: "openrouter" },
-  { label: "⌨  Type provider ID manually…", value: PROVIDER_MANUAL_VALUE },
-];
-
 function ProviderTab({
+  context,
   settings,
   onSave,
 }: {
+  context: CommandContext;
   settings: Settings;
   onSave: (s: Settings) => void;
 }) {
@@ -160,15 +159,29 @@ function ProviderTab({
   const [showManual, setShowManual] = useState(false);
   const [filterQuery, setFilterQuery] = useState("");
 
-  const resolved = resolveProviderConfig(settings);
+  const resolved = resolveRuntimeProvider(settings, {}, context.extensionProviders ?? []);
+
+  const providerOptions = useMemo<Array<{ label: string; value: string }>>(() => {
+    const dynamicProviders = listRuntimeProviders(context.extensionProviders ?? []).map((provider) => ({
+      label: provider.source === "extension"
+        ? `${provider.name}  (${provider.id}, extension)`
+        : `${provider.name}  (${provider.id})`,
+      value: provider.id,
+    }));
+
+    return [
+      ...dynamicProviders,
+      { label: "⌨  Type provider ID manually…", value: PROVIDER_MANUAL_VALUE },
+    ];
+  }, [context.extensionProviders]);
 
   const filteredProviderOptions = useMemo(() => {
-    if (!filterQuery.trim()) return PROVIDER_OPTIONS;
+    if (!filterQuery.trim()) return providerOptions;
     const q = filterQuery.toLowerCase();
-    return PROVIDER_OPTIONS.filter(
+    return providerOptions.filter(
       (opt) => opt.value === PROVIDER_MANUAL_VALUE || opt.label.toLowerCase().includes(q),
     );
-  }, [filterQuery]);
+  }, [filterQuery, providerOptions]);
 
   // Capture printable characters + backspace for filtering when showing list
   useInput(
@@ -204,8 +217,8 @@ function ProviderTab({
   const handleManualSubmit = useCallback(
     (value: string) => {
       const provider = normalizeProviderId(value);
-      if (!isSupportedProvider(provider)) {
-        setMessage(`Unsupported provider: ${value}. Use: openrouter`);
+      if (!provider) {
+        setMessage("Provider ID cannot be empty");
         return;
       }
       const next = ensureProviderDefaults({ ...settings, provider });
@@ -275,9 +288,11 @@ function ProviderTab({
 }
 
 function ModelTab({
+  context,
   settings,
   onSave,
 }: {
+  context: CommandContext;
   settings: Settings;
   onSave: (s: Settings) => void;
 }) {
@@ -288,10 +303,10 @@ function ModelTab({
   const [showManual, setShowManual] = useState(false);
   const [filterQuery, setFilterQuery] = useState("");
 
-  const resolved = resolveProviderConfig(settings);
+  const resolved = resolveRuntimeProvider(settings, {}, context.extensionProviders ?? []);
 
   useEffect(() => {
-    if (!resolved.apiKey || showManual) return;
+    if (resolved.providerId !== OPENROUTER_PROVIDER_ID || !resolved.apiKey || showManual) return;
     setLoading(true);
     setLoadError("");
     fetchOpenRouterModels(resolved.apiKey, resolved.baseUrl)
@@ -305,7 +320,7 @@ function ModelTab({
         setShowManual(true);
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolved.apiKey, resolved.baseUrl]);
+  }, [resolved.apiKey, resolved.baseUrl, resolved.providerId]);
 
   const modelOptions = useMemo(() => {
     const opts = models.map((m) => ({
@@ -391,9 +406,13 @@ function ModelTab({
           </Box>
         )}
 
-        {!resolved.apiKey && !loading && (
+        {(resolved.providerId !== OPENROUTER_PROVIDER_ID || !resolved.apiKey) && !loading && (
           <Box flexDirection="column" marginTop={1}>
-            <Text color="yellow">No API key — configure via the API Key tab to load model list.</Text>
+            <Text color="yellow">
+              {resolved.providerId === OPENROUTER_PROVIDER_ID
+                ? "No API key — configure via the API Key tab to load model list."
+                : "This provider is managed by an extension — enter a model manually if it supports overrides."}
+            </Text>
             <Box marginTop={1}>
               <Text color="cyan">{"› "} </Text>
               <TextInput
@@ -593,16 +612,17 @@ export function Settings({
       >
         {activeTab === "config" && (
           <ConfigTab
+            context={context}
             settings={settings}
             settingsPath={settingsPath}
             cwd={context.cwd}
           />
         )}
         {activeTab === "provider" && (
-          <ProviderTab settings={settings} onSave={handleSave} />
+          <ProviderTab context={context} settings={settings} onSave={handleSave} />
         )}
         {activeTab === "model" && (
-          <ModelTab settings={settings} onSave={handleSave} />
+          <ModelTab context={context} settings={settings} onSave={handleSave} />
         )}
         {activeTab === "api-key" && (
           <ApiKeyTab settings={settings} onSave={handleSave} />

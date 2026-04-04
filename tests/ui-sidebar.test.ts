@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildSidebarRow,
   buildVerticalDivider,
   deriveSessionTitle,
   getScrollingSessionLabel,
   getSidebarHintText,
   shouldAnimateSessionLabel,
+  truncateSessionLabel,
   wrapSessionLabel,
 } from "../src/ui/components/SessionSidebar";
 
@@ -28,6 +30,17 @@ describe("SessionSidebar helpers", () => {
     expect(buildVerticalDivider(3)).toBe("│\n│\n│");
   });
 
+  test("keeps sidebar rows single-line and padded to a consistent width", () => {
+    expect(truncateSessionLabel("What tools do you have available?", 26)).toBe("What tools do you h...");
+    const row = buildSidebarRow("Short title", 26, "▸ ");
+    expect(row.startsWith("▸ Short title")).toBe(true);
+    expect(row).toHaveLength(24);
+  });
+
+  test("uses literal dot truncation for very narrow sidebars", () => {
+    expect(truncateSessionLabel("abcdefghij", 10)).toBe("abcde...");
+  });
+
   test("creates a scrolling frame for selected long labels", () => {
     expect(shouldAnimateSessionLabel("What tools do you have available?", 26)).toBe(true);
     expect(getScrollingSessionLabel("What tools do you have available?", 26, 0)).toBe("What tools do you have");
@@ -36,7 +49,7 @@ describe("SessionSidebar helpers", () => {
   });
 
   test("shows the correct sidebar hint for focused vs unfocused states", () => {
-    expect(getSidebarHintText(true)).toBe("↑↓ move · Enter select · Del remove");
-    expect(getSidebarHintText(false)).toBe("Press Tab to Select Chat");
+    expect(getSidebarHintText(true)).toBe("↑↓ move  ⏎ select\nDel to Delete Chats");
+    expect(getSidebarHintText(false)).toBe("→ Tab to Select Chats");
   });
 });

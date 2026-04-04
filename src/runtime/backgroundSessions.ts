@@ -3,8 +3,7 @@
  * Post-MVP feature — interfaces defined for future implementation.
  */
 
-import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 export interface BackgroundSession {
@@ -69,7 +68,7 @@ export class BackgroundSessionManager {
    * List all background sessions.
    */
   listSessions(): BackgroundSession[] {
-    return Array.from(this.sessions.values());
+    return Array.from(this.sessions.values()).sort((left, right) => right.startedAt.localeCompare(left.startedAt));
   }
 
   /**
@@ -103,8 +102,26 @@ export class BackgroundSessionManager {
   }
 
   private loadSessions(): void {
-    // Stub: would scan directory for .meta.json files
-    // and load session metadata into the map.
+    if (!existsSync(this.sessionsDir)) {
+      return;
+    }
+
+    const entries = readdirSync(this.sessionsDir)
+      .filter((entry: string) => entry.endsWith(".meta.json"))
+      .map((entry: string) => join(this.sessionsDir, entry));
+
+    for (const entry of entries) {
+      try {
+        const raw = JSON.parse(readFileSync(entry, "utf-8")) as BackgroundSession;
+        if (!raw?.id || !raw?.startedAt || !raw?.status || !raw?.logFile) {
+          continue;
+        }
+
+        this.sessions.set(raw.id, raw);
+      } catch {
+        // Ignore corrupt metadata files so a broken background session doesn't break boot.
+      }
+    }
   }
 
   private ensureDir(): void {

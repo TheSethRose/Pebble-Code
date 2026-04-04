@@ -4,6 +4,7 @@ import {
   OPENROUTER_DEFAULT_MODEL,
   OPENROUTER_PROVIDER_ID,
 } from "../constants/openrouter.js";
+import type { McpServerConfig } from "../extensions/contracts.js";
 import { buildTrustConfig } from "./trust";
 import type { TrustConfig, PermissionMode } from "./permissions";
 import { loadRepositoryInstructions, type InstructionFile } from "./instructions";
@@ -17,6 +18,7 @@ export interface Settings {
   provider?: string;
   apiKey?: string;
   baseUrl?: string;
+  mcpServers?: McpServerConfig[];
   maxTurns?: number;
   telemetryEnabled: boolean;
   compactThreshold?: number;

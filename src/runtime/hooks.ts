@@ -1,9 +1,8 @@
 /**
  * Hook system for session lifecycle events.
- * Post-MVP feature — interfaces defined for future implementation.
  */
 
-import type { Extension } from "../extensions/contracts.js";
+import type { Extension, ExtensionHookContext } from "../extensions/contracts.js";
 
 export type HookEvent =
   | "session:start"
@@ -18,6 +17,9 @@ export interface HookContext {
   sessionId?: string;
   turnCount?: number;
   toolName?: string;
+  toolCallId?: string;
+  toolInput?: unknown;
+  toolSuccess?: boolean;
   error?: Error;
 }
 
@@ -73,21 +75,45 @@ export function createHookRegistry(extensions: Extension[] = []): HookRegistry {
 
   for (const extension of extensions) {
     if (extension.hooks?.onSessionStart) {
-      registry.on("session:start", () => extension.hooks?.onSessionStart?.());
+      registry.on("session:start", (context) => extension.hooks?.onSessionStart?.(toExtensionHookContext(context)));
     }
 
     if (extension.hooks?.onSessionEnd) {
-      registry.on("session:end", () => extension.hooks?.onSessionEnd?.());
+      registry.on("session:end", (context) => extension.hooks?.onSessionEnd?.(toExtensionHookContext(context)));
     }
 
     if (extension.hooks?.onBeforeTurn) {
-      registry.on("turn:before", () => extension.hooks?.onBeforeTurn?.());
+      registry.on("turn:before", (context) => extension.hooks?.onBeforeTurn?.(toExtensionHookContext(context)));
     }
 
     if (extension.hooks?.onAfterTurn) {
-      registry.on("turn:after", () => extension.hooks?.onAfterTurn?.());
+      registry.on("turn:after", (context) => extension.hooks?.onAfterTurn?.(toExtensionHookContext(context)));
+    }
+
+    if (extension.hooks?.onBeforeTool) {
+      registry.on("tool:before", (context) => extension.hooks?.onBeforeTool?.(toExtensionHookContext(context)));
+    }
+
+    if (extension.hooks?.onAfterTool) {
+      registry.on("tool:after", (context) => extension.hooks?.onAfterTool?.(toExtensionHookContext(context)));
+    }
+
+    if (extension.hooks?.onError) {
+      registry.on("error", (context) => extension.hooks?.onError?.(toExtensionHookContext(context)));
     }
   }
 
   return registry;
+}
+
+function toExtensionHookContext(context: HookContext): ExtensionHookContext {
+  return {
+    sessionId: context.sessionId,
+    turnCount: context.turnCount,
+    toolName: context.toolName,
+    toolCallId: context.toolCallId,
+    toolInput: context.toolInput,
+    toolSuccess: context.toolSuccess,
+    error: context.error,
+  };
 }

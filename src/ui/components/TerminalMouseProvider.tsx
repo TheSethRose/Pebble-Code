@@ -196,21 +196,30 @@ export function useTerminalMouse() {
 }
 
 function toTerminalMouseEvent(code: number, x: number, y: number, suffix: string): TerminalMouseEvent | undefined {
+  const point = normalizeTerminalPoint(x, y);
+
   if (code === 64) {
-    return { type: "scroll", direction: "up", x, y };
+    return { type: "scroll", direction: "up", ...point };
   }
 
   if (code === 65) {
-    return { type: "scroll", direction: "down", x, y };
+    return { type: "scroll", direction: "down", ...point };
   }
 
   if (code === 35) {
-    return { type: "move", x, y };
+    return { type: "move", ...point };
   }
 
   if (code >= 32) {
-    return { type: "drag", x, y };
+    return { type: "drag", ...point };
   }
 
-  return { type: suffix === "M" ? "press" : "release", x, y };
+  return { type: suffix === "M" ? "press" : "release", ...point };
+}
+
+function normalizeTerminalPoint(x: number, y: number): { x: number; y: number } {
+  return {
+    x: Math.max(0, x - 1),
+    y: Math.max(0, y - 1),
+  };
 }

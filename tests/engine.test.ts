@@ -2,12 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { z } from "zod";
 import { QueryEngine } from "../src/engine/QueryEngine";
 import type { Message } from "../src/engine/types";
 import { PermissionManager } from "../src/runtime/permissionManager";
 import type { Provider, ProviderCapabilities, ProviderOptions, ProviderResponse, StreamChunk } from "../src/providers/types";
 import { FileEditTool } from "../src/tools/FileEditTool";
 import { FileReadTool } from "../src/tools/FileReadTool";
+import type { Tool } from "../src/tools/Tool";
 
 const tempDirs: string[] = [];
 
@@ -457,5 +459,257 @@ describe("QueryEngine integration flows", () => {
 
     expect(result.success).toBe(true);
     expect(readFileSync(join(projectDir, "package.json"), "utf-8")).toContain('"name":"original"');
+  });
+
+  test("allow-session decision is reused for later risky tool calls in the same engine session", async () => {
+    const projectDir = createTempDir("pebble-engine-resolve-session-");
+    writeFileSync(join(projectDir, "package.json"), '{"name":"original"}', "utf-8");
+
+    let permissionPrompts = 0;
+    const provider = new ScriptedProvider(async (_msgs, callNum) => {
+      if (callNum === 1) {
+        return {
+          text: "",
+          toolCalls: [
+            {
+              id: "tc-session-1",
+              name: "FileEdit",
+              input: {
+                file_path: join(projectDir, "package.json"),
+                old_string: '"name":"original"',
+                new_string: '"name":"session-one"',
+              },
+            },
+          ],
+          stopReason: "tool_use" as const,
+          usage: { inputTokens: 20, outputTokens: 10 },
+        };
+      }
+
+      if (callNum === 2) {
+        return {
+          text: "",
+          toolCalls: [
+            {
+              id: "tc-session-2",
+              name: "FileEdit",
+              input: {
+                file_path: join(projectDir, "package.json"),
+                old_string: '"name":"session-one"',
+                new_string: '"name":"session-two"',
+              },
+            },
+          ],
+          stopReason: "tool_use" as const,
+          usage: { inputTokens: 20, outputTokens: 10 },
+        };
+      }
+
+      return {
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 10, outputTokens: 5 },
+      };
+    });
+
+    const engine = new QueryEngine({
+      provider,
+      tools: [new FileEditTool()],
+      maxTurns: 5,
+      cwd: projectDir,
+      permissionManager: new PermissionManager({
+        mode: "always-ask",
+        projectRoot: projectDir,
+      }),
+      resolvePermission: async () => {
+        permissionPrompts += 1;
+        return "allow-session";
+      },
+    });
+
+    const result = await engine.process([{ role: "user", content: "update package twice" }]);
+
+    expect(result.success).toBe(true);
+    expect(permissionPrompts).toBe(1);
+    expect(readFileSync(join(projectDir, "package.json"), "utf-8")).toContain('"name":"session-two"');
+  });
+
+  test("allow-always decision persists across permission manager instances", async () => {
+    const projectDir = createTempDir("pebble-engine-resolve-persist-");
+    const packageJsonPath = join(projectDir, "package.json");
+    writeFileSync(packageJsonPath, '{"name":"original"}', "utf-8");
+
+    const firstPermissionManager = new PermissionManager({
+      mode: "always-ask",
+      projectRoot: projectDir,
+    });
+    const firstEngine = new QueryEngine({
+      provider: new ScriptedProvider(async (_msgs, callNum) => {
+        if (callNum === 1) {
+          return {
+            text: "",
+            toolCalls: [
+              {
+                id: "tc-persist-1",
+                name: "FileEdit",
+                input: {
+                  file_path: packageJsonPath,
+                  old_string: '"name":"original"',
+                  new_string: '"name":"persisted"',
+                },
+              },
+            ],
+            stopReason: "tool_use" as const,
+            usage: { inputTokens: 20, outputTokens: 10 },
+          };
+        }
+
+        return {
+          text: "Persisted decision saved.",
+          toolCalls: [],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 10, outputTokens: 5 },
+        };
+      }),
+      tools: [new FileEditTool()],
+      maxTurns: 5,
+      cwd: projectDir,
+      permissionManager: firstPermissionManager,
+      resolvePermission: async () => "allow-always",
+    });
+
+    const firstResult = await firstEngine.process([{ role: "user", content: "persist the edit approval" }]);
+
+    expect(firstResult.success).toBe(true);
+    expect(firstPermissionManager.getDecisions()).toEqual([
+      expect.objectContaining({ toolName: "FileEdit", decision: "allow-always" }),
+    ]);
+    expect(readFileSync(packageJsonPath, "utf-8")).toContain('"name":"persisted"');
+
+    const secondPermissionManager = new PermissionManager({
+      mode: "always-ask",
+      projectRoot: projectDir,
+    });
+    const secondEngine = new QueryEngine({
+      provider: new ScriptedProvider(async (_msgs, callNum) => {
+        if (callNum === 1) {
+          return {
+            text: "",
+            toolCalls: [
+              {
+                id: "tc-persist-2",
+                name: "FileEdit",
+                input: {
+                  file_path: packageJsonPath,
+                  old_string: '"name":"persisted"',
+                  new_string: '"name":"final"',
+                },
+              },
+            ],
+            stopReason: "tool_use" as const,
+            usage: { inputTokens: 20, outputTokens: 10 },
+          };
+        }
+
+        return {
+          text: "Persisted decision reused.",
+          toolCalls: [],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 10, outputTokens: 5 },
+        };
+      }),
+      tools: [new FileEditTool()],
+      maxTurns: 5,
+      cwd: projectDir,
+      permissionManager: secondPermissionManager,
+    });
+
+    const secondResult = await secondEngine.process([{ role: "user", content: "reuse the saved approval" }]);
+
+    expect(secondResult.success).toBe(true);
+    expect(readFileSync(packageJsonPath, "utf-8")).toContain('"name":"final"');
+  });
+
+  test("fires lifecycle callbacks for tool success and tool errors", async () => {
+    const lifecycleEvents: string[] = [];
+    const tool: Tool = {
+      name: "LifecycleTool",
+      description: "tracks lifecycle callback behavior",
+      inputSchema: z.object({
+        fail: z.boolean().optional(),
+      }),
+      async execute(input: unknown) {
+        const candidate = input as { fail?: boolean };
+        if (candidate.fail) {
+          throw new Error("tool exploded");
+        }
+
+        return {
+          success: true,
+          output: "tool ok",
+        };
+      },
+    };
+
+    const provider = new ScriptedProvider((_messages, callNumber) => {
+      if (callNumber === 1) {
+        return {
+          text: "",
+          toolCalls: [
+            { id: "life-ok", name: "LifecycleTool", input: { fail: false } },
+          ],
+          stopReason: "tool_use",
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      }
+
+      if (callNumber === 2) {
+        return {
+          text: "",
+          toolCalls: [
+            { id: "life-fail", name: "LifecycleTool", input: { fail: true } },
+          ],
+          stopReason: "tool_use",
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      }
+
+      return {
+        text: "done",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    });
+
+    const engine = new QueryEngine({
+      provider,
+      tools: [tool],
+      onLifecycleEvent: async (event, context) => {
+        if (event === "tool:before") {
+          lifecycleEvents.push(`before:${context.toolName}:${String((context.toolInput as { fail?: boolean })?.fail ?? false)}`);
+          return;
+        }
+
+        if (event === "tool:after") {
+          lifecycleEvents.push(`after:${context.toolName}:${context.toolSuccess}`);
+          return;
+        }
+
+        lifecycleEvents.push(`error:${context.error?.message}`);
+      },
+    });
+
+    const result = await engine.process([{ role: "user", content: "run lifecycle tool twice" }]);
+
+    expect(result.success).toBe(true);
+    expect(lifecycleEvents).toEqual([
+      "before:LifecycleTool:false",
+      "after:LifecycleTool:true",
+      "before:LifecycleTool:true",
+      "after:LifecycleTool:false",
+      "error:tool exploded",
+    ]);
   });
 });

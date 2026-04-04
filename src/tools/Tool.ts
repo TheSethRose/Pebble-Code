@@ -3,6 +3,7 @@
  */
 
 import type { z } from "zod";
+import type { McpServerConfig, Skill } from "../extensions/contracts.js";
 import type { SessionStore } from "../persistence/sessionStore.js";
 import type { PermissionManager } from "../runtime/permissionManager.js";
 import type { ToolRegistry } from "./registry.js";
@@ -64,6 +65,8 @@ export interface ToolRuntimeContext {
   permissionManager?: PermissionManager;
   toolRegistry?: ToolRegistry;
   extensionDirs?: string[];
+  skills?: Skill[];
+  mcpServers?: McpServerConfig[];
 }
 
 /**

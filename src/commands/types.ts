@@ -2,6 +2,8 @@ import type { SessionStore } from "../persistence/sessionStore.js";
 import type { PermissionManager } from "../runtime/permissionManager.js";
 import type { HookRegistry } from "../runtime/hooks.js";
 import type { TrustLevel } from "../runtime/permissions.js";
+import type { McpServerConfig, Skill } from "../extensions/contracts.js";
+import type { Provider } from "../providers/types.js";
 import type { Tool } from "../tools/Tool.js";
 
 /**
@@ -32,10 +34,18 @@ export interface CommandContext {
   extensionCommands?: Command[];
   /** Loaded extension tool implementations */
   extensionTools?: Tool[];
+  /** Loaded extension provider implementations */
+  extensionProviders?: Provider[];
+  /** Loaded local skills */
+  loadedSkills?: Skill[];
+  /** Loaded MCP server configurations */
+  loadedMcpServers?: McpServerConfig[];
   /** Extension directories considered during runtime loading */
   extensionDirs?: string[];
   /** Active hook registry populated from extensions */
   hookRegistry?: HookRegistry;
+  /** Combined repository instructions and injected skill instructions */
+  systemPrompt?: string;
 }
 
 /**

@@ -1,6 +1,10 @@
 import React from "react";
 import { describe, expect, test } from "bun:test";
-import { TranscriptView, getTranscriptLineCount, getTranscriptMetrics } from "../src/ui/components/TranscriptView";
+import {
+  TranscriptView,
+  getTranscriptLineCount,
+  getTranscriptMetrics,
+} from "../src/ui/components/TranscriptView";
 import { MessageItem } from "../src/ui/components/MessageItem";
 import { summariseArgs } from "../src/ui/components/PermissionPrompt";
 import type { DisplayMessage } from "../src/ui/types";
@@ -11,6 +15,13 @@ function createMessage(role: DisplayMessage["role"], content = "test", meta?: Di
 }
 
 describe("TranscriptView", () => {
+  test("renders user messages with a contrasting background treatment", () => {
+    const element = TranscriptView({ messages: [createMessage("user", "highlight me")], width: 60 });
+    const segments = collectTextSegments(element);
+
+    expect(segments.some((segment) => segment.text.includes("highlight me") && segment.backgroundColor === "gray")).toBe(true);
+  });
+
   test("does not render a separate inline processing status row", () => {
     const element = TranscriptView({ messages: [createMessage("tool", "Bash", { toolName: "Bash" })] });
     const flat = flattenText(element);
@@ -48,7 +59,44 @@ describe("TranscriptView", () => {
 
     expect(flat).toContain("██████╗");
     expect(flat).toContain("qwen/qwen3.6-plus:free · OpenRouter • new session");
-    expect(flat).toContain("Type a prompt to start · /help shows commands");
+    expect(flat).toContain("Use /help if you want commands.");
+    expect(flat).not.toContain("Ask Pebble anything — a few strong starting points:");
+    expect(flat).not.toContain("Review recent changes");
+    expect(flat).not.toContain("Explain this repository");
+    expect(flat).not.toContain("Find a file, test, or command");
+    expect(flat).not.toContain("Resume a previous session");
+  });
+
+  test("renders blank banner spacer rows as whitespace so they stay visible", () => {
+    const segments = collectTextSegments(TranscriptView({
+      messages: [],
+      width: 80,
+      banner: {
+        cwd: "/Users/sethrose/Developer/Pebble-Code",
+        model: "qwen/qwen3.6-plus:free",
+        providerLabel: "OpenRouter",
+        sessionId: null,
+      },
+    }));
+
+    expect(segments.filter((segment) => segment.text === " ").length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("falls back to a lighter one-line banner hint once the transcript has content", () => {
+    const element = TranscriptView({
+      messages: [createMessage("assistant", "Ready when you are")],
+      width: 80,
+      banner: {
+        cwd: "/Users/sethrose/Developer/Pebble-Code",
+        model: "qwen/qwen3.6-plus:free",
+        providerLabel: "OpenRouter",
+        sessionId: "session-1234",
+      },
+    });
+    const flat = flattenText(element);
+
+    expect(flat).toContain("Ask Pebble anything, or use /help for commands");
+    expect(flat).not.toContain("a few strong starting points");
   });
 
   test("trims older tall messages when maxRows is constrained", () => {
@@ -138,6 +186,57 @@ describe("TranscriptView", () => {
     expect(flat).not.toContain("**");
     expect(segments.some((segment) => segment.text.includes("Title") && segment.bold)).toBe(true);
     expect(segments.some((segment) => segment.text === "bold" && segment.bold)).toBe(true);
+  });
+
+  test("uses blinking dot indicators for in-progress transcript rows", () => {
+    const live = flattenText(TranscriptView({ messages: [createMessage("streaming", "working")], width: 60, blinkPhase: true }));
+    const dim = flattenText(TranscriptView({ messages: [createMessage("streaming", "working")], width: 60, blinkPhase: false }));
+
+    expect(live).toContain("●");
+    expect(dim).toContain("○");
+  });
+
+  test("keeps live transcript text steady while only the status dot changes phase", () => {
+    const liveSegments = collectTextSegments(TranscriptView({
+      messages: [createMessage("streaming", "working")],
+      width: 60,
+      blinkPhase: true,
+    }));
+    const dimSegments = collectTextSegments(TranscriptView({
+      messages: [createMessage("streaming", "working")],
+      width: 60,
+      blinkPhase: false,
+    }));
+
+    expect(liveSegments.find((segment) => segment.text.includes("working"))?.color).toBe("yellow");
+    expect(dimSegments.find((segment) => segment.text.includes("working"))?.color).toBe("yellow");
+    expect(liveSegments.find((segment) => segment.text.includes("●"))?.color).toBe("yellow");
+    expect(dimSegments.find((segment) => segment.text.includes("○"))?.color).toBe("gray");
+  });
+
+  test("keeps running tool labels steady while only the status dot changes phase", () => {
+    const toolMessage = createMessage("tool", "Bash", { toolName: "Bash", toolArgs: { command: "ls" } });
+    const liveSegments = collectTextSegments(TranscriptView({ messages: [toolMessage], width: 60, blinkPhase: true }));
+    const dimSegments = collectTextSegments(TranscriptView({ messages: [toolMessage], width: 60, blinkPhase: false }));
+
+    expect(liveSegments.find((segment) => segment.text.includes("Bash"))?.color).toBe("yellow");
+    expect(dimSegments.find((segment) => segment.text.includes("Bash"))?.color).toBe("yellow");
+    expect(liveSegments.find((segment) => segment.text.includes("●"))?.color).toBe("yellow");
+    expect(dimSegments.find((segment) => segment.text.includes("○"))?.color).toBe("gray");
+  });
+
+  test("renders tool result states with dot indicators instead of checkmarks", () => {
+    const successSegments = collectTextSegments(TranscriptView({
+      messages: [createMessage("tool_result", "Bash done", { toolName: "Bash", toolOutput: "ok" })],
+      width: 60,
+    }));
+    const errorSegments = collectTextSegments(TranscriptView({
+      messages: [createMessage("tool_result", "Bash failed", { toolName: "Bash", isError: true, errorMessage: "boom" })],
+      width: 60,
+    }));
+
+    expect(successSegments.some((segment) => segment.text.includes("●") && segment.color === "green")).toBe(true);
+    expect(errorSegments.some((segment) => segment.text.includes("●") && segment.color === "red")).toBe(true);
   });
 });
 
@@ -303,10 +402,10 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function collectTextSegments(element: React.ReactElement): Array<{ text: string; bold?: boolean; italic?: boolean }> {
-  const segments: Array<{ text: string; bold?: boolean; italic?: boolean }> = [];
+function collectTextSegments(element: React.ReactElement): Array<{ text: string; bold?: boolean; italic?: boolean; color?: string; backgroundColor?: string }> {
+  const segments: Array<{ text: string; bold?: boolean; italic?: boolean; color?: string; backgroundColor?: string }> = [];
 
-  function walk(node: unknown, inherited: { bold?: boolean; italic?: boolean } = {}) {
+  function walk(node: unknown, inherited: { bold?: boolean; italic?: boolean; color?: string; backgroundColor?: string } = {}) {
     if (typeof node === "string") {
       segments.push({ text: node, ...inherited });
       return;
@@ -320,6 +419,8 @@ function collectTextSegments(element: React.ReactElement): Array<{ text: string;
     const nextInherited = {
       bold: typeof props.bold === "boolean" ? props.bold : inherited.bold,
       italic: typeof props.italic === "boolean" ? props.italic : inherited.italic,
+      color: typeof props.color === "string" ? props.color : inherited.color,
+      backgroundColor: typeof props.backgroundColor === "string" ? props.backgroundColor : inherited.backgroundColor,
     };
 
     if (typeof props.children !== "undefined") {

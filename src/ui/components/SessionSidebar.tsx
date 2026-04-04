@@ -18,9 +18,24 @@ interface SessionSidebarProps {
   width?: number;
 }
 
+interface SidebarRailProps {
+  height?: number;
+  isFocused: boolean;
+}
+
 const SIDEBAR_WIDTH = 24;
 const SIDEBAR_HORIZONTAL_PADDING = 2;
 const SIDEBAR_LABEL_PREFIX_WIDTH = 2;
+
+export function SidebarRail({ height, isFocused }: SidebarRailProps) {
+  const rows = Math.max(1, height ?? 1);
+
+  return (
+    <Box width={1} flexShrink={0}>
+      <Text color={isFocused ? "green" : "gray"}>{buildVerticalDivider(rows)}</Text>
+    </Box>
+  );
+}
 
 /**
  * Right sidebar listing saved sessions.
@@ -89,7 +104,7 @@ export function SessionSidebar({
           backgroundColor={isNewChatSelected ? "green" : undefined}
           bold={isNewChatSelected || isNewChatActive}
         >
-          ◈ New Chat
+          {buildSidebarRow("◈ New Chat", width)}
         </Text>
       </Box>
 
@@ -98,24 +113,20 @@ export function SessionSidebar({
         const rowIndex = i + 1; // offset by 1 since "New Chat" is 0
         const isActive = s.id === activeSessionId;
         const isCursor = isFocused && selectedIndex === rowIndex;
-        const labelLines = isCursor
-          ? [getScrollingSessionLabel(s.title, width, marqueeTick)]
-          : wrapSessionLabel(s.title, width);
+        const prefix = isActive && !isCursor ? "▸ " : "  ";
+        const label = isCursor
+          ? getScrollingSessionLabel(s.title, width, marqueeTick)
+          : truncateSessionLabel(s.title, width);
 
         return (
-          <Box key={s.id} flexDirection="column">
-            {labelLines.map((line, lineIndex) => (
-              <Text
-                key={`${s.id}:${lineIndex}`}
-                color={isCursor ? "black" : isActive ? "green" : "gray"}
-                backgroundColor={isCursor ? "green" : undefined}
-                bold={isCursor || isActive}
-              >
-                {lineIndex === 0
-                  ? `${isActive && !isCursor ? "▸" : " "} ${line}`
-                  : `  ${line}`}
-              </Text>
-            ))}
+          <Box key={s.id}>
+            <Text
+              color={isCursor ? "black" : isActive ? "green" : "gray"}
+              backgroundColor={isCursor ? "green" : undefined}
+              bold={isCursor || isActive}
+            >
+              {buildSidebarRow(label, width, prefix)}
+            </Text>
           </Box>
         );
       })}
@@ -182,6 +193,15 @@ export function wrapSessionLabel(title: string, width: number): string[] {
   return lines;
 }
 
+export function truncateSessionLabel(title: string, width: number): string {
+  const normalized = title.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return "";
+  }
+
+  return fitSidebarContent(normalized, getSidebarUsableWidth(width));
+}
+
 export function getScrollingSessionLabel(title: string, width: number, tick: number): string {
   const normalized = title.trim().replace(/\s+/g, " ");
   if (!normalized) {
@@ -207,7 +227,7 @@ export function shouldAnimateSessionLabel(title: string, width: number): boolean
 }
 
 export function getSidebarHintText(isFocused: boolean): string {
-  return isFocused ? "↑↓ move · Enter select · Del remove" : "Press Tab to Select Chat";
+  return isFocused ? "↑↓ move  ⏎ select\nDel to Delete Chats" : "→ Tab to Select Chats";
 }
 
 export function buildVerticalDivider(height: number): string {
@@ -215,6 +235,32 @@ export function buildVerticalDivider(height: number): string {
   return Array.from({ length: height }, () => "│").join("\n");
 }
 
+export function buildSidebarRow(content: string, width: number, prefix = ""): string {
+  const availableWidth = Math.max(4, width - SIDEBAR_HORIZONTAL_PADDING - stringWidth(prefix));
+  const fitted = fitSidebarContent(content, availableWidth);
+  return `${prefix}${fitted}${" ".repeat(Math.max(0, availableWidth - stringWidth(fitted)))}`;
+}
+
 function getSidebarUsableWidth(width: number): number {
   return Math.max(8, width - SIDEBAR_HORIZONTAL_PADDING - SIDEBAR_LABEL_PREFIX_WIDTH);
+}
+
+function fitSidebarContent(value: string, width: number): string {
+  if (width <= 0) {
+    return "";
+  }
+
+  if (stringWidth(value) <= width) {
+    return value;
+  }
+
+  if (width <= 3) {
+    return ".".repeat(width);
+  }
+
+  return `${[...value].slice(0, width - 3).join("")}...`;
+}
+
+function stringWidth(value: string): number {
+  return [...value].length;
 }

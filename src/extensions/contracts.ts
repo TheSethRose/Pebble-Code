@@ -12,6 +12,18 @@ import type { Tool } from "../tools/Tool.js";
 import type { Command } from "../commands/types.js";
 import type { Provider } from "../providers/types.js";
 
+export type ExtensionType = "plugin" | "skill" | "mcp";
+
+export interface ExtensionHookContext {
+  sessionId?: string;
+  turnCount?: number;
+  toolName?: string;
+  toolCallId?: string;
+  toolInput?: unknown;
+  toolSuccess?: boolean;
+  error?: Error;
+}
+
 /**
  * Extension lifecycle hooks.
  */
@@ -21,13 +33,19 @@ export interface ExtensionHooks {
   /** Called when the extension is unloaded */
   onDeactivate?(): Promise<void>;
   /** Called at session start */
-  onSessionStart?(): Promise<void>;
+  onSessionStart?(context: ExtensionHookContext): Promise<void>;
   /** Called at session end */
-  onSessionEnd?(): Promise<void>;
+  onSessionEnd?(context: ExtensionHookContext): Promise<void>;
   /** Called before each agent turn */
-  onBeforeTurn?(): Promise<void>;
+  onBeforeTurn?(context: ExtensionHookContext): Promise<void>;
   /** Called after each agent turn */
-  onAfterTurn?(): Promise<void>;
+  onAfterTurn?(context: ExtensionHookContext): Promise<void>;
+  /** Called before a tool executes */
+  onBeforeTool?(context: ExtensionHookContext): Promise<void>;
+  /** Called after a tool executes or is denied */
+  onAfterTool?(context: ExtensionHookContext): Promise<void>;
+  /** Called when the runtime or engine surfaces an error */
+  onError?(context: ExtensionHookContext): Promise<void>;
 }
 
 /**
@@ -40,6 +58,8 @@ export interface ExtensionMetadata {
   name: string;
   /** Extension version */
   version: string;
+  /** Extension type for runtime discovery */
+  type?: ExtensionType;
   /** Extension description */
   description?: string;
   /** Extension author */
@@ -88,12 +108,18 @@ export interface Skill {
   id: string;
   /** Human-readable name */
   name: string;
+  /** Skill version */
+  version?: string;
+  /** Skill description */
+  description?: string;
   /** When this skill should be activated */
   triggers: string[];
   /** Skill instructions (injected into system prompt) */
   instructions: string;
   /** Tools this skill requires */
   requiredTools?: string[];
+  /** Source path for diagnostics/debugging */
+  sourcePath?: string;
 }
 
 /**

@@ -30,7 +30,7 @@ describe("TerminalMouseProvider helpers", () => {
     expect(segments[1]).toMatchObject({
       type: "mouse",
       value: "\u001B[<64;58;23M",
-      event: { type: "scroll", direction: "up", x: 58, y: 23 },
+      event: { type: "scroll", direction: "up", x: 57, y: 22 },
     });
     expect(segments[2]).toMatchObject({ type: "text", value: "world" });
   });
@@ -41,7 +41,17 @@ describe("TerminalMouseProvider helpers", () => {
     expect(segments).toHaveLength(1);
     expect(segments[0]).toMatchObject({
       type: "mouse",
-      event: { type: "move", x: 62, y: 35 },
+      event: { type: "move", x: 61, y: 34 },
+    });
+  });
+
+  test("normalizes sgr mouse coordinates to zero-based layout space", () => {
+    const segments = splitMouseInputSegments("\u001B[<0;1;1M");
+
+    expect(segments).toHaveLength(1);
+    expect(segments[0]).toMatchObject({
+      type: "mouse",
+      event: { type: "press", x: 0, y: 0 },
     });
   });
 
@@ -60,7 +70,7 @@ describe("TerminalMouseProvider helpers", () => {
     expect(second.segments[0]).toMatchObject({
       type: "mouse",
       value: "\u001B[<64;58;23M",
-      event: { type: "scroll", direction: "up", x: 58, y: 23 },
+      event: { type: "scroll", direction: "up", x: 57, y: 22 },
     });
     expect(second.segments[1]).toEqual({ type: "text", value: "world" });
   });

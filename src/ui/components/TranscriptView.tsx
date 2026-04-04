@@ -17,6 +17,8 @@ interface TranscriptViewProps {
   scrollOffset?: number;
   /** Whether the current assistant turn is still actively streaming/running tools. */
   isProcessing?: boolean;
+  /** Blink state for in-progress message indicators. */
+  blinkPhase?: boolean;
   /** Fallback row budget when maxRows is not provided. */
   maxMessages?: number;
   /** Exact transcript row budget available in the layout. */
@@ -28,6 +30,7 @@ interface TranscriptViewProps {
 interface TranscriptSpan {
   text: string;
   color?: string;
+  backgroundColor?: string;
   dimColor?: boolean;
   bold?: boolean;
   italic?: boolean;
@@ -66,11 +69,12 @@ export function TranscriptView({
   banner,
   scrollOffset = 0,
   isProcessing = false,
+  blinkPhase = true,
   maxMessages = VISIBLE_MESSAGE_COUNT,
   maxRows,
   width = 80,
 }: TranscriptViewProps) {
-  const rows = buildTranscriptRows(messages, width, isProcessing, banner);
+  const rows = buildTranscriptRows(messages, width, isProcessing, blinkPhase, banner);
   const { totalRows, contentBudget, maxScrollOffset } = buildTranscriptMetrics(rows.length, maxRows, maxMessages);
   const clampedOffset = Math.min(scrollOffset, maxScrollOffset);
   const end = Math.max(0, totalRows - clampedOffset);
@@ -81,10 +85,11 @@ export function TranscriptView({
     <Box flexDirection="column">
       {visibleRows.map((row) => (
         <Text key={row.key}>
-          {row.segments.map((segment, segmentIndex) => (
+          {getRenderableSegments(row.segments).map((segment, segmentIndex) => (
             <Text
               key={`${row.key}:${segmentIndex}`}
               color={segment.color}
+              backgroundColor={segment.backgroundColor}
               dimColor={segment.dimColor}
               bold={segment.bold}
               italic={segment.italic}
@@ -99,7 +104,7 @@ export function TranscriptView({
 }
 
 export function getTranscriptLineCount(messages: DisplayMessage[], width = 80): number {
-  return buildTranscriptRows(messages, width, false).length;
+  return buildTranscriptRows(messages, width, false, true).length;
 }
 
 export function getTranscriptMetrics(
@@ -118,7 +123,7 @@ export function getTranscriptMetrics(
     banner?: TranscriptViewProps["banner"];
   } = {},
 ): TranscriptMetrics {
-  const rows = buildTranscriptRows(messages, width, isProcessing, banner);
+  const rows = buildTranscriptRows(messages, width, isProcessing, true, banner);
   return buildTranscriptMetrics(rows.length, maxRows, maxMessages);
 }
 
@@ -135,13 +140,14 @@ function buildTranscriptRows(
   messages: DisplayMessage[],
   width: number,
   isProcessing: boolean,
+  blinkPhase: boolean,
   banner?: TranscriptViewProps["banner"],
 ): TranscriptRow[] {
   const grouped = groupMessages(messages);
   const rows: TranscriptRow[] = [];
 
   if (banner) {
-    rows.push(...buildBannerRows(banner, width));
+    rows.push(...buildBannerRows(banner, width, messages.length === 0));
   }
 
   grouped.forEach((group, index) => {
@@ -150,18 +156,18 @@ function buildTranscriptRows(
     }
 
     if (group.type === "tool-group") {
-      rows.push(...messageToRows(group.call, width, `${group.key}:call`));
+      rows.push(...messageToRows(group.call, width, `${group.key}:call`, {}, blinkPhase));
       if (group.result) {
         rows.push(...messageToRows(group.result, width, `${group.key}:result`, {
           collapseDetails: !isProcessing && !group.result.meta?.isError,
-        }));
+        }, blinkPhase));
       }
       return;
     }
 
     rows.push(...messageToRows(group.message, width, group.key, {
       collapseDetails: group.message.role === "tool_result" && !isProcessing && !group.message.meta?.isError,
-    }));
+    }, blinkPhase));
   });
 
   return rows;
@@ -170,6 +176,7 @@ function buildTranscriptRows(
 function buildBannerRows(
   banner: NonNullable<TranscriptViewProps["banner"]>,
   width: number,
+  isEmptyState: boolean,
 ): TranscriptRow[] {
   const sessionLabel = banner.sessionId ? `session ${banner.sessionId.slice(0, 8)}` : "new session";
   const modelLine = banner.providerLabel ? `${banner.model} · ${banner.providerLabel}` : banner.model;
@@ -181,12 +188,27 @@ function buildBannerRows(
   }));
 
   rows.push({ key: "banner:gap:0", segments: [createSpan("")] });
-  rows.push({ key: "banner:meta", segments: [createSpan(metadataLine, { dimColor: true })] });
-  rows.push({ key: "banner:cwd", segments: [createSpan(cwdLine, { dimColor: true })] });
+  rows.push({ key: "banner:meta", segments: [createSpan(metadataLine, { color: "gray" })] });
+  rows.push({ key: "banner:cwd", segments: [createSpan(cwdLine, { color: "gray" })] });
   rows.push({ key: "banner:gap:1", segments: [createSpan("")] });
+
+  if (isEmptyState) {
+    pushWrappedRows(
+      rows,
+      "banner:hint",
+      "",
+      "",
+      "Use /help if you want commands.",
+      width,
+      { color: "gray" },
+    );
+
+    return rows;
+  }
+
   rows.push({
     key: "banner:hint",
-    segments: [createSpan("Type a prompt to start · /help shows commands", { dimColor: true })],
+    segments: [createSpan("Ask Pebble anything, or use /help for commands", { color: "gray" })],
   });
 
   return rows;
@@ -242,6 +264,7 @@ function messageToRows(
   width: number,
   keyBase: string,
   options: { collapseDetails?: boolean } = {},
+  blinkPhase = true,
 ): TranscriptRow[] {
   const meta = message.meta;
   const rows: TranscriptRow[] = [];
@@ -249,19 +272,36 @@ function messageToRows(
 
   switch (message.role) {
     case "user":
-      pushWrappedRows(rows, keyBase, "> ", "  ", message.content || "(empty)", width, { color: "white" }, { markdown: true });
+      pushWrappedRows(
+        rows,
+        keyBase,
+        "› ",
+        "  ",
+        message.content || "(empty)",
+        width,
+        { color: "white", backgroundColor: "gray", bold: true },
+        { markdown: true },
+      );
       return rows;
 
     case "assistant":
-      pushWrappedRows(rows, keyBase, "● ", "  ", message.content || "(empty)", width, { color: "white" }, { markdown: true });
+      pushWrappedRows(rows, keyBase, `${getStatusDot("complete", blinkPhase)} `, "  ", message.content || "(empty)", width, { color: "white" }, { markdown: true });
       return rows;
 
     case "streaming":
-      rows.push({
-        key: `${keyBase}:thinking`,
-        segments: [createSpan("∴ Thinking…", { color: "gray", dimColor: true, italic: true })],
-      });
-      pushWrappedRows(rows, `${keyBase}:body`, "  ", "  ", appendCursor(message.content), width, { color: "white" }, { markdown: true });
+      pushWrappedRows(
+        rows,
+        `${keyBase}:body`,
+        `${getStatusDot("in-progress", blinkPhase)} `,
+        "  ",
+        appendCursor(message.content || "Thinking…"),
+        width,
+        { color: "yellow" },
+        {
+          markdown: true,
+          prefixStyle: { color: blinkPhase ? "yellow" : "gray" },
+        },
+      );
       return rows;
 
     case "command":
@@ -275,7 +315,16 @@ function messageToRows(
     case "tool": {
       const toolName = meta?.toolName ?? message.content;
       const header = compactParts([toolName, meta?.toolArgs ? compactArgs(meta.toolArgs) : ""]);
-      pushWrappedRows(rows, keyBase, "⧈ ", "  ", header || toolName, width, { color: "yellow", bold: true });
+      pushWrappedRows(
+        rows,
+        keyBase,
+        `${getStatusDot("tool-running", blinkPhase)} `,
+        "  ",
+        header || toolName,
+        width,
+        { color: "yellow", bold: true },
+        { prefixStyle: { color: blinkPhase ? "yellow" : "gray", bold: true } },
+      );
 
       const aliasLine = meta?.requestedToolName && meta.requestedToolName !== toolName
         ? `requested as ${meta.requestedToolName}`
@@ -288,7 +337,7 @@ function messageToRows(
 
     case "tool_result": {
       const isError = meta?.isError ?? false;
-      const marker = isError ? "✗ " : "✓ ";
+      const marker = `${getStatusDot(isError ? "failed" : "complete", blinkPhase)} `;
       const toolName = meta?.toolName ?? "tool";
       const durationSuffix = typeof meta?.durationMs === "number" ? ` (${meta.durationMs} ms)` : "";
       const truncatedSuffix = meta?.truncated ? " [truncated]" : "";
@@ -333,16 +382,16 @@ function messageToRows(
     case "progress":
       rows.push({
         key: keyBase,
-        segments: [createSpan(`↻ ${meta?.turnNumber != null ? `[turn ${meta.turnNumber}] ` : ""}${message.content}`, { color: "cyan", dimColor: true })],
+        segments: [createSpan(`${getStatusDot("in-progress", blinkPhase)} ${meta?.turnNumber != null ? `[turn ${meta.turnNumber}] ` : ""}${message.content}`, { color: "cyan", dimColor: true })],
       });
       return rows;
 
     case "error":
-      pushWrappedRows(rows, keyBase, "✗ ", "  ", message.content || "Error", width, { color: "red", bold: true }, { markdown: true });
+      pushWrappedRows(rows, keyBase, `${getStatusDot("failed", blinkPhase)} `, "  ", message.content || "Error", width, { color: "red", bold: true }, { markdown: true });
       return rows;
 
     default:
-      pushWrappedRows(rows, keyBase, "• ", "  ", message.content || "(empty)", width, { color: "white" });
+      pushWrappedRows(rows, keyBase, `${getStatusDot("complete", blinkPhase)} `, "  ", message.content || "(empty)", width, { color: "white" });
       return rows;
   }
 }
@@ -355,7 +404,7 @@ function pushWrappedRows(
   text: string,
   width: number,
   style: RowStyle,
-  options: { markdown?: boolean } = {},
+  options: { markdown?: boolean; prefixStyle?: RowStyle } = {},
 ): void {
   const prefixWidth = stringWidth(prefix);
   const continuationWidth = stringWidth(continuationPrefix);
@@ -369,7 +418,7 @@ function pushWrappedRows(
       const isFirstRenderedLine = lineIndex === 0 && segmentIndex === 0;
       rows.push({
         key: `${keyBase}:${lineIndex}:${segmentIndex}`,
-        segments: [createSpan(isFirstRenderedLine ? prefix : continuationPrefix, style), ...segment],
+        segments: [createSpan(isFirstRenderedLine ? prefix : continuationPrefix, options.prefixStyle ?? style), ...segment],
       });
     });
   });
@@ -578,6 +627,7 @@ function appendSpan(spans: TranscriptSpan[], span: TranscriptSpan): TranscriptSp
   if (
     last
     && last.color === span.color
+    && last.backgroundColor === span.backgroundColor
     && last.dimColor === span.dimColor
     && last.bold === span.bold
     && last.italic === span.italic
@@ -596,10 +646,33 @@ function createSpan(text: string, style: RowStyle = {}): TranscriptSpan {
   return {
     text,
     color: style.color,
+    backgroundColor: style.backgroundColor,
     dimColor: style.dimColor,
     bold: style.bold,
     italic: style.italic,
   };
+}
+
+function getRenderableSegments(segments: TranscriptSpan[]): TranscriptSpan[] {
+  if (segments.some((segment) => segment.text.length > 0)) {
+    return segments;
+  }
+
+  const firstSegment = segments[0];
+  return [createSpan(" ", firstSegment)];
+}
+
+function getStatusDot(state: "in-progress" | "tool-running" | "complete" | "failed", blinkPhase: boolean): string {
+  switch (state) {
+    case "in-progress":
+    case "tool-running":
+      return blinkPhase ? "●" : "○";
+    case "failed":
+      return "●";
+    case "complete":
+    default:
+      return "●";
+  }
 }
 
 function stringWidth(value: string): number {

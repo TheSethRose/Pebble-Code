@@ -6,11 +6,12 @@
  * either the interactive REPL or headless mode.
  */
 
+import { join } from "node:path";
 import { BUILD_INFO, getVersionString } from "../build/buildInfo.js";
 import { getFeatureSummary, isFeatureEnabled } from "../build/featureFlags.js";
 import { buildRuntimeConfig } from "./config.js";
 import { PermissionManager } from "./permissionManager.js";
-import { createHookRegistry, type HookRegistry } from "./hooks.js";
+import { createHookRegistry, type HookContext, type HookRegistry } from "./hooks.js";
 import { loadRepositoryInstructions, formatInstructions } from "./instructions.js";
 import {
   createProjectSessionStore,
@@ -21,22 +22,22 @@ import {
   failPendingApprovalsForResume,
 } from "../persistence/runtimeSessions.js";
 import { getSettingsPath } from "./config.js";
-import { resolveProviderConfig } from "../providers/config.js";
-import { getDefaultExtensionDirs, loadExtensions, reportExtensionStatus } from "../extensions/loaders.js";
+import {
+  composeSkillInstructions,
+  getDefaultExtensionDirs,
+  loadRuntimeIntegrations,
+  reportExtensionStatus,
+  type RuntimeIntegrations,
+} from "../extensions/loaders.js";
 import type { Command } from "../commands/types.js";
 import type { Message, StreamEvent, EngineState } from "../engine/types.js";
-import type { Extension } from "../extensions/contracts.js";
 import type { Tool } from "../tools/Tool.js";
-import {
-  createInitEvent,
-  createPermissionDenialEvent,
-  createResultEnvelope,
-  createStreamEvent,
-  createUserReplayEvent,
-  serializeSdkEvent,
-} from "../engine/sdkProtocol.js";
+import { resolveRuntimeProvider, type RuntimeProviderResolution } from "../providers/runtime.js";
+import { BackgroundSessionManager } from "./backgroundSessions.js";
+import { WorktreeManager } from "./worktrees.js";
+import { createHeadlessReporter, type HeadlessFormat } from "./reporters.js";
 
-export type HeadlessFormat = "text" | "json" | "json-stream";
+export type { HeadlessFormat } from "./reporters.js";
 
 export interface RuntimeOptions {
   /** Run in headless/print mode */
@@ -68,13 +69,8 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
 
   // Phase 2: Initialize config layer
   const config = buildRuntimeConfig(cwd);
-  const resolvedProvider = resolveProviderConfig(config.settings, {
-    provider: options.provider,
-    model: options.model,
-  });
   console.error(`Trust level: ${config.trust.level}`);
   console.error(`Project root: ${config.trust.projectRoot}`);
-  console.error(`Provider: ${resolvedProvider.providerLabel} (${resolvedProvider.model})`);
 
   // Phase 3: Initialize trust system
   const permissionManager = new PermissionManager({
@@ -88,33 +84,58 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
     console.error(`Loaded ${config.instructions.length} instruction file(s)`);
   }
 
-  // Phase 5: Initialize extensions
-  const extensionResults = await loadExtensions(getDefaultExtensionDirs(cwd));
   const extensionDirs = getDefaultExtensionDirs(cwd);
-  reportExtensionStatus(extensionResults);
-  const loadedExtensions = extensionResults
-    .filter((result): result is typeof result & { extension: Extension } => result.loaded && Boolean(result.extension))
-    .map((result) => result.extension);
-  const extensionCommands = extensionResults
-    .filter((result) => result.loaded && result.extension?.commands?.length)
-    .flatMap((result) => result.extension?.commands ?? []);
-  const extensionCommandNames = extensionCommands.map((command) => command.name);
-  const extensionTools = loadedExtensions.flatMap((extension) => extension.tools ?? []);
-  const hookRegistry = createHookRegistry(loadedExtensions);
+  const integrations = await loadRuntimeIntegrations(extensionDirs, {
+    mcpServers: config.settings.mcpServers,
+  });
+  reportExtensionStatus(integrations.results);
+
+  const resolvedProvider = resolveRuntimeProvider(
+    config.settings,
+    {
+      provider: options.provider,
+      model: options.model,
+    },
+    integrations.providers,
+  );
+  const extensionCommandNames = integrations.commands.map((command) => command.name);
+  const hookRegistry = createHookRegistry(integrations.extensions);
+  const systemPrompt = mergeRuntimeInstructions(instructions, integrations.skills);
+
+  const backgroundSessionManager = new BackgroundSessionManager(join(config.trust.projectRoot, ".pebble", "background-sessions"));
+  const worktreeManager = new WorktreeManager({
+    worktreeDir: join(config.trust.projectRoot, ".pebble", "worktrees"),
+  });
+  const backgroundSessions = backgroundSessionManager.listSessions();
+  console.error(`Provider: ${resolvedProvider.providerLabel} (${resolvedProvider.model})`);
+  console.error(`Extensions: ${integrations.extensions.length} plugin(s), ${integrations.skills.length} skill(s), ${integrations.mcpServers.length} MCP server(s), ${integrations.providers.length} provider(s)`);
+  console.error(`Background sessions: ${backgroundSessions.length}`);
+  console.error(`Worktree root: ${join(config.trust.projectRoot, ".pebble", "worktrees")}`);
 
   // Phase 6: Start the appropriate mode
   if (options.headless) {
-    return runHeadless(options, config, permissionManager, instructions, extensionCommandNames, extensionTools, hookRegistry, extensionDirs);
+    return runHeadless(
+      options,
+      config,
+      permissionManager,
+      systemPrompt,
+      resolvedProvider,
+      integrations,
+      extensionCommandNames,
+      hookRegistry,
+      extensionDirs,
+    );
   }
 
   return runInteractive(
     options,
     config,
     permissionManager,
-    instructions,
-    extensionCommands,
+    systemPrompt,
+    resolvedProvider,
+    integrations,
+    integrations.commands,
     extensionCommandNames,
-    extensionTools,
     hookRegistry,
     extensionDirs,
   );
@@ -124,9 +145,10 @@ async function runHeadless(
   options: RuntimeOptions,
   config: ReturnType<typeof buildRuntimeConfig>,
   permissionManager: PermissionManager,
-  instructions: string,
+  systemPrompt: string,
+  resolvedProvider: RuntimeProviderResolution,
+  integrations: RuntimeIntegrations,
   extensionCommandNames: string[],
-  extensionTools: Tool[],
   hookRegistry: HookRegistry,
   extensionDirs: string[],
 ): Promise<number> {
@@ -136,43 +158,24 @@ async function runHeadless(
   }
 
   const format = normalizeHeadlessFormat(options.format);
+  const reporter = createHeadlessReporter(format);
 
   console.error("Headless mode: processing prompt...");
   console.error(`Permission mode: ${config.settings.permissionMode}`);
   console.error(`Output format: ${format}`);
-  console.error(`Instructions: ${instructions ? "loaded" : "none"}`);
+  console.error(`Instructions: ${systemPrompt ? "loaded" : "none"}`);
   if (extensionCommandNames.length > 0) {
     console.error(`Extension commands available: ${extensionCommandNames.join(", ")}`);
   }
 
   // Initialize engine for headless execution
-  const { createPrimaryProvider } = await import("../providers/primary/index.js");
   const { createMvpTools } = await import("../tools/orchestration.js");
   const { query } = await import("../engine/query.js");
 
-  const provider = createPrimaryProvider({
-    settings: config.settings,
-    provider: options.provider,
-    model: options.model,
-  });
-  const tools = createMvpTools(extensionTools);
+  const tools = createMvpTools(integrations.tools);
   const sessionStore = createProjectSessionStore(config.cwd);
   const session = createOrResumeSession(sessionStore, options.resume);
   failPendingApprovalsForResume(sessionStore, permissionManager, session.id);
-
-  const systemPrompt = instructions || undefined;
-  const emitSdkEvent = (
-    event:
-      | ReturnType<typeof createInitEvent>
-      | ReturnType<typeof createUserReplayEvent>
-      | ReturnType<typeof createStreamEvent>
-      | ReturnType<typeof createPermissionDenialEvent>
-      | ReturnType<typeof createResultEnvelope>,
-  ) => {
-    if (format === "json-stream") {
-      console.log(serializeSdkEvent(event));
-    }
-  };
 
   let sessionStarted = false;
   try {
@@ -194,25 +197,28 @@ async function runHeadless(
     ) ?? sessionStore.loadTranscript(session.id) ?? session;
     const conversation = transcriptToConversation(inputTranscript, config.settings.compactThreshold);
 
-    emitSdkEvent(createInitEvent(session.id, provider.model, provider.name, config.cwd));
-    emitSdkEvent(createUserReplayEvent(options.prompt));
+    reporter.emitInit(session.id, resolvedProvider.provider.model, resolvedProvider.provider.name, config.cwd);
+    reporter.emitUserPrompt(options.prompt);
 
     await hookRegistry.fire("turn:before", { sessionId: session.id });
 
     const result = await query(
       conversation,
       {
-        provider,
+        provider: resolvedProvider.provider,
         tools,
         maxTurns: config.settings.maxTurns ?? 50,
-        systemPrompt,
+        systemPrompt: systemPrompt || undefined,
         signal: options.signal,
         permissionManager,
         cwd: config.cwd,
         sessionStore,
         getSessionId: () => session.id,
         extensionDirs,
-        onEvent: (event: StreamEvent) => emitHeadlessStreamEvent(event, emitSdkEvent),
+        skills: integrations.skills,
+        mcpServers: integrations.mcpServers,
+        onLifecycleEvent: (event, context) => hookRegistry.fire(event, toHookContext(context)),
+        onEvent: (event: StreamEvent) => reporter.emitStreamEvent(event),
       },
     );
 
@@ -235,21 +241,19 @@ async function runHeadless(
     sessionStore.updateStatus(session.id, result.success ? "completed" : result.state === "interrupted" ? "interrupted" : "error");
 
     if (format === "json-stream") {
-      emitAssistantReplayEvents(newMessages, emitSdkEvent);
-      emitSdkEvent(
-        createResultEnvelope(
-          mapEngineStateToResultStatus(result.state),
-          result.success ? "Query completed successfully" : result.error ?? "Query failed",
-          session.id,
-          {
-            success: result.success,
-            usage: result.usage,
-            messageCount: compactedTranscript?.messages.length ?? result.messages.length,
-          },
-        ),
+      reporter.emitReplayMessages(newMessages);
+      reporter.emitResult(
+        mapEngineStateToResultStatus(result.state),
+        result.success ? "Query completed successfully" : result.error ?? "Query failed",
+        session.id,
+        {
+          success: result.success,
+          usage: result.usage,
+          messageCount: compactedTranscript?.messages.length ?? result.messages.length,
+        },
       );
     } else if (format === "json") {
-      console.log(JSON.stringify(createResultEnvelope(
+      reporter.emitResult(
         mapEngineStateToResultStatus(result.state),
         result.success ? "Query completed successfully" : result.error ?? "Query failed",
         session.id,
@@ -258,9 +262,9 @@ async function runHeadless(
           usage: result.usage,
           messages: result.messages,
         },
-      )));
+      );
     } else {
-      printHeadlessTextOutput(newMessages, result.error);
+      reporter.printText(newMessages, result.error);
     }
 
     return result.success ? 0 : 1;
@@ -272,12 +276,10 @@ async function runHeadless(
       sessionId: session.id,
       error: error instanceof Error ? error : new Error(message),
     });
-    if (format === "json-stream") {
-      emitSdkEvent(createResultEnvelope("error", message, session.id));
-    } else if (format === "json") {
-      console.log(JSON.stringify(createResultEnvelope("error", message, session.id)));
-    } else {
+    if (format === "text") {
       console.error(message);
+    } else {
+      reporter.emitResult("error", message, session.id);
     }
 
     return 1;
@@ -292,22 +294,18 @@ async function runInteractive(
   options: RuntimeOptions,
   config: ReturnType<typeof buildRuntimeConfig>,
   permissionManager: PermissionManager,
-  instructions: string,
+  systemPrompt: string,
+  resolvedProvider: RuntimeProviderResolution,
+  integrations: RuntimeIntegrations,
   extensionCommands: Command[],
   extensionCommandNames: string[],
-  extensionTools: Tool[],
   hookRegistry: HookRegistry,
   extensionDirs: string[],
 ): Promise<number> {
-  const resolvedProvider = resolveProviderConfig(config.settings, {
-    provider: options.provider,
-    model: options.model,
-  });
-
   console.error("Interactive mode: starting REPL...");
   console.error(`Trust level: ${config.trust.level}`);
   console.error(`Permission mode: ${config.settings.permissionMode}`);
-  console.error(`Instructions: ${instructions ? "loaded" : "none"}`);
+  console.error(`Instructions: ${systemPrompt ? "loaded" : "none"}`);
 
   // Import Ink REPL dynamically to avoid blocking fast paths
   const { startREPL } = await import("../ui/App.js");
@@ -333,12 +331,21 @@ async function runInteractive(
     permissionManager,
     extensionCommandNames,
     extensionCommands,
-    extensionTools,
+    extensionTools: integrations.tools,
+    extensionProviders: integrations.providers,
+    loadedSkills: integrations.skills,
+    loadedMcpServers: integrations.mcpServers,
     extensionDirs,
     hookRegistry,
+    systemPrompt,
   };
 
   return startREPL(context);
+}
+
+function mergeRuntimeInstructions(baseInstructions: string, skills: RuntimeIntegrations["skills"]): string {
+  const skillInstructions = composeSkillInstructions(skills);
+  return [baseInstructions.trim(), skillInstructions.trim()].filter(Boolean).join("\n\n");
 }
 
 function normalizeHeadlessFormat(format?: string): HeadlessFormat {
@@ -349,44 +356,6 @@ function normalizeHeadlessFormat(format?: string): HeadlessFormat {
   return "text";
 }
 
-function emitHeadlessStreamEvent(
-  event: StreamEvent,
-  emitSdkEvent: (
-    event:
-      | ReturnType<typeof createInitEvent>
-      | ReturnType<typeof createUserReplayEvent>
-      | ReturnType<typeof createStreamEvent>
-      | ReturnType<typeof createPermissionDenialEvent>
-      | ReturnType<typeof createResultEnvelope>,
-  ) => void,
-): void {
-  if (event.type === "permission_denied") {
-    const data = (event.data ?? {}) as { tool?: string; reason?: string };
-    emitSdkEvent(createPermissionDenialEvent(data.tool ?? "unknown", data.reason ?? "Permission denied"));
-    return;
-  }
-
-  emitSdkEvent(createStreamEvent(event.type, event.data));
-}
-
-function emitAssistantReplayEvents(
-  messages: Message[],
-  emitSdkEvent: (
-    event:
-      | ReturnType<typeof createInitEvent>
-      | ReturnType<typeof createUserReplayEvent>
-      | ReturnType<typeof createStreamEvent>
-      | ReturnType<typeof createPermissionDenialEvent>
-      | ReturnType<typeof createResultEnvelope>,
-  ) => void,
-): void {
-  for (const message of messages) {
-    if (message.role === "assistant" && message.content.trim().length > 0) {
-      emitSdkEvent(createStreamEvent("text_delta", { delta: message.content }));
-    }
-  }
-}
-
 function mapEngineStateToResultStatus(state: EngineState): "success" | "error" | "interrupted" | "max_turns" | "not_implemented" {
   if (state === "success") return "success";
   if (state === "interrupted") return "interrupted";
@@ -394,20 +363,22 @@ function mapEngineStateToResultStatus(state: EngineState): "success" | "error" |
   if (state === "error") return "error";
   return "not_implemented";
 }
-
-function printHeadlessTextOutput(messages: Message[], error?: string): void {
-  const assistantText = messages
-    .filter((message) => message.role === "assistant" && message.content.trim().length > 0)
-    .map((message) => message.content.trim())
-    .join("\n\n")
-    .trim();
-
-  if (assistantText.length > 0) {
-    console.log(assistantText);
-    return;
-  }
-
-  if (error) {
-    console.log(error);
-  }
+function toHookContext(context: {
+  sessionId?: string | null;
+  turnCount?: number;
+  toolName?: string;
+  toolCallId?: string;
+  toolInput?: unknown;
+  toolSuccess?: boolean;
+  error?: Error;
+}): HookContext {
+  return {
+    sessionId: context.sessionId ?? undefined,
+    turnCount: context.turnCount,
+    toolName: context.toolName,
+    toolCallId: context.toolCallId,
+    toolInput: context.toolInput,
+    toolSuccess: context.toolSuccess,
+    error: context.error,
+  };
 }

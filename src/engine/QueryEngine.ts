@@ -6,6 +6,7 @@
  */
 
 import type { Provider, StreamChunk, ProviderResponse } from "../providers/types.js";
+import type { McpServerConfig, Skill } from "../extensions/contracts.js";
 import type { SessionStore } from "../persistence/sessionStore.js";
 import { ToolRegistry } from "../tools/registry.js";
 import type { Tool, ToolApprovalRequest, ToolContext } from "../tools/Tool.js";
@@ -28,6 +29,16 @@ export interface AskUserQuestionRequest {
   question: string;
   options: string[];
   allowFreeform: boolean;
+}
+
+export interface EngineLifecycleContext {
+  sessionId?: string | null;
+  turnCount?: number;
+  toolName?: string;
+  toolCallId?: string;
+  toolInput?: unknown;
+  toolSuccess?: boolean;
+  error?: Error;
 }
 
 export interface QueryEngineOptions {
@@ -55,6 +66,10 @@ export interface QueryEngineOptions {
   getSessionId?: () => string | null;
   /** Optional extension directories for integration tooling */
   extensionDirs?: string[];
+  /** Loaded runtime skills for integration-aware tools */
+  skills?: Skill[];
+  /** Loaded runtime MCP configurations for integration-aware tools */
+  mcpServers?: McpServerConfig[];
   /**
    * Async callback invoked when a tool requires user approval and the
    * PermissionManager returns "ask". The UI should present a dialog and
@@ -64,6 +79,8 @@ export interface QueryEngineOptions {
   resolvePermission?: (request: PermissionRequest) => Promise<PermissionDecision>;
   /** Callback for AskUserQuestion tool prompts in interactive mode */
   resolveQuestion?: (request: AskUserQuestionRequest) => Promise<string>;
+  /** Lifecycle callback used by the runtime hook registry */
+  onLifecycleEvent?: (event: "tool:before" | "tool:after" | "error", context: EngineLifecycleContext) => Promise<void> | void;
 }
 
 export interface QueryResult {
@@ -92,8 +109,11 @@ export class QueryEngine {
     sessionStore?: SessionStore;
     getSessionId?: () => string | null;
     extensionDirs?: string[];
+    skills?: Skill[];
+    mcpServers?: McpServerConfig[];
     resolvePermission?: (request: PermissionRequest) => Promise<PermissionDecision>;
     resolveQuestion?: (request: AskUserQuestionRequest) => Promise<string>;
+    onLifecycleEvent?: (event: "tool:before" | "tool:after" | "error", context: EngineLifecycleContext) => Promise<void> | void;
   };
   private readonly toolRegistry: ToolRegistry;
 
@@ -114,8 +134,11 @@ export class QueryEngine {
       sessionStore: options.sessionStore,
       getSessionId: options.getSessionId,
       extensionDirs: options.extensionDirs,
+      skills: options.skills,
+      mcpServers: options.mcpServers,
       resolvePermission: options.resolvePermission,
       resolveQuestion: options.resolveQuestion,
+      onLifecycleEvent: options.onLifecycleEvent,
     };
     this.toolRegistry = toolRegistry;
   }
@@ -160,6 +183,10 @@ export class QueryEngine {
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         this.emit("error", { message });
+        await this.fireErrorLifecycleEvent(message, {
+          sessionId: this.options.getSessionId?.() ?? null,
+          turnCount,
+        });
         return {
           messages: conversation,
           state: "error",
@@ -183,6 +210,10 @@ export class QueryEngine {
       if (response.stopReason === "error") {
         const errorMessage = response.text.trim() || "Provider error";
         this.emit("error", { message: errorMessage });
+        await this.fireErrorLifecycleEvent(errorMessage, {
+          sessionId: this.options.getSessionId?.() ?? null,
+          turnCount,
+        });
         this.emit("done", { reason: "error" });
         return {
           messages: conversation,
@@ -205,6 +236,13 @@ export class QueryEngine {
             // Unknown tool — report error to model
             const errorMsg = `Unknown tool: ${toolCall.name}`;
             this.emit("error", { tool: toolCall.name, message: errorMsg });
+            await this.fireErrorLifecycleEvent(errorMsg, {
+              sessionId: this.options.getSessionId?.() ?? null,
+              turnCount,
+              toolName: toolCall.name,
+              toolCallId: toolCall.id,
+              toolInput: toolInput,
+            });
             conversation.push({
               role: "tool",
               content: errorMsg,
@@ -247,7 +285,11 @@ export class QueryEngine {
                 if (pendingApproval) {
                   this.options.permissionManager.resolvePendingApproval(pendingApproval.id, userDecision);
                 }
-                permissionResult = { decision: userDecision, reason: "User decision" };
+                permissionResult = {
+                  decision: userDecision,
+                  persisted: userDecision === "allow-always",
+                  reason: "User decision",
+                };
               } else {
                 if (pendingApproval) {
                   this.options.permissionManager.resolvePendingApproval(pendingApproval.id, "deny");
@@ -263,6 +305,15 @@ export class QueryEngine {
                 input: toolInput,
                 reason: permissionResult.reason,
                 approvalMessage: approvalRequest.approvalMessage,
+              });
+              await this.fireLifecycleEvent("tool:after", {
+                sessionId: this.options.getSessionId?.() ?? null,
+                turnCount,
+                toolName: registration.canonicalName,
+                toolCallId: toolCall.id,
+                toolInput,
+                toolSuccess: false,
+                error: new Error(permissionResult.reason ?? "Permission denied"),
               });
               conversation.push({
                 role: "tool",
@@ -296,6 +347,15 @@ export class QueryEngine {
               input: toolInput,
               reason: "No permission manager configured",
             });
+            await this.fireLifecycleEvent("tool:after", {
+              sessionId: this.options.getSessionId?.() ?? null,
+              turnCount,
+              toolName: registration.canonicalName,
+              toolCallId: toolCall.id,
+              toolInput,
+              toolSuccess: false,
+              error: new Error("No permission manager configured"),
+            });
             conversation.push({
               role: "tool",
               content: "Tool execution denied (no permission manager configured)",
@@ -324,6 +384,13 @@ export class QueryEngine {
             input: toolInput,
             toolCallId: toolCall.id,
           });
+          await this.fireLifecycleEvent("tool:before", {
+            sessionId: this.options.getSessionId?.() ?? null,
+            turnCount,
+            toolName: registration.canonicalName,
+            toolCallId: toolCall.id,
+            toolInput,
+          });
 
           try {
             const startedAt = Date.now();
@@ -337,6 +404,14 @@ export class QueryEngine {
 
             if (askUserRequest && this.options.resolveQuestion) {
               const answer = await this.options.resolveQuestion(askUserRequest);
+              await this.fireLifecycleEvent("tool:after", {
+                sessionId: this.options.getSessionId?.() ?? null,
+                turnCount,
+                toolName: registration.canonicalName,
+                toolCallId: toolCall.id,
+                toolInput,
+                toolSuccess: true,
+              });
               conversation.push({
                 role: "tool",
                 content: answer,
@@ -367,6 +442,16 @@ export class QueryEngine {
               });
               continue;
             }
+
+            await this.fireLifecycleEvent("tool:after", {
+              sessionId: this.options.getSessionId?.() ?? null,
+              turnCount,
+              toolName: registration.canonicalName,
+              toolCallId: toolCall.id,
+              toolInput,
+              toolSuccess: result.success,
+              ...(result.success ? {} : { error: new Error(result.error ?? result.output) }),
+            });
 
             conversation.push({
               role: "tool",
@@ -407,6 +492,23 @@ export class QueryEngine {
             });
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
+            await this.fireLifecycleEvent("tool:after", {
+              sessionId: this.options.getSessionId?.() ?? null,
+              turnCount,
+              toolName: registration.canonicalName,
+              toolCallId: toolCall.id,
+              toolInput,
+              toolSuccess: false,
+              error: err instanceof Error ? err : new Error(message),
+            });
+            await this.fireErrorLifecycleEvent(message, {
+              sessionId: this.options.getSessionId?.() ?? null,
+              turnCount,
+              toolName: registration.canonicalName,
+              toolCallId: toolCall.id,
+              toolInput,
+              error: err instanceof Error ? err : new Error(message),
+            });
             conversation.push({
               role: "tool",
               content: `Tool execution error: ${message}`,
@@ -544,6 +646,10 @@ export class QueryEngine {
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         yield emitStreamEvent("error", { message });
+        await this.fireErrorLifecycleEvent(message, {
+          sessionId: this.options.getSessionId?.() ?? null,
+          turnCount,
+        });
         return {
           messages: conversation,
           state: "error",
@@ -563,6 +669,10 @@ export class QueryEngine {
       if (stopReason === "error") {
         const errorMessage = fullText.trim() || "Provider error";
         yield emitStreamEvent("error", { message: errorMessage });
+        await this.fireErrorLifecycleEvent(errorMessage, {
+          sessionId: this.options.getSessionId?.() ?? null,
+          turnCount,
+        });
         yield emitStreamEvent("done", {
           reason: "error",
           usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
@@ -583,6 +693,12 @@ export class QueryEngine {
           const tool = registration?.tool;
           if (!tool) {
             yield emitStreamEvent("error", { tool: tc.name, message: `Unknown tool: ${tc.name}` });
+            await this.fireErrorLifecycleEvent(`Unknown tool: ${tc.name}`, {
+              sessionId: this.options.getSessionId?.() ?? null,
+              turnCount,
+              toolName: tc.name,
+              toolCallId: tc.id,
+            });
             conversation.push({
               role: "tool",
               content: `Unknown tool: ${tc.name}`,
@@ -625,7 +741,11 @@ export class QueryEngine {
                 if (pendingApproval) {
                   this.options.permissionManager.resolvePendingApproval(pendingApproval.id, userDecision);
                 }
-                permissionResult = { decision: userDecision, reason: "User decision" };
+                permissionResult = {
+                  decision: userDecision,
+                  persisted: userDecision === "allow-always",
+                  reason: "User decision",
+                };
               } else {
                 if (pendingApproval) {
                   this.options.permissionManager.resolvePendingApproval(pendingApproval.id, "deny");
@@ -640,6 +760,15 @@ export class QueryEngine {
                 input,
                 reason: permissionResult.reason,
                 approvalMessage: approvalRequest.approvalMessage,
+              });
+              await this.fireLifecycleEvent("tool:after", {
+                sessionId: this.options.getSessionId?.() ?? null,
+                turnCount,
+                toolName: registration.canonicalName,
+                toolCallId: tc.id,
+                toolInput: input,
+                toolSuccess: false,
+                error: new Error(permissionResult.reason ?? "Permission denied"),
               });
               conversation.push({
                 role: "tool",
@@ -671,6 +800,15 @@ export class QueryEngine {
               input,
               reason: "No permission manager configured",
             });
+            await this.fireLifecycleEvent("tool:after", {
+              sessionId: this.options.getSessionId?.() ?? null,
+              turnCount,
+              toolName: registration.canonicalName,
+              toolCallId: tc.id,
+              toolInput: input,
+              toolSuccess: false,
+              error: new Error("No permission manager configured"),
+            });
             conversation.push({
               role: "tool",
               content: "Tool execution denied (no permission manager configured)",
@@ -690,6 +828,13 @@ export class QueryEngine {
           }
 
           try {
+            await this.fireLifecycleEvent("tool:before", {
+              sessionId: this.options.getSessionId?.() ?? null,
+              turnCount,
+              toolName: registration.canonicalName,
+              toolCallId: tc.id,
+              toolInput: input,
+            });
             const startedAt = Date.now();
             const result = await tool.execute(input, toolContext);
 
@@ -700,6 +845,14 @@ export class QueryEngine {
 
             if (askUserRequest && this.options.resolveQuestion) {
               const answer = await this.options.resolveQuestion(askUserRequest);
+              await this.fireLifecycleEvent("tool:after", {
+                sessionId: this.options.getSessionId?.() ?? null,
+                turnCount,
+                toolName: registration.canonicalName,
+                toolCallId: tc.id,
+                toolInput: input,
+                toolSuccess: true,
+              });
               conversation.push({
                 role: "tool",
                 content: answer,
@@ -727,6 +880,16 @@ export class QueryEngine {
               });
               continue;
             }
+
+            await this.fireLifecycleEvent("tool:after", {
+              sessionId: this.options.getSessionId?.() ?? null,
+              turnCount,
+              toolName: registration.canonicalName,
+              toolCallId: tc.id,
+              toolInput: input,
+              toolSuccess: result.success,
+              ...(result.success ? {} : { error: new Error(result.error ?? result.output) }),
+            });
 
             conversation.push({
               role: "tool",
@@ -766,6 +929,23 @@ export class QueryEngine {
             });
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
+            await this.fireLifecycleEvent("tool:after", {
+              sessionId: this.options.getSessionId?.() ?? null,
+              turnCount,
+              toolName: registration.canonicalName,
+              toolCallId: tc.id,
+              toolInput: input,
+              toolSuccess: false,
+              error: err instanceof Error ? err : new Error(message),
+            });
+            await this.fireErrorLifecycleEvent(message, {
+              sessionId: this.options.getSessionId?.() ?? null,
+              turnCount,
+              toolName: registration.canonicalName,
+              toolCallId: tc.id,
+              toolInput: input,
+              error: err instanceof Error ? err : new Error(message),
+            });
             conversation.push({
               role: "tool",
               content: `Tool error: ${message}`,
@@ -846,8 +1026,24 @@ export class QueryEngine {
         permissionManager: this.options.permissionManager,
         toolRegistry: this.toolRegistry,
         extensionDirs: this.options.extensionDirs,
+        skills: this.options.skills,
+        mcpServers: this.options.mcpServers,
       },
     };
+  }
+
+  private async fireLifecycleEvent(
+    event: "tool:before" | "tool:after" | "error",
+    context: EngineLifecycleContext,
+  ): Promise<void> {
+    await this.options.onLifecycleEvent?.(event, context);
+  }
+
+  private async fireErrorLifecycleEvent(message: string, context: EngineLifecycleContext = {}): Promise<void> {
+    await this.fireLifecycleEvent("error", {
+      ...context,
+      error: context.error ?? new Error(message),
+    });
   }
 
   private getApprovalRequest(

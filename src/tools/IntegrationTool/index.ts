@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { getDefaultExtensionDirs, loadExtensions } from "../../extensions/loaders.js";
+import { getDefaultExtensionDirs, loadRuntimeIntegrations } from "../../extensions/loaders.js";
 import type { Tool, ToolContext, ToolResult } from "../Tool.js";
 
 const IntegrationInputSchema = z.discriminatedUnion("action", [
@@ -48,17 +48,29 @@ export class IntegrationTool implements Tool {
 
       case "load_extensions": {
         const dirs = context.runtime?.extensionDirs ?? getDefaultExtensionDirs(context.cwd);
-        const results = await loadExtensions(dirs);
-        const output = results.map((result) => `${result.manifest.type}:${result.manifest.name} -> ${result.loaded ? "loaded" : result.error}`).join("\n");
+        const results = await loadRuntimeIntegrations(dirs, {
+          mcpServers: readConfiguredMcpServers(context.cwd),
+        });
+        const output = results.results.map((result) => `${result.manifest.type}:${result.manifest.name} -> ${result.loaded ? "loaded" : result.error}`).join("\n");
         return {
-          success: results.every((result) => result.loaded),
+          success: results.results.every((result) => result.loaded),
           output,
-          data: { results },
-          summary: `Loaded ${results.length} integration entries`,
+          data: { results: results.results },
+          summary: `Loaded ${results.results.length} integration entries`,
         };
       }
 
       case "list_skills": {
+        if (context.runtime?.skills?.length) {
+          const skills = context.runtime.skills.map((skill) => `${skill.name} (${skill.id})${skill.sourcePath ? `\n  ${skill.sourcePath}` : ""}`);
+          return {
+            success: true,
+            output: skills.join("\n"),
+            data: { skills: context.runtime.skills },
+            summary: `Found ${context.runtime.skills.length} loaded skills`,
+          };
+        }
+
         const searchRoot = parsed.data.path ?? context.cwd;
         const skills = findSkills(searchRoot);
         return {
@@ -70,6 +82,15 @@ export class IntegrationTool implements Tool {
       }
 
       case "list_mcp_servers": {
+        if (context.runtime?.mcpServers?.length) {
+          return {
+            success: true,
+            output: JSON.stringify(context.runtime.mcpServers, null, 2),
+            data: { mcpServers: context.runtime.mcpServers },
+            summary: `Found ${context.runtime.mcpServers.length} loaded MCP server entries`,
+          };
+        }
+
         const settingsPath = join(context.cwd, ".pebble", "settings.json");
         if (!existsSync(settingsPath)) {
           return {
@@ -90,6 +111,16 @@ export class IntegrationTool implements Tool {
       }
     }
   }
+}
+
+function readConfiguredMcpServers(cwd: string): unknown {
+  const settingsPath = join(cwd, ".pebble", "settings.json");
+  if (!existsSync(settingsPath)) {
+    return [];
+  }
+
+  const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { mcpServers?: unknown };
+  return settings.mcpServers ?? [];
 }
 
 function describeDirectory(dir: string): string {

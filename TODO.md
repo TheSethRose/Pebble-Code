@@ -64,7 +64,7 @@ But the current repo is still **far from reference breadth**, especially in:
 ### What is partial or weak
 
 - REPL now has real streaming, richer tool/result rendering, and permission approval, but still lacks full reference UX breadth
-- Headless mode exists and supports plain-text / JSON / JSON-stream output, but is still thin compared to the docs promise
+- Headless mode exists and supports plain-text / JSON / JSON-stream output through a shared typed reporter, but is still thin compared to the docs promise
 - `/memory` now manages persisted session summaries, but runtime memory injection is still placeholder-heavy
 - Persistence is wired for session storage and resume, but memory loading/injection is still placeholder-heavy
 - AskUserQuestionTool has a working structured request/response path, but still lacks richer multi-question and preview UX like the reference
@@ -73,8 +73,7 @@ But the current repo is still **far from reference breadth**, especially in:
 
 ### What is still scaffolding/stub territory
 
-- Extension loading now supports local plugin discovery plus extension-provided command/tool merging, but MCP/skills and provider wiring remain incomplete
-- MCP/plugin/skill runtime integration is not implemented
+- Background/worktree orchestration is still much thinner than the reference product despite boot-time loading/surfacing
 - Hooks/worktrees/background sessions are mostly future-facing scaffolding
 - Tests do not yet cover the real CLI/REPL/headless/extension flows end-to-end
 
@@ -145,16 +144,16 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] loader API shape exists
 - [x] extension failure reporting shape exists
 - [x] extension loading is actually implemented
-- [ ] MCP servers are loaded at runtime
-- [ ] MCP loader detects configured server transport/entry data and reports connect/load failures cleanly
+- [x] MCP servers are loaded at runtime
+- [x] MCP loader detects configured server transport/entry data and reports connect/load failures cleanly
 - [x] plugins are discovered and loaded at runtime
-- [ ] skills are discovered and loaded at runtime
-- [ ] extension discovery detects manifest `type` instead of treating every loaded entry as a plugin
-- [ ] skill discovery loads local skill entries with typed metadata and instructions ready for runtime injection
+- [x] skills are discovered and loaded at runtime
+- [x] extension discovery detects manifest `type` instead of treating every loaded entry as a plugin
+- [x] skill discovery loads local skill entries with typed metadata and instructions ready for runtime injection
 - [x] extension-provided tools are merged into the live registry
 - [x] extension-provided commands are merged into the live registry
-- [ ] extension-provided hooks are merged into the live runtime hook registry
-- [ ] extension-provided providers are merged into the live provider/runtime bootstrap path
+- [x] extension-provided hooks are merged into the live runtime hook registry
+- [x] extension-provided providers are merged into the live provider/runtime bootstrap path
 - [x] extension isolation is proven by tests
 
 ## Persistence
@@ -200,13 +199,13 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] permission manager exists
 - [x] headless runtime path exists
 - [x] interactive runtime path exists
-- [ ] runtime loads extensions/hooks/background workflows during boot
-- [ ] runtime boot registers extension lifecycle hooks and fires them for session, turn, tool, and error events
-- [ ] headless output formatting is extracted behind a typed reporter abstraction shared by text/json/json-stream modes
-- [ ] runtime surfaces background/resumable work state during boot instead of treating it as future-only scaffolding
+- [x] runtime loads extensions/hooks/background workflows during boot
+- [x] runtime boot registers extension lifecycle hooks and fires them for session, turn, tool, and error events
+- [x] headless output formatting is extracted behind a typed reporter abstraction shared by text/json/json-stream modes
+- [x] runtime surfaces background/resumable work state during boot instead of treating it as future-only scaffolding
 - [x] runtime persists sessions as part of normal CLI execution
 - [x] runtime resume flow is implemented end-to-end
-- [ ] runtime trust/permission behavior is validated through full interactive flows
+- [x] runtime trust/permission behavior is validated through full interactive flows
 
 ## Tools
 
@@ -276,9 +275,9 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] current tests pass
 - [x] build success is covered by tests or CI-like verification
 - [x] headless mode has end-to-end tests
-- [ ] REPL has integration/smoke tests
+- [x] REPL has integration/smoke tests
 - [ ] provider failure/fallback paths have tests
-- [ ] skill/plugin/MCP discovery has tests for manifest typing, load success, and isolated failure reporting
+- [x] skill/plugin/MCP discovery has tests for manifest typing, load success, and isolated failure reporting
 - [ ] hook firing order has tests across session start, turn boundaries, tool execution, and runtime error paths
 - [ ] memory injection and todo persistence have tests covering restart/resume behavior
 - [x] streaming/approval UI renderer selection has tests for typed message and prompt states
@@ -318,7 +317,7 @@ We should not call the product “feature complete” until all of these are tru
 - [ ] REPL supports real agent interaction cleanly
 - [ ] headless mode is reliable and structured
 - [ ] session resume works end-to-end
-- [ ] extensions load at runtime
+- [x] extensions load at runtime
 - [ ] integration tests cover core flows
 
 ## Working rule

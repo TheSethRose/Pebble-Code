@@ -6,12 +6,13 @@
  */
 
 import type { Provider } from "../providers/types.js";
+import type { McpServerConfig, Skill } from "../extensions/contracts.js";
 import type { SessionStore } from "../persistence/sessionStore.js";
 import type { Tool } from "../tools/Tool.js";
 import type { Message, StreamEvent } from "./types.js";
 import { QueryEngine } from "./QueryEngine.js";
 import type { PermissionManager } from "../runtime/permissionManager.js";
-import type { AskUserQuestionRequest } from "./QueryEngine.js";
+import type { AskUserQuestionRequest, EngineLifecycleContext } from "./QueryEngine.js";
 
 export interface QueryOptions {
   provider: Provider;
@@ -25,7 +26,10 @@ export interface QueryOptions {
   sessionStore?: SessionStore;
   getSessionId?: () => string | null;
   extensionDirs?: string[];
+  skills?: Skill[];
+  mcpServers?: McpServerConfig[];
   resolveQuestion?: (request: AskUserQuestionRequest) => Promise<string>;
+  onLifecycleEvent?: (event: "tool:before" | "tool:after" | "error", context: EngineLifecycleContext) => Promise<void> | void;
 }
 
 /**
@@ -47,7 +51,10 @@ export async function query(
     sessionStore: options.sessionStore,
     getSessionId: options.getSessionId,
     extensionDirs: options.extensionDirs,
+    skills: options.skills,
+    mcpServers: options.mcpServers,
     resolveQuestion: options.resolveQuestion,
+    onLifecycleEvent: options.onLifecycleEvent,
   });
 
   return engine.process(messages);
@@ -72,7 +79,10 @@ export async function *streamQuery(
     sessionStore: options.sessionStore,
     getSessionId: options.getSessionId,
     extensionDirs: options.extensionDirs,
+    skills: options.skills,
+    mcpServers: options.mcpServers,
     resolveQuestion: options.resolveQuestion,
+    onLifecycleEvent: options.onLifecycleEvent,
   });
 
   yield* engine.stream(messages);

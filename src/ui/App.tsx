@@ -6,10 +6,10 @@ import type { CommandContext } from "../commands/types.js";
 import { QueryEngine } from "../engine/QueryEngine.js";
 import type { PermissionRequest } from "../engine/QueryEngine.js";
 import type { AskUserQuestionRequest } from "../engine/QueryEngine.js";
-import { createPrimaryProvider } from "../providers/primary/index.js";
-import { resolveProviderConfig } from "../providers/config.js";
+import { resolveRuntimeProvider } from "../providers/runtime.js";
 import { createMvpTools } from "../tools/orchestration.js";
 import { PermissionManager } from "../runtime/permissionManager.js";
+import type { HookContext } from "../runtime/hooks.js";
 import { getSettingsPath, loadSettingsForCwd } from "../runtime/config.js";
 import { getDefaultExtensionDirs } from "../extensions/loaders.js";
 import type { Message, StreamEvent } from "../engine/types.js";
@@ -24,10 +24,12 @@ import type { AppState, DisplayMessage, PendingPermission, PermissionChoice } fr
 
 import { PromptInput } from "./components/PromptInput.js";
 import type { CommandSuggestion } from "./components/PromptInput.js";
+import { JumpToBottomPill } from "./components/JumpToBottomPill.js";
+import { MousePressableRegion } from "./components/MousePressableRegion.js";
 import { TranscriptView, getTranscriptMetrics } from "./components/TranscriptView.js";
 import { MouseScrollableRegion } from "./components/MouseScrollableRegion.js";
 import { TerminalMouseProvider } from "./components/TerminalMouseProvider.js";
-import { SessionSidebar, buildVerticalDivider, deriveSessionTitle } from "./components/SessionSidebar.js";
+import { SessionSidebar, SidebarRail, deriveSessionTitle } from "./components/SessionSidebar.js";
 import type { SessionSummary } from "./components/SessionSidebar.js";
 import { KeybindingsPopup } from "./components/KeybindingsPopup.js";
 import { PermissionPrompt } from "./components/PermissionPrompt.js";
@@ -42,9 +44,10 @@ import type { TabId } from "./Settings.js";
 function loadCommandConfig(
   cwd: string,
   currentConfig: Record<string, unknown>,
+  extensionProviders = contextlessExtensionProviders,
 ): Record<string, unknown> {
   const settings = loadSettingsForCwd(cwd);
-  const resolved = resolveProviderConfig(settings);
+  const resolved = resolveRuntimeProvider(settings, {}, extensionProviders);
   return {
     ...currentConfig,
     permissionMode: settings.permissionMode,
@@ -59,6 +62,8 @@ function loadCommandConfig(
     settingsPath: getSettingsPath(cwd),
   };
 }
+
+const contextlessExtensionProviders: CommandContext["extensionProviders"] = [];
 
 /**
  * Redact sensitive arguments before echoing a command into the transcript.
@@ -102,13 +107,33 @@ function toToolArgs(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function toHookContext(context: {
+  sessionId?: string | null;
+  turnCount?: number;
+  toolName?: string;
+  toolCallId?: string;
+  toolInput?: unknown;
+  toolSuccess?: boolean;
+  error?: Error;
+}): HookContext {
+  return {
+    sessionId: context.sessionId ?? undefined,
+    turnCount: context.turnCount,
+    toolName: context.toolName,
+    toolCallId: context.toolCallId,
+    toolInput: context.toolInput,
+    toolSuccess: context.toolSuccess,
+    error: context.error,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
 export function App({ context }: { context: CommandContext }) {
   const [runtimeConfig, setRuntimeConfig] = React.useState<Record<string, unknown>>(() =>
-    loadCommandConfig(context.cwd, context.config),
+    loadCommandConfig(context.cwd, context.config, context.extensionProviders),
   );
   const [state, setState] = React.useState<AppState>(INITIAL_STATE);
   const [showSettings, setShowSettings] = React.useState(false);
@@ -127,6 +152,7 @@ export function App({ context }: { context: CommandContext }) {
   const [historyIndex, setHistoryIndex] = React.useState(-1);
   const [showKeybindings, setShowKeybindings] = React.useState(false);
   const [transcriptScrollOffset, setTranscriptScrollOffset] = React.useState(0);
+  const [blinkPhase, setBlinkPhase] = React.useState(true);
   const [deleteConfirm, setDeleteConfirm] = React.useState<{
     sessionId: string;
     title: string;
@@ -423,11 +449,14 @@ export function App({ context }: { context: CommandContext }) {
   // ------------------------------------------------------------------
   React.useEffect(() => {
     const settings = loadSettingsForCwd(context.cwd);
-    const provider = createPrimaryProvider({
+    const resolvedProvider = resolveRuntimeProvider(
       settings,
-      provider: typeof runtimeConfig.provider === "string" ? runtimeConfig.provider : undefined,
-      model: typeof runtimeConfig.model === "string" ? runtimeConfig.model : undefined,
-    });
+      {
+        provider: typeof runtimeConfig.provider === "string" ? runtimeConfig.provider : undefined,
+        model: typeof runtimeConfig.model === "string" ? runtimeConfig.model : undefined,
+      },
+      context.extensionProviders ?? [],
+    );
     const tools = createMvpTools(context.extensionTools ?? []);
     const permissionManager =
       context.permissionManager ??
@@ -473,19 +502,37 @@ export function App({ context }: { context: CommandContext }) {
     };
 
     engineRef.current = new QueryEngine({
-      provider,
+      provider: resolvedProvider.provider,
       tools,
       maxTurns: 50,
+      systemPrompt: context.systemPrompt,
       permissionManager,
       cwd: context.cwd,
       sessionStore: sessionStore ?? undefined,
       getSessionId: () => sessionIdRef.current,
       extensionDirs,
+      skills: context.loadedSkills,
+      mcpServers: context.loadedMcpServers,
+      onLifecycleEvent: (event, lifecycleContext) => context.hookRegistry?.fire(event, toHookContext(lifecycleContext)),
       resolvePermission,
       resolveQuestion,
       onEvent: applyStreamEvent,
     });
-  }, [applyStreamEvent, context.cwd, context.extensionTools, context.permissionManager, extensionDirs, runtimeConfig.model, runtimeConfig.provider, sessionStore]);
+  }, [
+    applyStreamEvent,
+    context.cwd,
+    context.extensionProviders,
+    context.extensionTools,
+    context.hookRegistry,
+    context.loadedMcpServers,
+    context.loadedSkills,
+    context.permissionManager,
+    context.systemPrompt,
+    extensionDirs,
+    runtimeConfig.model,
+    runtimeConfig.provider,
+    sessionStore,
+  ]);
 
   React.useEffect(() => {
     return () => {
@@ -971,19 +1018,32 @@ export function App({ context }: { context: CommandContext }) {
   const isFullscreen = runtimeConfig.fullscreenRenderer !== false;
   const { columns, rows } = useTerminalDimensions();
 
+  React.useEffect(() => {
+    if (!state.isProcessing) {
+      setBlinkPhase(true);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setBlinkPhase((value) => !value);
+    }, 530);
+
+    return () => clearInterval(interval);
+  }, [state.isProcessing]);
+
   // Rows consumed by the fixed input bar + outer padding.
-  // Input bar: ~4 rows (rule + prompt + status + margin)
+  // Input bar: ~6 rows (top rule + action label + prompt + bottom rule + status + margin)
   // Outer Box padding: 2 rows
-  const FIXED_UI_ROWS = 6;
+  const hasScrolledUp = transcriptScrollOffset > 0;
+  const FIXED_UI_ROWS = 8 + (hasScrolledUp ? 1 : 0);
   const HORIZONTAL_FRAME_WIDTH = 2;
-  const SIDEBAR_DIVIDER_WIDTH = sidebarVisible ? 1 : 0;
   const MAIN_RIGHT_GAP = sidebarVisible ? 1 : 0;
   const transcriptRows = Math.max(4, rows - FIXED_UI_ROWS);
-  const sidebarWidth = 26;
+  const sidebarWidth = 29;
   const effectiveSidebarWidth = sidebarVisible ? sidebarWidth : 0;
   const availableWidth = isFullscreen ? Math.max(20, columns - HORIZONTAL_FRAME_WIDTH) : undefined;
   const mainWidth = isFullscreen
-    ? Math.max(20, (availableWidth ?? columns) - effectiveSidebarWidth - SIDEBAR_DIVIDER_WIDTH - MAIN_RIGHT_GAP)
+    ? Math.max(20, (availableWidth ?? columns) - effectiveSidebarWidth - MAIN_RIGHT_GAP)
     : undefined;
   const transcriptWidth = Math.max(20, mainWidth ?? availableWidth ?? columns);
   const sidebarHeight = isFullscreen ? Math.max(1, rows - 2) : undefined;
@@ -1005,6 +1065,7 @@ export function App({ context }: { context: CommandContext }) {
   );
   const transcriptLineCount = transcriptMetrics.totalRows;
   const maxTranscriptScrollOffset = transcriptMetrics.maxScrollOffset;
+  const showJumpToBottom = hasScrolledUp && maxTranscriptScrollOffset > 0;
 
   React.useEffect(() => {
     const previousLineCount = previousTranscriptLineCountRef.current;
@@ -1151,6 +1212,7 @@ export function App({ context }: { context: CommandContext }) {
                 }}
                 scrollOffset={transcriptScrollOffset}
                 isProcessing={state.isProcessing}
+                blinkPhase={blinkPhase}
                 maxMessages={visibleMsgCount}
                 maxRows={transcriptRows}
                 width={transcriptWidth}
@@ -1167,11 +1229,24 @@ export function App({ context }: { context: CommandContext }) {
               }}
               scrollOffset={transcriptScrollOffset}
               isProcessing={state.isProcessing}
+              blinkPhase={blinkPhase}
               maxMessages={visibleMsgCount}
               maxRows={transcriptRows}
               width={transcriptWidth}
             />
           ))}
+
+          {showJumpToBottom && (
+            <Box justifyContent="center" marginTop={1}>
+              {isFullscreen ? (
+                <MousePressableRegion onPress={() => setTranscriptScrollOffset(0)}>
+                  <JumpToBottomPill />
+                </MousePressableRegion>
+              ) : (
+                <JumpToBottomPill />
+              )}
+            </Box>
+          )}
 
           {state.pendingPermission && (
             <PermissionPrompt
@@ -1210,19 +1285,19 @@ export function App({ context }: { context: CommandContext }) {
 
       {/* Session sidebar */}
       {sidebarVisible && (
-        <Box flexDirection="row" height={sidebarHeight}>
-          {sidebarHeight ? (
-            <Text color={focusArea === "sidebar" ? "green" : "gray"}>{buildVerticalDivider(sidebarHeight)}</Text>
-          ) : (
-            <Text color={focusArea === "sidebar" ? "green" : "gray"}>│</Text>
-          )}
+        <Box
+          flexDirection="row"
+          height={sidebarHeight}
+          width={sidebarWidth}
+        >
+          <SidebarRail height={sidebarHeight} isFocused={focusArea === "sidebar"} />
           <SessionSidebar
             sessions={sidebarSessions}
             activeSessionId={state.activeSessionId}
             onSelect={handleSessionSelect}
             selectedIndex={sidebarIndex}
             isFocused={focusArea === "sidebar"}
-            width={sidebarWidth}
+            width={sidebarWidth - 1}
           />
         </Box>
       )}
