@@ -12,6 +12,16 @@ import { createResultEnvelope } from "./results.js";
 import { emitStreamEvent } from "./transitions.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import type { PermissionManager } from "../runtime/permissionManager.js";
+import type { PermissionDecision } from "../runtime/permissions.js";
+
+/**
+ * Context passed to the resolvePermission callback when user approval is needed.
+ */
+export interface PermissionRequest {
+  toolName: string;
+  toolArgs: Record<string, unknown>;
+  approvalMessage: string;
+}
 
 export interface QueryEngineOptions {
   /** Maximum number of turns before forcing termination */
@@ -32,6 +42,13 @@ export interface QueryEngineOptions {
   permissionManager?: PermissionManager;
   /** Working directory for tool execution */
   cwd?: string;
+  /**
+   * Async callback invoked when a tool requires user approval and the
+   * PermissionManager returns "ask". The UI should present a dialog and
+   * resolve the returned promise with the user's decision.
+   * If not provided, "ask" decisions are treated as "deny".
+   */
+  resolvePermission?: (request: PermissionRequest) => Promise<PermissionDecision>;
 }
 
 export interface QueryResult {
@@ -57,6 +74,7 @@ export class QueryEngine {
     onToolExecute?: (toolName: string, input: unknown) => void;
     permissionManager?: import("../runtime/permissionManager.js").PermissionManager;
     cwd?: string;
+    resolvePermission?: (request: PermissionRequest) => Promise<PermissionDecision>;
   };
 
   constructor(options: QueryEngineOptions) {
@@ -70,6 +88,7 @@ export class QueryEngine {
       onToolExecute: options.onToolExecute,
       permissionManager: options.permissionManager,
       cwd: options.cwd,
+      resolvePermission: options.resolvePermission,
     };
   }
 
@@ -172,11 +191,29 @@ export class QueryEngine {
           // Check approval via PermissionManager
           const needsApproval = tool.requiresApproval?.(toolCall.input) ?? false;
           if (needsApproval && this.options.permissionManager) {
-            const permissionResult = await this.options.permissionManager.checkPermission({
+            let permissionResult = await this.options.permissionManager.checkPermission({
               toolName: toolCall.name,
               toolArgs: toolCall.input as Record<string, unknown>,
               riskLevel: "high",
             });
+
+            // If the manager says "ask", delegate to the interactive resolver
+            if (permissionResult.decision === "ask") {
+              if (this.options.resolvePermission) {
+                const approvalMsg =
+                  tool.getApprovalMessage?.(toolCall.input) ??
+                  `Allow ${toolCall.name}?`;
+                const userDecision = await this.options.resolvePermission({
+                  toolName: toolCall.name,
+                  toolArgs: toolCall.input as Record<string, unknown>,
+                  approvalMessage: approvalMsg,
+                });
+                permissionResult = { decision: userDecision, reason: "User decision" };
+              } else {
+                // No interactive resolver — deny by default
+                permissionResult = { decision: "deny", reason: "No interactive approval available" };
+              }
+            }
 
             if (permissionResult.decision === "deny") {
               this.emit("permission_denied", { tool: toolCall.name, input: toolCall.input });

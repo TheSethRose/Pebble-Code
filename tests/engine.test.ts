@@ -353,4 +353,109 @@ describe("QueryEngine integration flows", () => {
       content: "I couldn't update package.json because permission was denied.",
     });
   });
+
+  test("resolvePermission callback is invoked when PermissionManager returns ask", async () => {
+    const projectDir = createTempDir("pebble-engine-resolve-perm-");
+    writeFileSync(join(projectDir, "package.json"), '{"name":"demo"}', "utf-8");
+
+    const decisions: string[] = [];
+
+    const provider = new ScriptedProvider(async (_msgs, callNum) => {
+      if (callNum === 1) {
+        return {
+          text: "",
+          toolCalls: [
+            {
+              id: "tc-perm-1",
+              name: "FileEdit",
+              input: {
+                file_path: join(projectDir, "package.json"),
+                old_string: '"name":"demo"',
+                new_string: '"name":"updated"',
+              },
+            },
+          ],
+          stopReason: "tool_use" as const,
+          usage: { inputTokens: 20, outputTokens: 10 },
+        };
+      }
+      return {
+        text: "File updated successfully.",
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 30, outputTokens: 10 },
+      };
+    });
+
+    const engine = new QueryEngine({
+      provider,
+      tools: [new FileEditTool()],
+      maxTurns: 5,
+      cwd: projectDir,
+      permissionManager: new PermissionManager({
+        mode: "always-ask",
+        projectRoot: projectDir,
+      }),
+      resolvePermission: async (request) => {
+        decisions.push(`${request.toolName}:${request.approvalMessage}`);
+        return "allow";
+      },
+    });
+
+    const result = await engine.process([{ role: "user", content: "update package.json" }]);
+
+    expect(result.success).toBe(true);
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toContain("FileEdit");
+    expect(readFileSync(join(projectDir, "package.json"), "utf-8")).toContain('"name":"updated"');
+  });
+
+  test("resolvePermission deny prevents tool execution", async () => {
+    const projectDir = createTempDir("pebble-engine-resolve-deny-");
+    writeFileSync(join(projectDir, "package.json"), '{"name":"original"}', "utf-8");
+
+    const provider = new ScriptedProvider(async (_msgs, callNum) => {
+      if (callNum === 1) {
+        return {
+          text: "",
+          toolCalls: [
+            {
+              id: "tc-deny-1",
+              name: "FileEdit",
+              input: {
+                file_path: join(projectDir, "package.json"),
+                old_string: '"name":"original"',
+                new_string: '"name":"modified"',
+              },
+            },
+          ],
+          stopReason: "tool_use" as const,
+          usage: { inputTokens: 20, outputTokens: 10 },
+        };
+      }
+      return {
+        text: "User denied the edit.",
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 30, outputTokens: 10 },
+      };
+    });
+
+    const engine = new QueryEngine({
+      provider,
+      tools: [new FileEditTool()],
+      maxTurns: 5,
+      cwd: projectDir,
+      permissionManager: new PermissionManager({
+        mode: "always-ask",
+        projectRoot: projectDir,
+      }),
+      resolvePermission: async () => "deny",
+    });
+
+    const result = await engine.process([{ role: "user", content: "edit package.json" }]);
+
+    expect(result.success).toBe(true);
+    expect(readFileSync(join(projectDir, "package.json"), "utf-8")).toContain('"name":"original"');
+  });
 });

@@ -43,12 +43,15 @@ export function SessionSidebar({
       width={width}
       borderStyle="single"
       borderColor={isFocused ? "green" : "gray"}
+      borderTop={false}
+      borderBottom={false}
+      borderRight={false}
       paddingX={1}
     >
       {/* Header */}
       <Box marginBottom={sessions.length > 0 ? 1 : 0}>
         <Text dimColor bold>
-          Sessions {isFocused ? "◀" : " "}
+          Chats {isFocused ? "◀" : " "}
         </Text>
       </Box>
 

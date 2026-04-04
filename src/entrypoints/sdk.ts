@@ -9,7 +9,7 @@ import { run, type HeadlessFormat, type RuntimeOptions } from "../runtime/main.j
 import { query, streamQuery, type QueryOptions } from "../engine/query.js";
 
 export type { HeadlessFormat, RuntimeOptions, QueryOptions };
-export { QueryEngine, type QueryEngineOptions, type QueryResult } from "../engine/QueryEngine.js";
+export { QueryEngine, type QueryEngineOptions, type QueryResult, type PermissionRequest } from "../engine/QueryEngine.js";
 export { query, streamQuery };
 export type { Message, StreamEvent, ResultEnvelope } from "../engine/types.js";
 export * from "../engine/sdkProtocol.js";

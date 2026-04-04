@@ -4,6 +4,7 @@ import { CommandRegistry } from "../commands/registry.js";
 import { registerBuiltinCommands } from "../commands/builtins.js";
 import type { CommandContext } from "../commands/types.js";
 import { QueryEngine } from "../engine/QueryEngine.js";
+import type { PermissionRequest } from "../engine/QueryEngine.js";
 import { createPrimaryProvider } from "../providers/primary/index.js";
 import { resolveProviderConfig } from "../providers/config.js";
 import { createMvpTools } from "../tools/orchestration.js";
@@ -16,7 +17,7 @@ import {
   transcriptToConversation,
   transcriptToDisplayMessages,
 } from "../persistence/runtimeSessions.js";
-import type { AppState, DisplayMessage } from "./types.js";
+import type { AppState, DisplayMessage, PendingPermission, PermissionChoice } from "./types.js";
 
 import { PromptInput } from "./components/PromptInput.js";
 import type { CommandSuggestion } from "./components/PromptInput.js";
@@ -25,6 +26,7 @@ import { TranscriptView } from "./components/TranscriptView.js";
 import { SessionSidebar, deriveSessionTitle } from "./components/SessionSidebar.js";
 import type { SessionSummary } from "./components/SessionSidebar.js";
 import { KeybindingsPopup } from "./components/KeybindingsPopup.js";
+import { PermissionPrompt } from "./components/PermissionPrompt.js";
 import { Settings } from "./Settings.js";
 import type { TabId } from "./Settings.js";
 
@@ -73,6 +75,7 @@ const INITIAL_STATE: AppState = {
   statusText: "",
   error: null,
   activeSessionId: null,
+  pendingPermission: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -87,11 +90,13 @@ export function App({ context }: { context: CommandContext }) {
   const [showSettings, setShowSettings] = React.useState(false);
   const [settingsTab, setSettingsTab] = React.useState<TabId>("config");
   const [inputValue, setInputValue] = React.useState("");
+  const [suggestionQuery, setSuggestionQuery] = React.useState("");
   const [inputKey, setInputKey] = React.useState(0);
   const [inputDefaultValue, setInputDefaultValue] = React.useState("");
   const [ctrlCOnce, setCtrlCOnce] = React.useState(false);
   const [suggestionIndex, setSuggestionIndex] = React.useState(0);
   const [sidebarSessions, setSidebarSessions] = React.useState<SessionSummary[]>([]);
+  const [sidebarVisible, setSidebarVisible] = React.useState(true);
   const [focusArea, setFocusArea] = React.useState<"input" | "sidebar">("input");
   const [sidebarIndex, setSidebarIndex] = React.useState(0);
   const [inputHistory, setInputHistory] = React.useState<string[]>([]);
@@ -191,10 +196,11 @@ export function App({ context }: { context: CommandContext }) {
     return reg;
   }, [context.extensionCommands]);
 
-  // Slash-command suggestions: shown when input starts with / and has no space yet.
+  // Slash-command suggestions: filtered by what the user actually typed (suggestionQuery),
+  // not inputValue, so scrolling through suggestions doesn't collapse the list.
   const suggestions = React.useMemo((): CommandSuggestion[] => {
-    if (!inputValue.startsWith("/") || inputValue.includes(" ")) return [];
-    const query = inputValue.slice(1).toLowerCase();
+    if (!suggestionQuery.startsWith("/") || suggestionQuery.includes(" ")) return [];
+    const query = suggestionQuery.slice(1).toLowerCase();
     const listCtx = { cwd: context.cwd, headless: false, config: runtimeConfig };
     return registry
       .list(listCtx)
@@ -204,12 +210,12 @@ export function App({ context }: { context: CommandContext }) {
           (c.aliases ?? []).some((a) => a.startsWith(query)),
       )
       .map((c) => ({ name: c.name, description: c.description }));
-  }, [inputValue, registry, context.cwd, runtimeConfig]);
+  }, [suggestionQuery, registry, context.cwd, runtimeConfig]);
 
-  // Reset selection to top whenever the suggestion list changes.
+  // Reset selection to top whenever the suggestion list changes (e.g. user types more).
   React.useEffect(() => {
     setSuggestionIndex(0);
-  }, [suggestions.length, inputValue]);  // inputValue keeps it fresh on each keystroke
+  }, [suggestions.length, suggestionQuery]);
 
   // ------------------------------------------------------------------
   // Engine initialisation
@@ -226,12 +232,30 @@ export function App({ context }: { context: CommandContext }) {
       context.permissionManager ??
       new PermissionManager({ mode: "always-ask", projectRoot: context.cwd });
 
+    const resolvePermission = (request: PermissionRequest): Promise<import("../runtime/permissions.js").PermissionDecision> => {
+      return new Promise((resolve) => {
+        setState((prev) => ({
+          ...prev,
+          pendingPermission: {
+            toolName: request.toolName,
+            toolArgs: request.toolArgs,
+            approvalMessage: request.approvalMessage,
+            resolve: (choice: PermissionChoice) => {
+              setState((p) => ({ ...p, pendingPermission: null }));
+              resolve(choice);
+            },
+          },
+        }));
+      });
+    };
+
     engineRef.current = new QueryEngine({
       provider,
       tools,
       maxTurns: 50,
       permissionManager,
       cwd: context.cwd,
+      resolvePermission,
       onEvent: (event: StreamEvent) => {
         const data = event.data as Record<string, unknown> | undefined;
 
@@ -250,18 +274,62 @@ export function App({ context }: { context: CommandContext }) {
         }
 
         if (event.type === "tool_call" && data?.tool) {
+          const toolArgs = data.input as Record<string, unknown> | undefined;
           setState((prev) => ({
             ...prev,
             statusText: `Running: ${String(data.tool)}`,
-            messages: [...prev.messages, { role: "tool", content: String(data.tool) }],
+            messages: [
+              ...prev.messages,
+              {
+                role: "tool",
+                content: String(data.tool),
+                meta: { toolName: String(data.tool), toolArgs: toolArgs ?? {} },
+              },
+            ],
           }));
         }
 
         if (event.type === "tool_result" && data?.tool) {
+          const isError = data.success === false;
           setState((prev) => ({
             ...prev,
             statusText: "",
-            messages: [...prev.messages, { role: "tool_result", content: `${String(data.tool)} done` }],
+            messages: [
+              ...prev.messages,
+              {
+                role: "tool_result",
+                content: `${String(data.tool)} ${isError ? "failed" : "done"}`,
+                meta: { toolName: String(data.tool), isError },
+              },
+            ],
+          }));
+        }
+
+        if (event.type === "progress" && data) {
+          setState((prev) => ({
+            ...prev,
+            messages: [
+              ...prev.messages,
+              {
+                role: "progress",
+                content: `Turn ${String(data.turn ?? "")}/${String(data.maxTurns ?? "")}`,
+                meta: { turnNumber: typeof data.turn === "number" ? data.turn : undefined },
+              },
+            ],
+          }));
+        }
+
+        if (event.type === "error" && data) {
+          setState((prev) => ({
+            ...prev,
+            messages: [
+              ...prev.messages,
+              {
+                role: "error",
+                content: String(data.message ?? "Unknown error"),
+                meta: { isError: true },
+              },
+            ],
           }));
         }
 
@@ -339,8 +407,8 @@ export function App({ context }: { context: CommandContext }) {
         return;
       }
 
-      // Tab toggles focus between input and sidebar (only when no suggestions)
-      if (key.tab && suggestions.length === 0) {
+      // Tab toggles focus between input and sidebar (only when no suggestions and sidebar visible)
+      if (key.tab && suggestions.length === 0 && sidebarVisible) {
         setFocusArea((prev) => (prev === "input" ? "sidebar" : "input"));
         return;
       }
@@ -385,11 +453,31 @@ export function App({ context }: { context: CommandContext }) {
       // --- Input focused with slash-command suggestions visible ---
       if (suggestions.length > 0) {
         if (key.upArrow) {
-          setSuggestionIndex((i) => Math.max(0, i - 1));
+          setSuggestionIndex((i) => {
+            const next = Math.max(0, i - 1);
+            const selected = suggestions[next];
+            if (selected) {
+              const filled = `/${selected.name}`;
+              setInputDefaultValue(filled);
+              setInputValue(filled);
+              setInputKey((k) => k + 1);
+            }
+            return next;
+          });
           return;
         }
         if (key.downArrow) {
-          setSuggestionIndex((i) => Math.min(suggestions.length - 1, i + 1));
+          setSuggestionIndex((i) => {
+            const next = Math.min(suggestions.length - 1, i + 1);
+            const selected = suggestions[next];
+            if (selected) {
+              const filled = `/${selected.name}`;
+              setInputDefaultValue(filled);
+              setInputValue(filled);
+              setInputKey((k) => k + 1);
+            }
+            return next;
+          });
           return;
         }
         if (key.tab) {
@@ -398,6 +486,7 @@ export function App({ context }: { context: CommandContext }) {
             const completed = `/${selected.name} `;
             setInputDefaultValue(completed);
             setInputValue(completed);
+            setSuggestionQuery(completed);
             setInputKey((k) => k + 1);
           }
           return;
@@ -440,6 +529,7 @@ export function App({ context }: { context: CommandContext }) {
         if (inputValue.length > 0) {
           setInputValue("");
           setInputDefaultValue("");
+          setSuggestionQuery("");
           setInputKey((k) => k + 1);
           return;
         }
@@ -462,6 +552,12 @@ export function App({ context }: { context: CommandContext }) {
     async (input: string) => {
       const trimmed = input.trim();
       if (!trimmed) return;
+
+      // Clear the input field immediately on every submission
+      setInputValue("");
+      setInputDefaultValue("");
+      setSuggestionIndex(0);
+      setInputKey((k) => k + 1);
 
       // Push to input history (most recent first) and reset cursor
       setInputHistory((prev) => [trimmed, ...prev.slice(0, 99)]);
@@ -522,6 +618,16 @@ export function App({ context }: { context: CommandContext }) {
         // /config changes — reload config
         if (result.data?.action === "config-updated") {
           setRuntimeConfig(loadCommandConfig(context.cwd, runtimeConfig));
+        }
+
+        // /sidebar — toggle sidebar visibility
+        if (result.data?.action === "sidebar-toggle") {
+          setSidebarVisible((prev) => {
+            if (prev && focusArea === "sidebar") {
+              setFocusArea("input");
+            }
+            return !prev;
+          });
         }
 
         // Echo command + output into transcript (skip empty output like /clear)
@@ -782,7 +888,8 @@ export function App({ context }: { context: CommandContext }) {
   }
 
   const sidebarWidth = 26;
-  const mainWidth = isFullscreen ? columns - sidebarWidth : undefined;
+  const effectiveSidebarWidth = sidebarVisible ? sidebarWidth : 0;
+  const mainWidth = isFullscreen ? columns - effectiveSidebarWidth : undefined;
 
   return (
     <Box
@@ -817,12 +924,22 @@ export function App({ context }: { context: CommandContext }) {
               messages={state.messages}
             />
           )}
+
+          {state.pendingPermission && (
+            <PermissionPrompt
+              pending={state.pendingPermission}
+              width={mainWidth ?? columns}
+            />
+          )}
         </Box>
 
         <PromptInput
           isProcessing={state.isProcessing}
           onSubmit={handleSubmit}
-          onChange={setInputValue}
+          onChange={(val) => {
+            setInputValue(val);
+            setSuggestionQuery(val);
+          }}
           inputKey={inputKey}
           defaultValue={inputDefaultValue}
           exitWarning={ctrlCOnce}
@@ -836,14 +953,16 @@ export function App({ context }: { context: CommandContext }) {
       </Box>
 
       {/* Session sidebar */}
-      <SessionSidebar
-        sessions={sidebarSessions}
-        activeSessionId={state.activeSessionId}
-        onSelect={handleSessionSelect}
-        selectedIndex={sidebarIndex}
-        isFocused={focusArea === "sidebar"}
-        width={sidebarWidth}
-      />
+      {sidebarVisible && (
+        <SessionSidebar
+          sessions={sidebarSessions}
+          activeSessionId={state.activeSessionId}
+          onSelect={handleSessionSelect}
+          selectedIndex={sidebarIndex}
+          isFocused={focusArea === "sidebar"}
+          width={sidebarWidth}
+        />
+      )}
     </Box>
   );
 }

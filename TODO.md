@@ -63,12 +63,13 @@ But the current repo is still **far from reference breadth**, especially in:
 
 ### What is partial or weak
 
-- REPL is minimal and lacks rich terminal UX
+- REPL has streaming, tool rendering, and permission approval but still lacks full reference UX breadth
 - Headless mode exists but is still thin compared to the docs promise
 - `/memory` now manages persisted session summaries, but runtime memory injection is still placeholder-heavy
 - Persistence is wired for session storage and resume, but memory loading/injection is still placeholder-heavy
 - Compaction exists but is not triggered automatically by runtime
 - AskUserQuestionTool returns structured prompt data but not a full interactive approval flow
+- Permission approval dialogs exist in the REPL; the engine supports async user resolution via `resolvePermission`
 - Todo state is in-memory only
 
 ### What is still scaffolding/stub territory
@@ -146,10 +147,15 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] extension failure reporting shape exists
 - [x] extension loading is actually implemented
 - [ ] MCP servers are loaded at runtime
+- [ ] MCP loader detects configured server transport/entry data and reports connect/load failures cleanly
 - [x] plugins are discovered and loaded at runtime
 - [ ] skills are discovered and loaded at runtime
+- [ ] extension discovery detects manifest `type` instead of treating every loaded entry as a plugin
+- [ ] skill discovery loads local skill entries with typed metadata and instructions ready for runtime injection
 - [x] extension-provided tools are merged into the live registry
 - [x] extension-provided commands are merged into the live registry
+- [ ] extension-provided hooks are merged into the live runtime hook registry
+- [ ] extension-provided providers are merged into the live provider/runtime bootstrap path
 - [x] extension isolation is proven by tests
 
 ## Persistence
@@ -165,6 +171,9 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] runtime can continue the most recent session
 - [x] runtime can resume a session by ID
 - [ ] runtime exposes memory loading/injection beyond placeholders
+- [ ] stale session memory can be rebuilt on demand before a resume or new turn starts
+- [ ] runtime injects persisted session memory into conversation/system context before the next query
+- [ ] headless run metadata/report summaries persist separately from raw transcript messages for later inspection
 - [x] compaction is automatically triggered in long conversations
 
 ## Providers
@@ -179,6 +188,8 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] provider auth/setup UX exists in the product
 - [ ] provider fallback behavior is implemented and tested
 - [ ] multi-provider support exists beyond the primary adapter
+- [ ] provider settings can express a primary + ordered fallback chain with per-provider model overrides
+- [ ] provider resolution records which provider/model actually answered for debug and headless reporting
 - [ ] provider failure scenarios are covered by tests
 
 ## Runtime
@@ -191,6 +202,9 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] headless runtime path exists
 - [x] interactive runtime path exists
 - [ ] runtime loads extensions/hooks/background workflows during boot
+- [ ] runtime boot registers extension lifecycle hooks and fires them for session, turn, tool, and error events
+- [ ] headless output formatting is extracted behind a typed reporter abstraction shared by text/json/json-stream modes
+- [ ] runtime surfaces background/resumable work state during boot instead of treating it as future-only scaffolding
 - [x] runtime persists sessions as part of normal CLI execution
 - [x] runtime resume flow is implemented end-to-end
 - [ ] runtime trust/permission behavior is validated through full interactive flows
@@ -210,8 +224,38 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] risky tool approval detection exists for Bash/FileEdit
 - [ ] AskUserQuestion provides a full user-response loop rather than just returning prompt data
 - [ ] Todo state persists across sessions/process restarts
-- [ ] broader tool surface from the reference snapshot is implemented
+- [ ] Todo tool is backed by a file-backed store under `.pebble/` rather than process-global memory only
+- [ ] risky tools share a reusable approval request/result model instead of custom per-tool prompt wiring
+- [ ] pending tool approvals persist with session IDs so interrupted runs can resume or fail them deterministically
 - [ ] tool approval UX is surfaced properly in the interactive UI
+- [ ] FileWrite tool is implemented (file creation, distinct from FileEdit)
+- [ ] ApplyPatch tool is implemented (unified diff patch application)
+- [ ] WebFetch tool is implemented (HTTP fetch with pre-approved domains)
+- [ ] WebSearch tool is implemented (web search integration)
+- [ ] Agent tool is implemented (sub-agent spawning and orchestration)
+- [ ] SendMessage tool is implemented (cross-agent messaging)
+- [ ] LSP tool is implemented (language server protocol queries)
+- [ ] NotebookEdit tool is implemented (Jupyter notebook cell editing)
+- [ ] Config tool is implemented (runtime config read/write from agent)
+- [ ] EnterPlanMode / ExitPlanMode tools are implemented (plan mode toggling)
+- [ ] EnterWorktree / ExitWorktree tools are implemented (worktree management)
+- [ ] MCP tools are implemented (MCPTool, McpAuthTool, ListMcpResources, ReadMcpResource)
+- [ ] Skill tool is implemented (skill invocation from agent context)
+- [ ] Brief tool is implemented (attachment/upload handling)
+- [ ] Snip tool is implemented (content snipping/extraction)
+- [ ] Sleep tool is implemented (agent delay/wait)
+- [ ] REPL tool primitives are implemented (primitive inline evaluation tools)
+- [ ] ScheduleCron tools are implemented (CronCreate, CronDelete, CronList)
+- [ ] Task management tools are implemented (TaskCreate, TaskGet, TaskList, TaskOutput, TaskStop, TaskUpdate)
+- [ ] Team management tools are implemented (TeamCreate, TeamDelete)
+- [ ] TodoWrite tool is implemented (structured todo writing, distinct from in-memory Todo tool)
+- [ ] ToolSearch tool is implemented (dynamic tool discovery by the agent)
+- [ ] RemoteTrigger tool is implemented (remote event/webhook trigger)
+- [ ] VerifyPlanExecution tool is implemented (plan execution verification)
+- [ ] SyntheticOutput tool is implemented (injected synthetic tool responses)
+- [ ] Workflow tool is implemented (workflow orchestration primitives)
+- [ ] PowerShell tool is implemented (Windows shell support)
+- [ ] Tungsten tool is implemented (live monitoring integration)
 
 ## UI
 
@@ -223,13 +267,17 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] basic tool activity messages are shown
 - [x] basic processing/error states are shown
 - [x] UI has a dedicated prompt input component system
-- [ ] UI has a real streaming renderer instead of a minimal flat list
-- [ ] UI has permission approval dialogs / prompts
+- [x] UI has a real streaming renderer instead of a minimal flat list
+- [x] transcript rendering is split into typed components for assistant text, tool call, tool result, progress, approval, and error states
+- [x] streaming output updates existing message rows incrementally instead of appending only flat final text
+- [x] UI has permission approval dialogs / prompts
+- [x] UI has a reusable approval prompt component with allow/deny/session/persist choices for risky actions
 - [x] UI has trust/onboarding/startup surfaces
 - [x] UI has a tabbed settings panel for config/provider/model/API key management
 - [x] UI settings support searchable/filterable provider and model selection
 - [x] UI has session resume/history UI
-- [ ] UI has richer message rendering for tools, progress, and errors
+- [x] UI has richer message rendering for tools, progress, and errors
+- [ ] tool messages can expand to show structured args/results and headless/report metadata when present
 - [ ] UI quality is anywhere close to the reference snapshot breadth
 
 ## Tests
@@ -243,6 +291,10 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] headless mode has end-to-end tests
 - [ ] REPL has integration/smoke tests
 - [ ] provider failure/fallback paths have tests
+- [ ] skill/plugin/MCP discovery has tests for manifest typing, load success, and isolated failure reporting
+- [ ] hook firing order has tests across session start, turn boundaries, tool execution, and runtime error paths
+- [ ] memory injection and todo persistence have tests covering restart/resume behavior
+- [ ] streaming/approval UI renderer selection has tests for typed message and prompt states
 - [x] extension loading/isolation has tests
 - [ ] engine/tool flows have end-to-end tests
 
@@ -257,6 +309,14 @@ These are the next honest priority slices if we want the repo to materially clos
 3. **Turn extensions from contracts into runtime behavior**
 4. **Wire automatic compaction and real memory loading/injection**
 5. **Expand provider resilience** with fallback behavior, multi-provider support, and failure-path tests
+
+Concrete reusable slices worth landing inside those priorities:
+
+- [ ] land shared approval flow primitives before expanding risky-tool UX further
+- [ ] land typed transcript/message renderer primitives before adding more event/message surface area
+- [ ] land skill + MCP discovery/loading primitives before expanding extension surface area further
+- [ ] land persisted todo + memory injection primitives before deeper resume/background workflows
+- [ ] land provider fallback chain primitives together with failure-path tests
 
 ## Success criteria for the next milestone
 

@@ -38,6 +38,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register(createMemoryCommand());
   registry.register(createPlanCommand());
   registry.register(createReviewCommand());
+  registry.register(createSidebarCommand());
 }
 
 function getSessionStore(ctx: CommandContext) {
@@ -472,6 +473,25 @@ function createReviewCommand(): Command {
           "Staged diff summary:",
           stagedText,
         ].join("\n"),
+      };
+    },
+  };
+}
+
+function createSidebarCommand(): Command {
+  return {
+    name: "sidebar",
+    aliases: [],
+    description: "Toggle the session sidebar",
+    type: "local",
+    usage: "/sidebar",
+    modes: ["interactive"],
+    trustLevels: ["trusted", "bare"],
+    execute: (_args, _ctx): CommandResult => {
+      return {
+        success: true,
+        output: "",
+        data: { action: "sidebar-toggle" },
       };
     },
   };
