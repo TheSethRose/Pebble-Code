@@ -17,7 +17,7 @@ import {
   transcriptToDisplayMessages,
 } from "../persistence/runtimeSessions.js";
 import type { AppState, DisplayMessage } from "./types.js";
-import { getPebbleMood } from "./mascotMood.js";
+
 import { PromptInput } from "./components/PromptInput.js";
 import type { CommandSuggestion } from "./components/PromptInput.js";
 import { WelcomeHeader } from "./components/WelcomeHeader.js";
@@ -91,6 +91,10 @@ export function App({ context }: { context: CommandContext }) {
   const [ctrlCOnce, setCtrlCOnce] = React.useState(false);
   const [suggestionIndex, setSuggestionIndex] = React.useState(0);
   const [sidebarSessions, setSidebarSessions] = React.useState<SessionSummary[]>([]);
+  const [focusArea, setFocusArea] = React.useState<"input" | "sidebar">("input");
+  const [sidebarIndex, setSidebarIndex] = React.useState(0);
+  const [inputHistory, setInputHistory] = React.useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = React.useState(-1);
 
   const engineRef = React.useRef<QueryEngine | null>(null);
   const sessionIdRef = React.useRef<string | null>(null);
@@ -260,11 +264,46 @@ export function App({ context }: { context: CommandContext }) {
   }, []); // run once on mount — intentionally not re-running on id change
 
   // ------------------------------------------------------------------
-  // Keyboard: Ctrl+C exit, and suggestion navigation (↑ ↓ Tab)
+  // Keyboard: Tab focus, ↑↓ navigation, Ctrl+C exit
   // ------------------------------------------------------------------
   useInput(
     (_input, key) => {
-      // Suggestion navigation — only when the popup is visible
+      // Tab toggles focus between input and sidebar
+      if (key.tab && suggestions.length === 0) {
+        setFocusArea((prev) => (prev === "input" ? "sidebar" : "input"));
+        return;
+      }
+
+      // --- Sidebar focused: ↑↓ to move, Enter to select, Escape/Tab back ---
+      if (focusArea === "sidebar") {
+        const maxIndex = sidebarSessions.length; // 0=New Chat, 1..N=sessions
+        if (key.upArrow) {
+          setSidebarIndex((i) => Math.max(0, i - 1));
+          return;
+        }
+        if (key.downArrow) {
+          setSidebarIndex((i) => Math.min(maxIndex, i + 1));
+          return;
+        }
+        if (key.return) {
+          const selectedId = sidebarIndex === 0 ? null : (sidebarSessions[sidebarIndex - 1]?.id ?? null);
+          handleSessionSelect(selectedId);
+          setFocusArea("input");
+          return;
+        }
+        if (key.escape) {
+          setFocusArea("input");
+          return;
+        }
+        // Ctrl+C still works from sidebar
+        if (key.ctrl && _input === "c") {
+          setFocusArea("input");
+          return;
+        }
+        return;
+      }
+
+      // --- Input focused with slash-command suggestions visible ---
       if (suggestions.length > 0) {
         if (key.upArrow) {
           setSuggestionIndex((i) => Math.max(0, i - 1));
@@ -282,6 +321,38 @@ export function App({ context }: { context: CommandContext }) {
             setInputValue(completed);
             setInputKey((k) => k + 1);
           }
+          return;
+        }
+      }
+
+      // --- Input focused: ↑↓ to cycle prompt history ---
+      if (suggestions.length === 0 && inputHistory.length > 0) {
+        if (key.upArrow) {
+          setHistoryIndex((prev) => {
+            const next = Math.min(prev + 1, inputHistory.length - 1);
+            const value = inputHistory[next] ?? "";
+            setInputDefaultValue(value);
+            setInputValue(value);
+            setInputKey((k) => k + 1);
+            return next;
+          });
+          return;
+        }
+        if (key.downArrow) {
+          setHistoryIndex((prev) => {
+            const next = prev - 1;
+            if (next < 0) {
+              setInputDefaultValue("");
+              setInputValue("");
+              setInputKey((k) => k + 1);
+              return -1;
+            }
+            const value = inputHistory[next] ?? "";
+            setInputDefaultValue(value);
+            setInputValue(value);
+            setInputKey((k) => k + 1);
+            return next;
+          });
           return;
         }
       }
@@ -312,6 +383,10 @@ export function App({ context }: { context: CommandContext }) {
     async (input: string) => {
       const trimmed = input.trim();
       if (!trimmed) return;
+
+      // Push to input history (most recent first) and reset cursor
+      setInputHistory((prev) => [trimmed, ...prev.slice(0, 99)]);
+      setHistoryIndex(-1);
 
       // Dismiss exit warning on any submission
       setCtrlCOnce(false);
@@ -520,8 +595,6 @@ export function App({ context }: { context: CommandContext }) {
     : undefined;
   const isFullscreen = runtimeConfig.fullscreenRenderer !== false;
   const { columns, rows } = useTerminalDimensions();
-  const mascotMood = getPebbleMood(state);
-
   if (showSettings) {
     return (
       <Settings
@@ -558,7 +631,6 @@ export function App({ context }: { context: CommandContext }) {
             model={model}
             providerLabel={providerLabel}
             sessionId={state.activeSessionId}
-            mascotMood={mascotMood}
             width={mainWidth ?? columns}
           />
 
@@ -596,6 +668,8 @@ export function App({ context }: { context: CommandContext }) {
         sessions={sidebarSessions}
         activeSessionId={state.activeSessionId}
         onSelect={handleSessionSelect}
+        selectedIndex={sidebarIndex}
+        isFocused={focusArea === "sidebar"}
         width={sidebarWidth}
       />
     </Box>

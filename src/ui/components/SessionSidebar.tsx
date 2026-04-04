@@ -13,49 +13,61 @@ interface SessionSidebarProps {
   sessions: SessionSummary[];
   activeSessionId: string | null;
   onSelect: (sessionId: string | null) => void;
+  selectedIndex: number;
+  isFocused: boolean;
   width?: number;
 }
 
 const SIDEBAR_WIDTH = 24;
-const ICON_NEW = "◈";
-const ICON_ACTIVE = "▸";
-const ICON_INACTIVE = " ";
 
 /**
  * Right sidebar listing saved sessions.
- * Selecting an entry triggers a session switch; the top "New Chat" entry
- * creates a fresh session (id=null).
+ * Index 0 = "New Chat", index 1+ = sessions.
+ * When focused, the selected row is highlighted with an inverse cursor.
  */
 export function SessionSidebar({
   sessions,
   activeSessionId,
   onSelect,
+  selectedIndex,
+  isFocused,
   width = SIDEBAR_WIDTH,
 }: SessionSidebarProps) {
   const maxLabel = width - 4; // padding + icon
+  const isNewChatSelected = isFocused && selectedIndex === 0;
+  const isNewChatActive = activeSessionId === null;
 
   return (
     <Box
       flexDirection="column"
       width={width}
       borderStyle="single"
-      borderColor="green"
+      borderColor={isFocused ? "green" : "gray"}
       paddingX={1}
     >
-      {/* New Chat button */}
+      {/* Header */}
+      <Box marginBottom={sessions.length > 0 ? 1 : 0}>
+        <Text dimColor bold>
+          Sessions {isFocused ? "◀" : " "}
+        </Text>
+      </Box>
+
+      {/* New Chat entry (index 0) */}
       <Box>
         <Text
-          color={activeSessionId === null ? "green" : "white"}
-          bold={activeSessionId === null}
+          color={isNewChatSelected ? "black" : isNewChatActive ? "green" : "white"}
+          backgroundColor={isNewChatSelected ? "green" : undefined}
+          bold={isNewChatSelected || isNewChatActive}
         >
-          {ICON_NEW} New Chat
+          ◈ New Chat
         </Text>
       </Box>
 
       {/* Session list */}
-      {sessions.map((s) => {
+      {sessions.map((s, i) => {
+        const rowIndex = i + 1; // offset by 1 since "New Chat" is 0
         const isActive = s.id === activeSessionId;
-        const icon = isActive ? ICON_ACTIVE : ICON_INACTIVE;
+        const isCursor = isFocused && selectedIndex === rowIndex;
         const label =
           s.title.length > maxLabel
             ? s.title.slice(0, maxLabel - 1) + "…"
@@ -64,10 +76,11 @@ export function SessionSidebar({
         return (
           <Box key={s.id}>
             <Text
-              color={isActive ? "green" : "gray"}
-              bold={isActive}
+              color={isCursor ? "black" : isActive ? "green" : "gray"}
+              backgroundColor={isCursor ? "green" : undefined}
+              bold={isCursor || isActive}
             >
-              {icon} {label}
+              {isActive && !isCursor ? "▸" : " "} {label}
             </Text>
           </Box>
         );
@@ -76,6 +89,13 @@ export function SessionSidebar({
       {sessions.length === 0 && (
         <Box marginTop={1}>
           <Text dimColor>No sessions yet</Text>
+        </Box>
+      )}
+
+      {/* Hint */}
+      {isFocused && (
+        <Box marginTop={1}>
+          <Text dimColor>↑↓ move · Enter select</Text>
         </Box>
       )}
     </Box>
