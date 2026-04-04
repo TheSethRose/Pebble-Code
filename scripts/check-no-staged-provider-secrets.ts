@@ -34,7 +34,8 @@ interface SecretViolation {
 
 const SUPPORTED_SCAN_MODES = ["staged", "push"] as const satisfies readonly SecretScanMode[];
 const SECRET_PREFIX = "sk-or-v1-";
-const SECRET_PATTERN = /sk-or-v1-[A-Za-z0-9_-]+/g;
+const MIN_SECRET_SUFFIX_LENGTH = 16;
+const SECRET_PATTERN = /sk-or-v1-[A-Za-z0-9_-]{16,}/g;
 const GIT_COMMIT_PATTERN = /\bgit\s+commit\b/i;
 const GIT_PUSH_PATTERN = /\bgit\s+push\b/i;
 const PROVIDER_SENSITIVE_PATH_PREFIXES = [
@@ -204,6 +205,10 @@ function findSecretMatches(value: string): string[] {
   return Array.from(value.matchAll(SECRET_PATTERN), (match) => match[0]);
 }
 
+export function isSecretLikeValue(value: string): boolean {
+  return findSecretMatches(value).length > 0;
+}
+
 function detectViolations(scan: DiffScanResult): SecretViolation[] {
   const violations: SecretViolation[] = [];
   let currentFilePath = "unknown";
@@ -224,7 +229,7 @@ function detectViolations(scan: DiffScanResult): SecretViolation[] {
 
     if (line.startsWith("+") && !line.startsWith("+++ ")) {
       const addedLine = line.slice(1);
-      if (findSecretMatches(addedLine).length > 0) {
+      if (isSecretLikeValue(addedLine)) {
         violations.push({
           source: scan.label,
           filePath: currentFilePath,
@@ -278,7 +283,7 @@ function buildAdditionalContext(violations: SecretViolation[]): string {
     : `Provider-sensitive hotspots covered by policy: ${PROVIDER_SENSITIVE_PATH_PREFIXES.join(", ")}.`;
 
   return [
-    `Secret-like text matching ${SECRET_PREFIX} was found in newly added git diff lines.`,
+    `Secret-like text matching ${SECRET_PREFIX} with at least ${MIN_SECRET_SUFFIX_LENGTH} trailing characters was found in newly added git diff lines.`,
     providerNote,
     ...previewLines,
   ].join("\n");

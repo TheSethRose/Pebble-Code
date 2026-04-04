@@ -1,106 +1,72 @@
 
-Default to using Bun instead of Node.js.
+# Pebble Code
+
+A terminal-native AI coding agent that ships as both a `pebble` CLI (`src/entrypoints/cli.tsx`) and an embeddable headless SDK (`src/entrypoints/sdk.ts`). Architecture: entrypoints → runtime → engine → tools/providers, with session persistence and an Ink/React terminal UI.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design and [docs/CODEBASE_TREE.md](docs/CODEBASE_TREE.md) for the full file map.
+
+## Bun Tooling
+
+Default to Bun instead of Node.js for every task.
 
 - Use `bun <file>` instead of `node <file>` or `ts-node <file>`
-- Use `bun test` instead of `jest` or `vitest`
-- Use `bun build <file.html|file.ts|file.css>` instead of `webpack` or `esbuild`
-- Use `bun install` instead of `npm install` or `yarn install` or `pnpm install`
-- Use `bun run <script>` instead of `npm run <script>` or `yarn run <script>` or `pnpm run <script>`
-- Use `bunx <package> <command>` instead of `npx <package> <command>`
-- Bun automatically loads .env, so don't use dotenv.
+- Use `bun install` instead of `npm install` / `yarn` / `pnpm`
+- Use `bun run <script>` instead of `npm run <script>`
+- Use `bunx <package>` instead of `npx <package>`
+- Prefer `Bun.file` over `node:fs` readFile/writeFile
+- Use `Bun.$\`cmd\`` instead of execa
+- Bun loads `.env` automatically — do not use dotenv
 
-## APIs
+## Build & Verify
 
-- `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
-- `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
-- `Bun.redis` for Redis. Don't use `ioredis`.
-- `Bun.sql` for Postgres. Don't use `pg` or `postgres.js`.
-- `WebSocket` is built-in. Don't use `ws`.
-- Prefer `Bun.file` over `node:fs`'s readFile/writeFile
-- Bun.$`ls` instead of execa.
+Run in this order before committing:
+
+```sh
+bun test              # unit + integration tests
+bun run typecheck     # tsc --noEmit (strict)
+bun run build         # production bundle → dist/pebble.js
+```
+
+Other useful scripts:
+
+```sh
+bun run dev           # run CLI directly from source (no build)
+bun run lint          # Biome check + auto-fix
+bun run clean         # typecheck + lint together
+bun run hooks:install # set up pre-commit secret scanner
+```
+
+## Architecture
+
+| Directory | Role |
+|---|---|
+| `src/entrypoints/` | CLI fast-paths and SDK surface (`runSdk`, `query`, `streamQuery`) |
+| `src/runtime/` | Unified boot path — config, trust, permissions, session wiring |
+| `src/engine/` | `QueryEngine` — drives the agent loop and streaming |
+| `src/tools/` | One class per tool in `src/tools/PascalCaseTool/index.ts` |
+| `src/providers/` | Provider catalog, config, and runtime resolution |
+| `src/persistence/` | Session store, compaction, memory, todo store, resume flows |
+| `src/extensions/` | Extension/skill loader contracts and runtime integration |
+| `src/ui/` | Ink/React terminal UI (`App.tsx` + `components/`) |
+| `src/build/` | Build metadata (`buildInfo.ts`) and feature flags |
+
+Docs: [PROVIDERS.md](docs/PROVIDERS.md) · [EXTENSIONS.md](docs/EXTENSIONS.md) · [STATE_AND_RESUME.md](docs/STATE_AND_RESUME.md) · [HEADLESS_SDK.md](docs/HEADLESS_SDK.md)
+
+## Conventions
+
+- **Tools:** Each tool is a class implementing the `Tool` interface, one per directory (`src/tools/PascalCaseTool/index.ts`). Register in `src/tools/registry.ts`.
+- **Zod schemas:** All tool inputs use Zod with `.describe()` annotations. Parameter names are `snake_case`.
+- **TypeScript:** Full strict mode. Module resolution is Bun-native (`"module": "Preserve"`, `"moduleResolution": "bundler"`). JSX is `react-jsx` (Ink).
+- **Linter/formatter:** Biome only — no ESLint, no Prettier. Run `bun run lint` to auto-fix.
+- **No barrel files:** `src/` modules are named explicitly. Exception: `src/providers/primary/index.ts`.
+- **No emit:** `tsc` is typecheck-only; Bun handles all compilation.
 
 ## Testing
 
-Use `bun test` to run tests.
+Tests live in `tests/` and import directly from `../src/...` (no path aliases). Pattern: full integration with real file system, scripted stub providers, temp dirs cleaned in `afterEach`.
 
-```ts#index.test.ts
-import { test, expect } from "bun:test";
-
-test("hello world", () => {
-  expect(1).toBe(1);
-});
+```ts
+import { test, expect, describe, afterEach } from "bun:test";
 ```
 
-## Frontend
-
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
-
-Server:
-
-```ts#index.ts
-import index from "./index.html"
-
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  // optional websocket support
-  websocket: {
-    open: (ws) => {
-      ws.send("Hello, world!");
-    },
-    message: (ws, message) => {
-      ws.send(message);
-    },
-    close: (ws) => {
-      // handle close
-    }
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
-```
-
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
-
-```html#index.html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
-```
-
-With the following `frontend.tsx`:
-
-```tsx#frontend.tsx
-import React from "react";
-import { createRoot } from "react-dom/client";
-
-// import .css files directly and it works
-import './index.css';
-
-const root = createRoot(document.body);
-
-export default function Frontend() {
-  return <h1>Hello, world!</h1>;
-}
-
-root.render(<Frontend />);
-```
-
-Then, run index.ts
-
-```sh
-bun --hot ./index.ts
-```
-
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
+See [tests/tools.test.ts](tests/tools.test.ts) and [tests/engine.test.ts](tests/engine.test.ts) for examples.

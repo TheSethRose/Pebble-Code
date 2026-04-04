@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  isSecretLikeValue,
   parseSecretScanMode,
   runStandaloneCheck,
   scanForMode,
@@ -39,7 +40,7 @@ function writeAndStage(repoDir: string, relativePath: string, contents: string):
 }
 
 function buildFakeSecret(suffix: string): string {
-  return ["sk", "or", "v1", suffix].join("-");
+  return ["sk", "or", "v1", `fixture-${suffix}-abc123xyz987654`].join("-");
 }
 
 const tempPaths: string[] = [];
@@ -58,6 +59,11 @@ describe("git hook secret scanner", () => {
     expect(parseSecretScanMode([])).toBe("staged");
     expect(parseSecretScanMode(["--mode", "push"])).toBe("push");
     expect(parseSecretScanMode(["--mode=staged"])).toBe("staged");
+  });
+
+  test("ignores short sk-or-v1 fixtures but catches realistically long ones", () => {
+    expect(isSecretLikeValue("sk-or-v1-test-key")).toBe(false);
+    expect(isSecretLikeValue(buildFakeSecret("long-token"))).toBe(true);
   });
 
   test("detects staged sk-or-v1 additions", () => {
