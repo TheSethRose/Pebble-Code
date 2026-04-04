@@ -333,6 +333,30 @@ describe("capability tool registry and alias resolution", () => {
 });
 
 describe("capability tool implementations", () => {
+  test("WorkspaceRead tolerates string boolean flags for directory listing", async () => {
+    const projectDir = createTempProject("pebble-tools-workspace-read-booleanish-");
+    writeFileSync(join(projectDir, "visible.txt"), "hello\n", "utf-8");
+    writeFileSync(join(projectDir, ".hidden.txt"), "secret\n", "utf-8");
+
+    const tool = new WorkspaceReadTool();
+    const hiddenOff = await tool.execute(
+      { action: "list_directory", include_hidden: "false" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+    const hiddenOn = await tool.execute(
+      { action: "list_directory", include_hidden: "true" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(hiddenOff.success).toBe(true);
+    expect(hiddenOff.output).toContain("visible.txt");
+    expect(hiddenOff.output).not.toContain(".hidden.txt");
+
+    expect(hiddenOn.success).toBe(true);
+    expect(hiddenOn.output).toContain("visible.txt");
+    expect(hiddenOn.output).toContain(".hidden.txt");
+  });
+
   test("MemoryTool can manage session memory and notes", async () => {
     const projectDir = createTempProject("pebble-tools-memory-");
     const sessionStore = createProjectSessionStore(projectDir);

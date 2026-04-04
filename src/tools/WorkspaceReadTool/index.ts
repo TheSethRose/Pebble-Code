@@ -14,6 +14,23 @@ import {
   truncateText,
 } from "../shared/common.js";
 
+const booleanish = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") {
+    return true;
+  }
+
+  if (normalized === "false") {
+    return false;
+  }
+
+  return value;
+}, z.boolean());
+
 const WorkspaceReadInputSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("read_file"),
@@ -24,7 +41,7 @@ const WorkspaceReadInputSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("list_directory"),
     path: z.string().optional(),
-    include_hidden: z.boolean().optional(),
+    include_hidden: booleanish.optional(),
     max_results: z.number().optional(),
   }),
   z.object({
@@ -38,21 +55,21 @@ const WorkspaceReadInputSchema = z.discriminatedUnion("action", [
     pattern: z.string(),
     path: z.string().optional(),
     include: z.string().optional(),
-    is_regex: z.boolean().optional(),
-    case_sensitive: z.boolean().optional(),
+    is_regex: booleanish.optional(),
+    case_sensitive: booleanish.optional(),
     max_results: z.number().optional(),
   }),
   z.object({
     action: z.literal("project_structure"),
     path: z.string().optional(),
     max_depth: z.number().optional(),
-    include_hidden: z.boolean().optional(),
+    include_hidden: booleanish.optional(),
     max_entries_per_directory: z.number().optional(),
   }),
   z.object({
     action: z.literal("tool_search"),
     query: z.string().optional(),
-    include_hidden: z.boolean().optional(),
+    include_hidden: booleanish.optional(),
   }),
   z.object({
     action: z.literal("summarize_path"),

@@ -168,6 +168,21 @@ export class SessionStore {
     return transcript;
   }
 
+  updateMetadata(sessionId: string, metadata: Record<string, unknown>): SessionTranscript {
+    const transcript = this.loadTranscript(sessionId);
+    if (!transcript) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    transcript.metadata = {
+      ...(transcript.metadata ?? {}),
+      ...metadata,
+    };
+    transcript.updatedAt = new Date().toISOString();
+    this.saveTranscript(transcript);
+    return transcript;
+  }
+
   clearMemory(sessionId: string): SessionTranscript {
     const transcript = this.loadTranscript(sessionId);
     if (!transcript) {

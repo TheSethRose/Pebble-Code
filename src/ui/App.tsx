@@ -15,6 +15,7 @@ import { getDefaultExtensionDirs } from "../extensions/loaders.js";
 import type { Message, StreamEvent } from "../engine/types.js";
 import {
   compactSessionIfNeeded,
+  ensureFreshSessionMemory,
   engineMessageToTranscriptMessage,
   failPendingApprovalsForResume,
   transcriptToConversation,
@@ -900,7 +901,8 @@ export function App({ context }: { context: CommandContext }) {
       // Cast to Message[] — transcriptToConversation only ever produces valid roles.
       let conversation: Message[];
       if (sessionStore && sessionIdRef.current) {
-        const transcript = sessionStore.loadTranscript(sessionIdRef.current);
+        const transcript = ensureFreshSessionMemory(sessionStore, sessionIdRef.current)
+          ?? sessionStore.loadTranscript(sessionIdRef.current);
         conversation = (
           transcript
             ? transcriptToConversation(

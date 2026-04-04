@@ -16,6 +16,10 @@ bun.lockb
 .env
 .env.local
 .env.*.local
+/.env.*
+!/.env.example
+!/.env.sample
+!/.env.template
 
 # IDE
 .vscode/
@@ -61,6 +65,7 @@ progress.md
 .github/
 .agents/
 .pebble/
+/.pebble-permissions.jsonl
 .pebble/sessions/
 .pebble/test-command-memory/
 .pebble/test-command-sessions/

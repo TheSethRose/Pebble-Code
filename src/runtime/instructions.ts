@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * Repository-level instructions (CLAUDE.md-style behavior).
+ * Repository-level instructions (AGENTS.md-first behavior).
  * Loads instruction files from the project root.
  */
 export interface InstructionFile {
@@ -11,8 +11,8 @@ export interface InstructionFile {
 }
 
 const INSTRUCTION_FILES = [
-  "CLAUDE.md",
   "AGENTS.md",
+  "CLAUDE.md",
   ".github/copilot-instructions.md",
   "INSTRUCTIONS.md",
 ];

@@ -65,8 +65,8 @@ But the current repo is still **far from reference breadth**, especially in:
 
 - REPL now has real streaming, richer tool/result rendering, and permission approval, but still lacks full reference UX breadth
 - Headless mode exists and supports plain-text / JSON / JSON-stream output through a shared typed reporter, but is still thin compared to the docs promise
-- `/memory` now manages persisted session summaries, but runtime memory injection is still placeholder-heavy
-- Persistence is wired for session storage and resume, but memory loading/injection is still placeholder-heavy
+- `/memory` now manages persisted session summaries, and runtime reloads/injects refreshed session memory before the next turn, but the memory model is still much thinner than the reference
+- Persistence is wired for session storage, resume, and basic memory injection, but run metadata/report summaries remain thinner than the reference product
 - AskUserQuestionTool has a working structured request/response path, but still lacks richer multi-question and preview UX like the reference
 - Permission approval dialogs exist in the REPL; the engine supports async user resolution via `resolvePermission`, including the streaming interactive path
 - Todo state is persisted under `.pebble/`, but it is still much thinner than the reference task/todo/background-work model
@@ -168,9 +168,9 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] runtime writes active conversations to session storage during real use
 - [x] runtime can continue the most recent session
 - [x] runtime can resume a session by ID
-- [ ] runtime exposes memory loading/injection beyond placeholders
-- [ ] stale session memory can be rebuilt on demand before a resume or new turn starts
-- [ ] runtime injects persisted session memory into conversation/system context before the next query
+- [x] runtime exposes memory loading/injection beyond placeholders
+- [x] stale session memory can be rebuilt on demand before a resume or new turn starts
+- [x] runtime injects persisted session memory into conversation/system context before the next query
 - [ ] headless run metadata/report summaries persist separately from raw transcript messages for later inspection
 - [x] compaction is automatically triggered in long conversations
 
@@ -278,11 +278,11 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] REPL has integration/smoke tests
 - [ ] provider failure/fallback paths have tests
 - [x] skill/plugin/MCP discovery has tests for manifest typing, load success, and isolated failure reporting
-- [ ] hook firing order has tests across session start, turn boundaries, tool execution, and runtime error paths
-- [ ] memory injection and todo persistence have tests covering restart/resume behavior
+- [x] hook firing order has tests across session start, turn boundaries, tool execution, and runtime error paths
+- [x] memory injection and todo persistence have tests covering restart/resume behavior
 - [x] streaming/approval UI renderer selection has tests for typed message and prompt states
 - [x] extension loading/isolation has tests
-- [ ] engine/tool flows have end-to-end tests
+- [x] engine/tool flows have end-to-end tests
 
 ---
 

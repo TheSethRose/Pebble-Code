@@ -18,6 +18,7 @@ import {
   createOrResumeSession,
   compactSessionIfNeeded,
   transcriptToConversation,
+  ensureFreshSessionMemory,
   engineMessageToTranscriptMessage,
   failPendingApprovalsForResume,
 } from "../persistence/runtimeSessions.js";
@@ -190,11 +191,12 @@ async function runHeadless(
       });
     }
 
-    const inputTranscript = compactSessionIfNeeded(
+    const compactedTranscript = compactSessionIfNeeded(
       sessionStore,
       session.id,
       config.settings.compactThreshold,
     ) ?? sessionStore.loadTranscript(session.id) ?? session;
+    const inputTranscript = ensureFreshSessionMemory(sessionStore, session.id) ?? compactedTranscript;
     const conversation = transcriptToConversation(inputTranscript, config.settings.compactThreshold);
 
     reporter.emitInit(session.id, resolvedProvider.provider.model, resolvedProvider.provider.name, config.cwd);
@@ -232,11 +234,25 @@ async function runHeadless(
       }
     }
 
-    const compactedTranscript = compactSessionIfNeeded(
+    const postRunCompactedTranscript = compactSessionIfNeeded(
       sessionStore,
       session.id,
       config.settings.compactThreshold,
     );
+    sessionStore.updateMetadata(session.id, {
+      lastHeadlessRun: {
+        format,
+        providerId: resolvedProvider.providerId,
+        providerLabel: resolvedProvider.providerLabel,
+        model: resolvedProvider.model,
+        prompt: options.prompt ?? null,
+        success: result.success,
+        status: mapEngineStateToResultStatus(result.state),
+        usage: result.usage,
+        messageCount: postRunCompactedTranscript?.messages.length ?? result.messages.length,
+        completedAt: new Date().toISOString(),
+      },
+    });
 
     sessionStore.updateStatus(session.id, result.success ? "completed" : result.state === "interrupted" ? "interrupted" : "error");
 
@@ -249,7 +265,7 @@ async function runHeadless(
         {
           success: result.success,
           usage: result.usage,
-          messageCount: compactedTranscript?.messages.length ?? result.messages.length,
+          messageCount: postRunCompactedTranscript?.messages.length ?? result.messages.length,
         },
       );
     } else if (format === "json") {
@@ -272,6 +288,19 @@ async function runHeadless(
     sessionStore.updateStatus(session.id, "error");
 
     const message = error instanceof Error ? error.message : String(error);
+    sessionStore.updateMetadata(session.id, {
+      lastHeadlessRun: {
+        format,
+        providerId: resolvedProvider.providerId,
+        providerLabel: resolvedProvider.providerLabel,
+        model: resolvedProvider.model,
+        prompt: options.prompt ?? null,
+        success: false,
+        status: "error",
+        error: message,
+        completedAt: new Date().toISOString(),
+      },
+    });
     await hookRegistry.fire("error", {
       sessionId: session.id,
       error: error instanceof Error ? error : new Error(message),

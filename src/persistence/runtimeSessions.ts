@@ -3,6 +3,7 @@ import type { Message } from "../engine/types.js";
 import type { PermissionManager } from "../runtime/permissionManager.js";
 import { findProjectRoot } from "../runtime/trust.js";
 import { compactTranscript, estimateTokens } from "./compaction.js";
+import { buildSessionMemory, isSessionMemoryStale } from "./memory.js";
 import { SessionStore, type SessionTranscript, type TranscriptMessage } from "./sessionStore.js";
 import type { DisplayMessage } from "../ui/types.js";
 
@@ -88,6 +89,22 @@ export function compactSessionIfNeeded(
   });
 }
 
+export function ensureFreshSessionMemory(
+  store: SessionStore,
+  sessionId: string,
+): SessionTranscript | null {
+  const transcript = store.loadTranscript(sessionId);
+  if (!transcript) {
+    return null;
+  }
+
+  if (!isSessionMemoryStale(transcript.memory, transcript)) {
+    return transcript;
+  }
+
+  return store.updateMemory(sessionId, buildSessionMemory(transcript));
+}
+
 export function transcriptToConversation(
   transcript: SessionTranscript,
   compactThreshold?: number,
@@ -97,13 +114,22 @@ export function transcriptToConversation(
       ? compactTranscript(transcript.messages)
       : transcript.messages;
 
-  return sourceMessages
+  const conversation = sourceMessages
     .filter((message) => isConversationRole(message.role))
     .map((message) => ({
       role: message.role,
       content: message.content,
       ...(message.toolCall?.name ? { toolName: message.toolCall.name } : {}),
     }));
+
+  if (transcript.memory) {
+    conversation.unshift({
+      role: "system",
+      content: buildSessionMemoryPrompt(transcript.memory.summary, transcript.memory.bullets),
+    });
+  }
+
+  return conversation;
 }
 
 export function engineMessageToTranscriptMessage(message: Message): TranscriptMessage | null {
@@ -176,4 +202,18 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function buildSessionMemoryPrompt(summary: string, bullets: string[]): string {
+  const sections = [
+    "[Session memory]",
+    summary.trim(),
+  ];
+
+  if (bullets.length > 0) {
+    sections.push("Highlights:");
+    sections.push(...bullets.map((bullet) => `- ${bullet}`));
+  }
+
+  return sections.join("\n\n");
 }

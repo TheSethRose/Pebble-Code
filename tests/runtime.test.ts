@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { PassThrough } from "node:stream";
 import { render } from "ink";
 import { run } from "../src/runtime/main";
+import { buildSessionMemory } from "../src/persistence/memory";
 import { createProjectSessionStore } from "../src/persistence/runtimeSessions";
 import { PermissionManager } from "../src/runtime/permissionManager";
 import type { CommandContext } from "../src/commands/types";
@@ -265,6 +266,19 @@ export default {
     expect(stderr.some((line) => line.includes("Provider: Echo Extension Provider (echo-model)"))).toBe(true);
     expect(stderr.some((line) => line.includes("Extensions: 1 plugin(s), 1 skill(s), 1 MCP server(s), 1 provider(s)"))).toBe(true);
     expect(stderr.some((line) => line.includes("broken-http"))).toBe(true);
+
+    const sessionStore = createProjectSessionStore(projectDir);
+    const session = sessionStore.getLatestSession();
+    expect(session?.metadata).toMatchObject({
+      lastHeadlessRun: expect.objectContaining({
+        format: "text",
+        providerId: "echo-ext",
+        providerLabel: "Echo Extension Provider",
+        model: "echo-model",
+        success: true,
+        status: "success",
+      }),
+    });
   });
 
   test("surfaces persisted background session state during boot", async () => {
@@ -295,6 +309,117 @@ export default {
 
     expect(exitCode).toBe(0);
     expect(stderr.some((line) => line.includes("Background sessions: 1"))).toBe(true);
+  });
+
+  test("executes a real end-to-end runtime tool flow through headless mode", async () => {
+    const projectDir = createTempProject("pebble-runtime-tool-flow-", {
+      settings: {
+        provider: "tool-flow-provider",
+        permissionMode: "auto-all",
+      },
+    });
+    const notePath = join(projectDir, "note.txt");
+    writeFileSync(notePath, "before\n", "utf-8");
+    writeToolFlowExtension(projectDir, notePath);
+
+    const { result: exitCode, stdout } = await captureConsole(() =>
+      run({
+        headless: true,
+        prompt: "update the note",
+        cwd: projectDir,
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout.join("\n")).toContain("Flow finished.");
+    expect(readFileSync(notePath, "utf-8")).toBe("after\n");
+
+    const sessionStore = createProjectSessionStore(projectDir);
+    const session = sessionStore.getLatestSession();
+    expect(session).not.toBeNull();
+    const transcript = session ? sessionStore.loadTranscript(session.id) : null;
+    const toolMessages = transcript?.messages.filter((message) => message.role === "tool") ?? [];
+    expect(toolMessages.length).toBeGreaterThanOrEqual(2);
+    expect(transcript?.messages.some((message) => message.role === "assistant" && message.content.includes("Flow finished."))).toBe(true);
+  });
+
+  test("refreshes stale session memory and injects it into resumed headless turns", async () => {
+    const projectDir = createTempProject("pebble-runtime-memory-resume-", {
+      settings: {
+        provider: "memory-resume-provider",
+      },
+    });
+    const sessionStore = createProjectSessionStore(projectDir);
+    const session = sessionStore.createSession("memory-resume-session");
+
+    sessionStore.appendMessage(session.id, {
+      role: "user",
+      content: "Old context from a previous turn",
+      timestamp: new Date().toISOString(),
+    });
+    sessionStore.appendMessage(session.id, {
+      role: "assistant",
+      content: "Noted.",
+      timestamp: new Date().toISOString(),
+    });
+    const baselineTranscript = sessionStore.loadTranscript(session.id);
+    if (!baselineTranscript) {
+      throw new Error("Expected baseline transcript to exist");
+    }
+    sessionStore.updateMemory(session.id, buildSessionMemory(baselineTranscript));
+    sessionStore.appendMessage(session.id, {
+      role: "user",
+      content: "Stale follow-up context",
+      timestamp: new Date().toISOString(),
+    });
+
+    writeMemoryResumeExtension(projectDir, "Stale follow-up context");
+
+    const { result: exitCode, stdout } = await captureConsole(() =>
+      run({
+        headless: true,
+        prompt: "Resume with memory",
+        cwd: projectDir,
+        resume: session.id,
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout.join("\n")).toContain("memory injected");
+
+    const refreshed = sessionStore.loadTranscript(session.id);
+    expect(refreshed?.memory?.summary).toContain("Stale follow-up context");
+    expect(refreshed?.memory?.sourceMessageCount).toBe(4);
+  });
+
+  test("persists file-backed todos across separate headless runtime runs", async () => {
+    const projectDir = createTempProject("pebble-runtime-todo-persistence-", {
+      settings: {
+        provider: "todo-persistence-provider",
+      },
+    });
+
+    writeTodoPersistenceExtension(projectDir);
+
+    const firstRun = await captureConsole(() =>
+      run({
+        headless: true,
+        prompt: "add todo",
+        cwd: projectDir,
+      }),
+    );
+    expect(firstRun.result).toBe(0);
+
+    const secondRun = await captureConsole(() =>
+      run({
+        headless: true,
+        prompt: "list todos",
+        cwd: projectDir,
+      }),
+    );
+
+    expect(secondRun.result).toBe(0);
+    expect(secondRun.stdout.join("\n")).toContain("1. [not-started] persisted todo");
   });
 });
 
@@ -714,6 +839,250 @@ export default {
     onError: async (context) => record("error", context),
     onSessionEnd: async (context) => record("session:end", context),
   },
+};
+    `.trim(),
+    "utf-8",
+  );
+}
+
+function writeToolFlowExtension(projectDir: string, notePath: string): void {
+  const extensionsDir = join(projectDir, "extensions");
+  mkdirSync(extensionsDir, { recursive: true });
+  writeFileSync(
+    join(extensionsDir, "tool-flow.ts"),
+    `
+const NOTE_PATH = ${JSON.stringify(notePath)};
+
+class ToolFlowProvider {
+  id = "tool-flow-provider";
+  name = "Tool Flow Provider";
+  model = "tool-flow-model";
+
+  getCapabilities() {
+    return {
+      streaming: false,
+      toolUse: true,
+      systemPrompt: true,
+      multimodal: false,
+      maxContextTokens: 4096,
+      maxOutputTokens: 1024,
+      parallelToolCalls: false,
+    };
+  }
+
+  async complete(messages) {
+    const toolMessages = messages.filter((message) => message.role === "tool");
+
+    if (toolMessages.length === 0) {
+      return {
+        text: "",
+        toolCalls: [
+          {
+            id: "tool-flow-read",
+            name: "WorkspaceRead",
+            input: {
+              action: "read_file",
+              file_path: NOTE_PATH,
+            },
+          },
+        ],
+        stopReason: "tool_use",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    }
+
+    if (toolMessages.length === 1) {
+      return {
+        text: "",
+        toolCalls: [
+          {
+            id: "tool-flow-edit",
+            name: "WorkspaceEdit",
+            input: {
+              action: "edit_file",
+              file_path: NOTE_PATH,
+              old_string: "before",
+              new_string: "after",
+            },
+          },
+        ],
+        stopReason: "tool_use",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    }
+
+    return {
+      text: "Flow finished.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 1, outputTokens: 1 },
+    };
+  }
+
+  async *stream() {
+    throw new Error("ToolFlowProvider only supports complete()");
+  }
+
+  isConfigured() {
+    return true;
+  }
+}
+
+export default {
+  metadata: {
+    id: "tool-flow-extension",
+    name: "Tool Flow Extension",
+    version: "1.0.0"
+  },
+  providers: [new ToolFlowProvider()],
+};
+    `.trim(),
+    "utf-8",
+  );
+}
+
+function writeMemoryResumeExtension(projectDir: string, expectedSnippet: string): void {
+  const extensionsDir = join(projectDir, "extensions");
+  mkdirSync(extensionsDir, { recursive: true });
+  writeFileSync(
+    join(extensionsDir, "memory-resume.ts"),
+    `
+const EXPECTED_SNIPPET = ${JSON.stringify(expectedSnippet)};
+
+class MemoryResumeProvider {
+  id = "memory-resume-provider";
+  name = "Memory Resume Provider";
+  model = "memory-resume-model";
+
+  getCapabilities() {
+    return {
+      streaming: false,
+      toolUse: false,
+      systemPrompt: true,
+      multimodal: false,
+      maxContextTokens: 4096,
+      maxOutputTokens: 1024,
+      parallelToolCalls: false,
+    };
+  }
+
+  async complete(messages) {
+    const injectedMemory = messages.find((message) => message.role === "system" && message.content.includes("[Session memory]"));
+    return {
+      text: injectedMemory?.content.includes(EXPECTED_SNIPPET) ? "memory injected" : "memory missing",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 1, outputTokens: 1 },
+    };
+  }
+
+  async *stream() {
+    throw new Error("MemoryResumeProvider only supports complete()");
+  }
+
+  isConfigured() {
+    return true;
+  }
+}
+
+export default {
+  metadata: {
+    id: "memory-resume-extension",
+    name: "Memory Resume Extension",
+    version: "1.0.0"
+  },
+  providers: [new MemoryResumeProvider()],
+};
+    `.trim(),
+    "utf-8",
+  );
+}
+
+function writeTodoPersistenceExtension(projectDir: string): void {
+  const extensionsDir = join(projectDir, "extensions");
+  mkdirSync(extensionsDir, { recursive: true });
+  writeFileSync(
+    join(extensionsDir, "todo-persistence.ts"),
+    `
+class TodoPersistenceProvider {
+  id = "todo-persistence-provider";
+  name = "Todo Persistence Provider";
+  model = "todo-persistence-model";
+
+  getCapabilities() {
+    return {
+      streaming: false,
+      toolUse: true,
+      systemPrompt: true,
+      multimodal: false,
+      maxContextTokens: 4096,
+      maxOutputTokens: 1024,
+      parallelToolCalls: false,
+    };
+  }
+
+  async complete(messages) {
+    const lastMessage = messages.at(-1);
+
+    if (lastMessage?.role === "user") {
+      if (lastMessage.content.toLowerCase().includes("add")) {
+        return {
+          text: "",
+          toolCalls: [
+            {
+              id: "todo-add",
+              name: "Memory",
+              input: {
+                action: "todo_add",
+                title: "persisted todo",
+              },
+            },
+          ],
+          stopReason: "tool_use",
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      }
+
+      return {
+        text: "",
+        toolCalls: [
+          {
+            id: "todo-list",
+            name: "Memory",
+            input: {
+              action: "todo_list",
+            },
+          },
+        ],
+        stopReason: "tool_use",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    }
+
+    return {
+      text: lastMessage?.content ?? "done",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 1, outputTokens: 1 },
+    };
+  }
+
+  async *stream() {
+    throw new Error("TodoPersistenceProvider only supports complete()");
+  }
+
+  isConfigured() {
+    return true;
+  }
+}
+
+export default {
+  metadata: {
+    id: "todo-persistence-extension",
+    name: "Todo Persistence Extension",
+    version: "1.0.0"
+  },
+  providers: [new TodoPersistenceProvider()],
 };
     `.trim(),
     "utf-8",
