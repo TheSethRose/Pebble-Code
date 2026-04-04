@@ -5,6 +5,7 @@ import { registerBuiltinCommands } from "../commands/builtins.js";
 import type { CommandContext } from "../commands/types.js";
 import { QueryEngine } from "../engine/QueryEngine.js";
 import type { PermissionRequest } from "../engine/QueryEngine.js";
+import type { AskUserQuestionRequest } from "../engine/QueryEngine.js";
 import { createPrimaryProvider } from "../providers/primary/index.js";
 import { resolveProviderConfig } from "../providers/config.js";
 import { createMvpTools } from "../tools/orchestration.js";
@@ -27,6 +28,7 @@ import { SessionSidebar, deriveSessionTitle } from "./components/SessionSidebar.
 import type { SessionSummary } from "./components/SessionSidebar.js";
 import { KeybindingsPopup } from "./components/KeybindingsPopup.js";
 import { PermissionPrompt } from "./components/PermissionPrompt.js";
+import { QuestionPrompt } from "./components/QuestionPrompt.js";
 import { Settings } from "./Settings.js";
 import type { TabId } from "./Settings.js";
 
@@ -76,7 +78,26 @@ const INITIAL_STATE: AppState = {
   error: null,
   activeSessionId: null,
   pendingPermission: null,
+  pendingQuestion: null,
 };
+
+function finalizeStreamingMessages(messages: DisplayMessage[]): DisplayMessage[] {
+  const next = [...messages];
+  const last = next[next.length - 1];
+  if (last?.role === "streaming") {
+    next[next.length - 1] = {
+      ...last,
+      role: "assistant",
+    };
+  }
+  return next;
+}
+
+function toToolArgs(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
 
 // ---------------------------------------------------------------------------
 // App
@@ -114,6 +135,131 @@ export function App({ context }: { context: CommandContext }) {
   const hookSessionIdRef = React.useRef<string | null>(null);
   const ctrlCTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionStore = context.sessionStore ?? null;
+
+  const applyStreamEvent = React.useCallback((event: StreamEvent) => {
+    const data = event.data as Record<string, unknown> | undefined;
+
+    if (event.type === "text_delta" && (data?.text || data?.delta)) {
+      const delta = String(data?.text ?? data?.delta ?? "");
+      setState((prev) => {
+        const msgs = [...prev.messages];
+        const last = msgs[msgs.length - 1];
+        if (last?.role === "streaming") {
+          msgs[msgs.length - 1] = { ...last, content: last.content + delta };
+        } else {
+          msgs.push({ role: "streaming", content: delta });
+        }
+        return { ...prev, messages: msgs };
+      });
+      return;
+    }
+
+    if (event.type === "tool_call" && data?.tool) {
+      const toolName = String(data.tool);
+      setState((prev) => ({
+        ...prev,
+        statusText: `Running: ${toolName}`,
+        messages: [
+          ...finalizeStreamingMessages(prev.messages),
+          {
+            role: "tool",
+            content: toolName,
+            meta: { toolName, toolArgs: toToolArgs(data.input) },
+          },
+        ],
+      }));
+      return;
+    }
+
+    if (event.type === "tool_result" && data?.tool) {
+      const toolName = String(data.tool);
+      const isError = data.success === false;
+      setState((prev) => ({
+        ...prev,
+        statusText: "",
+        messages: [
+          ...finalizeStreamingMessages(prev.messages),
+          {
+            role: "tool_result",
+            content: `${toolName} ${isError ? "failed" : "done"}`,
+            meta: {
+              toolName,
+              toolArgs: toToolArgs(data.input),
+              toolOutput: typeof data.output === "string" ? data.output : undefined,
+              isError,
+              errorMessage: typeof data.error === "string" ? data.error : undefined,
+              durationMs: typeof data.durationMs === "number" ? data.durationMs : undefined,
+              truncated: data.truncated === true,
+            },
+          },
+        ],
+      }));
+      return;
+    }
+
+    if (event.type === "permission_denied" && data?.tool) {
+      const toolName = String(data.tool);
+      const reason = typeof data.reason === "string" ? data.reason : "Permission denied";
+      setState((prev) => ({
+        ...prev,
+        statusText: "",
+        messages: [
+          ...finalizeStreamingMessages(prev.messages),
+          {
+            role: "tool_result",
+            content: `${toolName} denied`,
+            meta: {
+              toolName,
+              toolArgs: toToolArgs(data.input),
+              toolOutput: `Tool execution denied: ${reason}`,
+              isError: true,
+              errorMessage: reason,
+            },
+          },
+        ],
+      }));
+      return;
+    }
+
+    if (event.type === "progress" && data) {
+      setState((prev) => ({
+        ...prev,
+        messages: [
+          ...finalizeStreamingMessages(prev.messages),
+          {
+            role: "progress",
+            content: `Turn ${String(data.turn ?? "")}/${String(data.maxTurns ?? "")}`,
+            meta: { turnNumber: typeof data.turn === "number" ? data.turn : undefined },
+          },
+        ],
+      }));
+      return;
+    }
+
+    if (event.type === "error" && data) {
+      setState((prev) => ({
+        ...prev,
+        statusText: "",
+        messages: [
+          ...finalizeStreamingMessages(prev.messages),
+          {
+            role: "error",
+            content: String(data.message ?? "Unknown error"),
+            meta: { isError: true },
+          },
+        ],
+      }));
+      return;
+    }
+
+    if (event.type === "done") {
+      setState((prev) => ({
+        ...prev,
+        statusText: "",
+        messages: finalizeStreamingMessages(prev.messages),
+      }));
+    }
+  }, []);
 
   // ------------------------------------------------------------------
   // Unified input helpers
@@ -271,6 +417,28 @@ export function App({ context }: { context: CommandContext }) {
       });
     };
 
+    const resolveQuestion = (request: AskUserQuestionRequest): Promise<string> => {
+      return new Promise((resolve) => {
+        setState((prev) => ({
+          ...prev,
+          statusText: "Waiting for your answer…",
+          pendingQuestion: {
+            question: request.question,
+            options: request.options,
+            allowFreeform: request.allowFreeform,
+            resolve: (answer: string) => {
+              setState((current) => ({
+                ...current,
+                pendingQuestion: null,
+                statusText: current.isProcessing ? "Continuing…" : "",
+              }));
+              resolve(answer);
+            },
+          },
+        }));
+      });
+    };
+
     engineRef.current = new QueryEngine({
       provider,
       tools,
@@ -278,89 +446,10 @@ export function App({ context }: { context: CommandContext }) {
       permissionManager,
       cwd: context.cwd,
       resolvePermission,
-      onEvent: (event: StreamEvent) => {
-        const data = event.data as Record<string, unknown> | undefined;
-
-        if (event.type === "text_delta" && (data?.text || data?.delta)) {
-          const delta = String(data?.text ?? data?.delta ?? "");
-          setState((prev) => {
-            const msgs = [...prev.messages];
-            const last = msgs[msgs.length - 1];
-            if (last?.role === "streaming") {
-              msgs[msgs.length - 1] = { role: "streaming", content: last.content + delta };
-            } else {
-              msgs.push({ role: "streaming", content: delta });
-            }
-            return { ...prev, messages: msgs };
-          });
-        }
-
-        if (event.type === "tool_call" && data?.tool) {
-          const toolArgs = data.input as Record<string, unknown> | undefined;
-          setState((prev) => ({
-            ...prev,
-            statusText: `Running: ${String(data.tool)}`,
-            messages: [
-              ...prev.messages,
-              {
-                role: "tool",
-                content: String(data.tool),
-                meta: { toolName: String(data.tool), toolArgs: toolArgs ?? {} },
-              },
-            ],
-          }));
-        }
-
-        if (event.type === "tool_result" && data?.tool) {
-          const isError = data.success === false;
-          setState((prev) => ({
-            ...prev,
-            statusText: "",
-            messages: [
-              ...prev.messages,
-              {
-                role: "tool_result",
-                content: `${String(data.tool)} ${isError ? "failed" : "done"}`,
-                meta: { toolName: String(data.tool), isError },
-              },
-            ],
-          }));
-        }
-
-        if (event.type === "progress" && data) {
-          setState((prev) => ({
-            ...prev,
-            messages: [
-              ...prev.messages,
-              {
-                role: "progress",
-                content: `Turn ${String(data.turn ?? "")}/${String(data.maxTurns ?? "")}`,
-                meta: { turnNumber: typeof data.turn === "number" ? data.turn : undefined },
-              },
-            ],
-          }));
-        }
-
-        if (event.type === "error" && data) {
-          setState((prev) => ({
-            ...prev,
-            messages: [
-              ...prev.messages,
-              {
-                role: "error",
-                content: String(data.message ?? "Unknown error"),
-                meta: { isError: true },
-              },
-            ],
-          }));
-        }
-
-        if (event.type === "done") {
-          setState((prev) => ({ ...prev, statusText: "" }));
-        }
-      },
+      resolveQuestion,
+      onEvent: applyStreamEvent,
     });
-  }, [context.cwd, context.extensionTools, context.permissionManager, runtimeConfig.model, runtimeConfig.provider]);
+  }, [applyStreamEvent, context.cwd, context.extensionTools, context.permissionManager, runtimeConfig.model, runtimeConfig.provider]);
 
   React.useEffect(() => {
     return () => {
@@ -547,7 +636,7 @@ export function App({ context }: { context: CommandContext }) {
         ctrlCTimerRef.current = setTimeout(() => setCtrlCOnce(false), 2000);
       }
     },
-    { isActive: !showSettings && !showKeybindings },
+    { isActive: !showSettings && !showKeybindings && !state.pendingPermission && !state.pendingQuestion },
   );
 
   // ------------------------------------------------------------------
@@ -745,7 +834,22 @@ export function App({ context }: { context: CommandContext }) {
           await context.hookRegistry.fire("turn:before", { sessionId: sessionIdRef.current });
         }
 
-        const result = await engineRef.current.process(conversation);
+        const iterator = engineRef.current.stream(conversation)[Symbol.asyncIterator]();
+        let result: Awaited<ReturnType<QueryEngine["process"]>> | null = null;
+
+        while (true) {
+          const step = await iterator.next();
+          if (step.done) {
+            result = step.value;
+            break;
+          }
+
+          applyStreamEvent(step.value);
+        }
+
+        if (!result) {
+          throw new Error("Streaming query completed without a terminal result");
+        }
 
         if (context.hookRegistry && sessionIdRef.current) {
           await context.hookRegistry.fire("turn:after", { sessionId: sessionIdRef.current });
@@ -812,7 +916,7 @@ export function App({ context }: { context: CommandContext }) {
     // state.messages intentionally omitted — we only need it for the fallback
     // non-persisted path. Including it would cause stale-closure issues.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [registry, context, runtimeConfig, sessionStore, refreshSessions],
+    [registry, context, runtimeConfig, sessionStore, refreshSessions, suggestions, suggestionIndex],
   );
 
   const model = String(runtimeConfig.model ?? "default");
@@ -961,10 +1065,18 @@ export function App({ context }: { context: CommandContext }) {
               width={mainWidth ?? columns}
             />
           )}
+
+          {state.pendingQuestion && (
+            <QuestionPrompt
+              pending={state.pendingQuestion}
+              width={mainWidth ?? columns}
+            />
+          )}
         </Box>
 
         <PromptInput
           isProcessing={state.isProcessing}
+          disabled={Boolean(state.pendingPermission || state.pendingQuestion)}
           onSubmit={handleSubmit}
           onChange={(val) => {
             setInputValue(val);

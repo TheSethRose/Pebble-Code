@@ -23,6 +23,12 @@ export interface PermissionRequest {
   approvalMessage: string;
 }
 
+export interface AskUserQuestionRequest {
+  question: string;
+  options: string[];
+  allowFreeform: boolean;
+}
+
 export interface QueryEngineOptions {
   /** Maximum number of turns before forcing termination */
   maxTurns?: number;
@@ -49,6 +55,8 @@ export interface QueryEngineOptions {
    * If not provided, "ask" decisions are treated as "deny".
    */
   resolvePermission?: (request: PermissionRequest) => Promise<PermissionDecision>;
+  /** Callback for AskUserQuestion tool prompts in interactive mode */
+  resolveQuestion?: (request: AskUserQuestionRequest) => Promise<string>;
 }
 
 export interface QueryResult {
@@ -75,6 +83,7 @@ export class QueryEngine {
     permissionManager?: import("../runtime/permissionManager.js").PermissionManager;
     cwd?: string;
     resolvePermission?: (request: PermissionRequest) => Promise<PermissionDecision>;
+    resolveQuestion?: (request: AskUserQuestionRequest) => Promise<string>;
   };
 
   constructor(options: QueryEngineOptions) {
@@ -89,6 +98,7 @@ export class QueryEngine {
       permissionManager: options.permissionManager,
       cwd: options.cwd,
       resolvePermission: options.resolvePermission,
+      resolveQuestion: options.resolveQuestion,
     };
   }
 
@@ -173,6 +183,7 @@ export class QueryEngine {
       if (response.toolCalls.length > 0) {
         // Execute each tool call
         for (const toolCall of response.toolCalls) {
+          const toolInput = this.normalizeToolInput(toolCall.input);
           const tool = this.options.tools.find((t) => t.name === toolCall.name);
 
           if (!tool) {
@@ -189,11 +200,11 @@ export class QueryEngine {
           }
 
           // Check approval via PermissionManager
-          const needsApproval = tool.requiresApproval?.(toolCall.input) ?? false;
+          const needsApproval = tool.requiresApproval?.(toolInput) ?? false;
           if (needsApproval && this.options.permissionManager) {
             let permissionResult = await this.options.permissionManager.checkPermission({
               toolName: toolCall.name,
-              toolArgs: toolCall.input as Record<string, unknown>,
+              toolArgs: this.toToolArgs(toolInput),
               riskLevel: "high",
             });
 
@@ -201,11 +212,11 @@ export class QueryEngine {
             if (permissionResult.decision === "ask") {
               if (this.options.resolvePermission) {
                 const approvalMsg =
-                  tool.getApprovalMessage?.(toolCall.input) ??
+                  tool.getApprovalMessage?.(toolInput) ??
                   `Allow ${toolCall.name}?`;
                 const userDecision = await this.options.resolvePermission({
                   toolName: toolCall.name,
-                  toolArgs: toolCall.input as Record<string, unknown>,
+                  toolArgs: this.toToolArgs(toolInput),
                   approvalMessage: approvalMsg,
                 });
                 permissionResult = { decision: userDecision, reason: "User decision" };
@@ -216,12 +227,21 @@ export class QueryEngine {
             }
 
             if (permissionResult.decision === "deny") {
-              this.emit("permission_denied", { tool: toolCall.name, input: toolCall.input });
+              this.emit("permission_denied", {
+                tool: toolCall.name,
+                input: toolInput,
+                reason: permissionResult.reason,
+              });
               conversation.push({
                 role: "tool",
                 content: `Tool execution denied: ${permissionResult.reason ?? "Permission denied"}`,
                 toolCallId: toolCall.id,
                 toolName: toolCall.name,
+                metadata: {
+                  success: false,
+                  input: toolInput,
+                  error: permissionResult.reason ?? "Permission denied",
+                },
               });
               continue;
             }
@@ -234,37 +254,98 @@ export class QueryEngine {
             );
           } else if (needsApproval) {
             // No permission manager — deny by default
-            this.emit("permission_denied", { tool: toolCall.name, input: toolCall.input });
+            this.emit("permission_denied", {
+              tool: toolCall.name,
+              input: toolInput,
+              reason: "No permission manager configured",
+            });
             conversation.push({
               role: "tool",
               content: "Tool execution denied (no permission manager configured)",
               toolCallId: toolCall.id,
               toolName: toolCall.name,
+              metadata: {
+                success: false,
+                input: toolInput,
+                error: "No permission manager configured",
+              },
             });
             continue;
           }
 
           // Execute the tool
-          this.options.onToolExecute?.(tool.name, toolCall.input);
-          this.emit("tool_call", { tool: toolCall.name, input: toolCall.input });
+          this.options.onToolExecute?.(tool.name, toolInput);
+          this.emit("tool_call", { tool: toolCall.name, input: toolInput });
 
           try {
-            const result = await tool.execute(toolCall.input, {
+            const startedAt = Date.now();
+            const result = await tool.execute(toolInput, {
               cwd: this.options.cwd ?? process.cwd(),
               signal: this.options.signal,
               permissionMode: this.options.permissionManager?.getMode() ?? "always-ask",
             });
 
-            const output = result.truncated ? `${result.output}\n[Output truncated]` : result.output;
+            const durationMs = Date.now() - startedAt;
+            const outputBase = result.success ? result.output : (result.error ?? result.output);
+            const output = result.truncated ? `${outputBase}\n[Output truncated]` : outputBase;
+
+            const askUserRequest = tool.name === "AskUserQuestion"
+              ? this.extractAskUserQuestionRequest(result.data, toolInput)
+              : null;
+
+            if (askUserRequest && this.options.resolveQuestion) {
+              const answer = await this.options.resolveQuestion(askUserRequest);
+              conversation.push({
+                role: "tool",
+                content: answer,
+                toolCallId: toolCall.id,
+                toolName: toolCall.name,
+                metadata: {
+                  success: true,
+                  durationMs,
+                  input: toolInput,
+                  question: askUserRequest.question,
+                  answer,
+                  options: askUserRequest.options,
+                  allowFreeform: askUserRequest.allowFreeform,
+                },
+              });
+
+              this.emit("tool_result", {
+                tool: toolCall.name,
+                success: true,
+                input: toolInput,
+                answer,
+                question: askUserRequest.question,
+              });
+              continue;
+            }
+
             conversation.push({
               role: "tool",
               content: output,
               toolCallId: toolCall.id,
               toolName: toolCall.name,
-              metadata: { success: result.success },
+              metadata: {
+                success: result.success,
+                durationMs,
+                input: toolInput,
+                truncated: result.truncated ?? false,
+                ...(result.error ? { error: result.error } : {}),
+                ...(result.data !== undefined ? { data: result.data } : {}),
+              },
             });
 
-            this.emit("tool_result", { tool: toolCall.name, success: result.success });
+            this.emit("tool_result", {
+              tool: toolCall.name,
+              success: result.success,
+              input: toolInput,
+              output,
+              durationMs,
+              truncated: result.truncated ?? false,
+              ...(result.error ? { error: result.error } : {}),
+              ...(result.data !== undefined ? { data: result.data } : {}),
+            });
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             conversation.push({
@@ -272,7 +353,18 @@ export class QueryEngine {
               content: `Tool execution error: ${message}`,
               toolCallId: toolCall.id,
               toolName: toolCall.name,
-              metadata: { success: false },
+              metadata: {
+                success: false,
+                input: toolInput,
+                error: message,
+              },
+            });
+            this.emit("tool_result", {
+              tool: toolCall.name,
+              success: false,
+              input: toolInput,
+              output: `Tool execution error: ${message}`,
+              error: message,
             });
           }
         }
@@ -318,7 +410,7 @@ export class QueryEngine {
   /**
    * Stream a query, yielding events as they occur.
    */
-  async *stream(messages: Message[]): AsyncIterable<StreamEvent> {
+  async *stream(messages: Message[]): AsyncGenerator<StreamEvent, QueryResult, void> {
     const conversation = [...messages];
     let turnCount = 0;
     let totalInputTokens = 0;
@@ -327,7 +419,13 @@ export class QueryEngine {
     while (turnCount < this.options.maxTurns) {
       if (this.options.signal?.aborted) {
         yield emitStreamEvent("done", { reason: "aborted" });
-        return;
+        return {
+          messages: conversation,
+          state: "interrupted",
+          success: false,
+          error: "Query was interrupted",
+          usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+        };
       }
 
       turnCount++;
@@ -384,7 +482,13 @@ export class QueryEngine {
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         yield emitStreamEvent("error", { message });
-        return;
+        return {
+          messages: conversation,
+          state: "error",
+          success: false,
+          error: `Provider error: ${message}`,
+          usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+        };
       }
 
       // Add assistant message
@@ -401,7 +505,13 @@ export class QueryEngine {
           reason: "error",
           usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
         });
-        return;
+        return {
+          messages: conversation,
+          state: "error",
+          success: false,
+          error: errorMessage,
+          usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+        };
       }
 
       // Execute tool calls if any
@@ -419,29 +529,47 @@ export class QueryEngine {
             continue;
           }
 
-          let input: unknown;
-          try {
-            input = JSON.parse(tc.input);
-          } catch {
-            input = tc.input;
-          }
+          const input = this.normalizeToolInput(tc.input);
 
           // Check approval via PermissionManager
           const needsApproval = tool.requiresApproval?.(input) ?? false;
           if (needsApproval && this.options.permissionManager) {
-            const permissionResult = await this.options.permissionManager.checkPermission({
+            let permissionResult = await this.options.permissionManager.checkPermission({
               toolName: tc.name,
-              toolArgs: input as Record<string, unknown>,
+              toolArgs: this.toToolArgs(input),
               riskLevel: "high",
             });
 
+            if (permissionResult.decision === "ask") {
+              if (this.options.resolvePermission) {
+                const approvalMsg = tool.getApprovalMessage?.(input) ?? `Allow ${tc.name}?`;
+                const userDecision = await this.options.resolvePermission({
+                  toolName: tc.name,
+                  toolArgs: this.toToolArgs(input),
+                  approvalMessage: approvalMsg,
+                });
+                permissionResult = { decision: userDecision, reason: "User decision" };
+              } else {
+                permissionResult = { decision: "deny", reason: "No interactive approval available" };
+              }
+            }
+
             if (permissionResult.decision === "deny") {
-              yield emitStreamEvent("permission_denied", { tool: tc.name, input });
+              yield emitStreamEvent("permission_denied", {
+                tool: tc.name,
+                input,
+                reason: permissionResult.reason,
+              });
               conversation.push({
                 role: "tool",
                 content: `Tool execution denied: ${permissionResult.reason ?? "Permission denied"}`,
                 toolCallId: tc.id,
                 toolName: tc.name,
+                metadata: {
+                  success: false,
+                  input,
+                  error: permissionResult.reason ?? "Permission denied",
+                },
               });
               continue;
             }
@@ -452,29 +580,89 @@ export class QueryEngine {
               permissionResult.persisted ?? false,
             );
           } else if (needsApproval) {
-            yield emitStreamEvent("permission_denied", { tool: tc.name, input });
+            yield emitStreamEvent("permission_denied", {
+              tool: tc.name,
+              input,
+              reason: "No permission manager configured",
+            });
             conversation.push({
               role: "tool",
               content: "Tool execution denied (no permission manager configured)",
               toolCallId: tc.id,
               toolName: tc.name,
+              metadata: {
+                success: false,
+                input,
+                error: "No permission manager configured",
+              },
             });
             continue;
           }
 
           try {
+            const startedAt = Date.now();
             const result = await tool.execute(input, {
               cwd: this.options.cwd ?? process.cwd(),
               signal: this.options.signal,
               permissionMode: this.options.permissionManager?.getMode() ?? "always-ask",
             });
+
+            const durationMs = Date.now() - startedAt;
+            const outputBase = result.success ? result.output : (result.error ?? result.output);
+            const output = result.truncated ? `${outputBase}\n[Output truncated]` : outputBase;
+            const askUserRequest = tc.name === "AskUserQuestion"
+              ? this.extractAskUserQuestionRequest(result.data, input)
+              : null;
+
+            if (askUserRequest && this.options.resolveQuestion) {
+              const answer = await this.options.resolveQuestion(askUserRequest);
+              conversation.push({
+                role: "tool",
+                content: answer,
+                toolCallId: tc.id,
+                toolName: tc.name,
+                metadata: {
+                  success: true,
+                  durationMs,
+                  input,
+                  question: askUserRequest.question,
+                  answer,
+                },
+              });
+              yield emitStreamEvent("tool_result", {
+                tool: tc.name,
+                success: true,
+                input,
+                answer,
+                question: askUserRequest.question,
+              });
+              continue;
+            }
+
             conversation.push({
               role: "tool",
-              content: result.output,
+              content: output,
               toolCallId: tc.id,
               toolName: tc.name,
+              metadata: {
+                success: result.success,
+                durationMs,
+                input,
+                truncated: result.truncated ?? false,
+                ...(result.error ? { error: result.error } : {}),
+                ...(result.data !== undefined ? { data: result.data } : {}),
+              },
             });
-            yield emitStreamEvent("tool_result", { tool: tc.name, success: result.success });
+            yield emitStreamEvent("tool_result", {
+              tool: tc.name,
+              success: result.success,
+              input,
+              output,
+              durationMs,
+              truncated: result.truncated ?? false,
+              ...(result.error ? { error: result.error } : {}),
+              ...(result.data !== undefined ? { data: result.data } : {}),
+            });
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             conversation.push({
@@ -482,8 +670,19 @@ export class QueryEngine {
               content: `Tool error: ${message}`,
               toolCallId: tc.id,
               toolName: tc.name,
+              metadata: {
+                success: false,
+                input,
+                error: message,
+              },
             });
-            yield emitStreamEvent("error", { tool: tc.name, message });
+            yield emitStreamEvent("tool_result", {
+              tool: tc.name,
+              success: false,
+              input,
+              output: `Tool error: ${message}`,
+              error: message,
+            });
           }
         }
         // Continue loop for next turn
@@ -492,10 +691,23 @@ export class QueryEngine {
 
       // No tool calls — determine stop reason and emit appropriate event
       yield emitStreamEvent("done", { reason: stopReason, usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens } });
-      return;
+      return {
+        messages: conversation,
+        state: stopReason === "max_tokens" ? "max_turns_reached" : "success",
+        success: stopReason !== "max_tokens",
+        ...(stopReason === "max_tokens" ? { error: "Response exceeded max tokens" } : {}),
+        usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+      };
     }
 
     yield emitStreamEvent("done", { reason: "max_turns", usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens } });
+    return {
+      messages: conversation,
+      state: "max_turns_reached",
+      success: false,
+      error: `Exceeded maximum turns (${this.options.maxTurns})`,
+      usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+    };
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -515,4 +727,68 @@ export class QueryEngine {
       || value === "stop_sequence"
       || value === "error";
   }
+
+  private normalizeToolInput(input: unknown): unknown {
+    if (typeof input !== "string") {
+      return input;
+    }
+
+    try {
+      return JSON.parse(input);
+    } catch {
+      return input;
+    }
+  }
+
+  private toToolArgs(input: unknown): Record<string, unknown> {
+    return input && typeof input === "object" && !Array.isArray(input)
+      ? (input as Record<string, unknown>)
+      : {};
+  }
+
+  private extractAskUserQuestionRequest(data: unknown, fallbackInput: unknown): AskUserQuestionRequest | null {
+    const candidate = isAskUserQuestionRequest(data)
+      ? data
+      : isAskUserQuestionFallbackInput(fallbackInput)
+        ? {
+            question: fallbackInput.question,
+            options: fallbackInput.options ?? [],
+            allowFreeform: fallbackInput.allow_freeform ?? true,
+          }
+        : null;
+
+    return candidate;
+  }
+}
+
+function isAskUserQuestionRequest(value: unknown): value is AskUserQuestionRequest {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<AskUserQuestionRequest>;
+  return typeof candidate.question === "string"
+    && Array.isArray(candidate.options)
+    && candidate.options.every((option) => typeof option === "string")
+    && typeof candidate.allowFreeform === "boolean";
+}
+
+function isAskUserQuestionFallbackInput(value: unknown): value is {
+  question: string;
+  options?: string[];
+  allow_freeform?: boolean;
+} {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as {
+    question?: unknown;
+    options?: unknown;
+    allow_freeform?: unknown;
+  };
+
+  return typeof candidate.question === "string"
+    && (candidate.options === undefined || (Array.isArray(candidate.options) && candidate.options.every((option) => typeof option === "string")))
+    && (candidate.allow_freeform === undefined || typeof candidate.allow_freeform === "boolean");
 }

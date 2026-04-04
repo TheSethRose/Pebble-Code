@@ -56,7 +56,7 @@ export class PermissionManager {
       case "auto-all":
         return { decision: "allow", reason: "Auto-approve all (headless mode)" };
       case "auto-edit":
-        if (context.toolName.includes("File")) {
+        if (context.toolName.includes("File") || context.toolName === "ApplyPatch") {
           return { decision: "allow", reason: "Auto-approve file edits" };
         }
         break;

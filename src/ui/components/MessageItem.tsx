@@ -121,14 +121,27 @@ export function MessageItem({ message }: MessageItemProps) {
     const markerColor = isError ? "red" : "green";
     const label = toolName ? `${toolName} ${isError ? "failed" : "done"}` : content;
     const duration = meta?.durationMs;
+    const output = meta?.toolOutput ?? "";
+    const outputColor = isError ? "red" : "white";
     return (
-      <Box marginBottom={1} paddingLeft={2}>
-        <Box minWidth={2}>
-          <Text color={markerColor}>{marker}</Text>
+      <Box marginBottom={1} paddingLeft={2} flexDirection="column">
+        <Box>
+          <Box minWidth={2}>
+            <Text color={markerColor}>{marker}</Text>
+          </Box>
+          <Text color={markerColor}>{label}</Text>
+          {duration != null && <Text dimColor> ({duration}ms)</Text>}
+          {meta?.truncated && <Text dimColor> [truncated]</Text>}
         </Box>
-        <Text color={markerColor}>{label}</Text>
-        {duration != null && (
-          <Text dimColor> ({duration}ms)</Text>
+        {!!output && (
+          <Box paddingLeft={2}>
+            <Text color={outputColor} dimColor={!isError}>{formatBodyPreview(output)}</Text>
+          </Box>
+        )}
+        {meta?.errorMessage && meta.errorMessage !== output && (
+          <Box paddingLeft={2}>
+            <Text color="red">{meta.errorMessage}</Text>
+          </Box>
         )}
       </Box>
     );
@@ -237,4 +250,12 @@ function compactArgs(args: Record<string, unknown>, maxLen = 60): string {
   }
   const joined = parts.join(", ");
   return joined.length > maxLen ? joined.slice(0, maxLen - 1) + "…" : joined;
+}
+
+function formatBodyPreview(value: string, maxLines = 6, maxChars = 600): string {
+  const limitedChars = value.length > maxChars ? `${value.slice(0, maxChars - 1)}…` : value;
+  const lines = limitedChars.split("\n");
+  return lines.length > maxLines
+    ? `${lines.slice(0, maxLines).join("\n")}\n…`
+    : limitedChars;
 }

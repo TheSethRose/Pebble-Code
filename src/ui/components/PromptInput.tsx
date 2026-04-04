@@ -11,6 +11,7 @@ export interface CommandSuggestion {
 
 interface PromptInputProps {
   isProcessing: boolean;
+  disabled?: boolean;
   onSubmit: (value: string) => void;
   onChange?: (value: string) => void;
   inputKey?: number;
@@ -31,6 +32,7 @@ interface PromptInputProps {
  */
 export function PromptInput({
   isProcessing,
+  disabled = false,
   onSubmit,
   onChange,
   inputKey = 0,
@@ -43,7 +45,7 @@ export function PromptInput({
   suggestions = [],
   selectedSuggestionIndex = 0,
 }: PromptInputProps) {
-  const statusLabel = isProcessing ? statusText || "Thinking…" : "Ready";
+  const statusLabel = disabled ? statusText || "Waiting for input…" : isProcessing ? statusText || "Thinking…" : "Ready";
   const promptGlyph = isProcessing ? "…" : "❯";
   const sessionLabel = sessionId ? sessionId.slice(0, 8) : "new session";
   const rule = "─".repeat(Math.max(24, width - 2));
@@ -83,19 +85,23 @@ export function PromptInput({
         <Text color={isProcessing ? "yellow" : "gray"} bold>
           {promptGlyph}{" "}
         </Text>
-        <TextInput
-          key={`${isProcessing ? "busy" : "idle"}-${inputKey}`}
-          defaultValue={defaultValue}
-          onSubmit={onSubmit}
-          onChange={onChange}
-          placeholder={isProcessing ? "working…" : "Ask anything or try /help"}
-        />
+        {disabled ? (
+          <Text dimColor>Interactive prompt is temporarily paused above.</Text>
+        ) : (
+          <TextInput
+            key={`${isProcessing ? "busy" : "idle"}-${inputKey}`}
+            defaultValue={defaultValue}
+            onSubmit={onSubmit}
+            onChange={onChange}
+            placeholder={isProcessing ? "working…" : "Ask anything or try /help"}
+          />
+        )}
       </Box>
 
       <Box justifyContent="space-between" paddingX={1}>
         <Text dimColor color={isProcessing ? "yellow" : undefined}>
           {statusLabel}
-          {!isProcessing ? " · Enter submits · Tab ⇄ sessions" : ""}
+          {!isProcessing && !disabled ? " · Enter submits · Tab ⇄ sessions" : ""}
         </Text>
         <Text dimColor>
           {model} · {sessionLabel} · {IS_MAC ? "⌘" : "Ctrl"}+P help

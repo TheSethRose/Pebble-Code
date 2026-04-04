@@ -92,7 +92,7 @@ export function PermissionPrompt({ pending, width = 60 }: PermissionPromptProps)
   );
 }
 
-function summariseArgs(args: Record<string, unknown>, maxLen: number): string {
+export function summariseArgs(args: Record<string, unknown>, maxLen: number): string {
   const keys = Object.keys(args);
   if (keys.length === 0) return "";
   const parts: string[] = [];

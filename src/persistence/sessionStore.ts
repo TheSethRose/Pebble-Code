@@ -9,6 +9,7 @@ export interface TranscriptMessage {
   role: "user" | "assistant" | "system" | "tool";
   content: string;
   timestamp: string;
+  metadata?: Record<string, unknown>;
   toolCall?: {
     name: string;
     args: Record<string, unknown>;

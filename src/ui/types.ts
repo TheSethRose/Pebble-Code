@@ -6,14 +6,20 @@ export interface DisplayMeta {
   toolName?: string;
   /** Key arguments for a tool call (truncated for display) */
   toolArgs?: Record<string, unknown>;
+  /** Tool output/body rendered beneath the headline when available */
+  toolOutput?: string;
   /** Approval message produced by the tool before execution */
   approvalMessage?: string;
   /** Whether this message represents an error */
   isError?: boolean;
+  /** Optional machine-friendly error message/details */
+  errorMessage?: string;
   /** Turn number within the engine loop */
   turnNumber?: number;
   /** Execution duration in milliseconds */
   durationMs?: number;
+  /** Whether tool output shown to the user was truncated */
+  truncated?: boolean;
 }
 
 export interface DisplayMessage {
@@ -33,6 +39,13 @@ export interface PendingPermission {
   resolve: (decision: PermissionChoice) => void;
 }
 
+export interface PendingQuestion {
+  question: string;
+  options: string[];
+  allowFreeform: boolean;
+  resolve: (answer: string) => void;
+}
+
 export type PermissionChoice =
   | "allow"
   | "deny"
@@ -47,6 +60,8 @@ export interface AppState {
   activeSessionId: string | null;
   /** Non-null when the engine is blocked waiting for a permission decision */
   pendingPermission: PendingPermission | null;
+  /** Non-null when the engine is blocked waiting for an AskUserQuestion response */
+  pendingQuestion: PendingQuestion | null;
 }
 
 export const VISIBLE_MESSAGE_COUNT = 20;

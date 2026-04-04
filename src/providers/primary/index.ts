@@ -106,7 +106,7 @@ export class PrimaryProvider implements Provider {
         return {
           id: tc.id,
           name: fn?.name ?? "unknown",
-          input: fn?.arguments ?? "{}",
+          input: safeParseJson(fn?.arguments ?? "{}"),
         };
       });
 
@@ -155,17 +155,78 @@ export class PrimaryProvider implements Provider {
         max_tokens: options?.maxTokens,
         temperature: options?.temperature,
         stream: true,
+        tools: options?.tools?.map((t) => ({
+          type: "function" as const,
+          function: {
+            name: t.name,
+            description: t.description,
+            parameters: t.inputSchema,
+          },
+        })),
       }, {
         signal: options?.abortSignal,
       });
+
+      const partialToolCalls = new Map<number, {
+        id: string;
+        name: string;
+        arguments: string;
+      }>();
 
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta;
         if (delta?.content) {
           yield { textDelta: delta.content, done: false };
         }
+
+        const deltaToolCalls = (delta as {
+          tool_calls?: Array<{
+            index?: number;
+            id?: string;
+            function?: { name?: string; arguments?: string };
+          }>;
+        } | undefined)?.tool_calls;
+
+        if (deltaToolCalls) {
+          for (const toolCall of deltaToolCalls) {
+            const index = toolCall.index ?? 0;
+            const existing = partialToolCalls.get(index) ?? {
+              id: toolCall.id ?? `tool-${index}`,
+              name: "unknown",
+              arguments: "",
+            };
+
+            if (toolCall.id) {
+              existing.id = toolCall.id;
+            }
+
+            if (toolCall.function?.name) {
+              existing.name = toolCall.function.name;
+            }
+
+            if (toolCall.function?.arguments) {
+              existing.arguments += toolCall.function.arguments;
+            }
+
+            partialToolCalls.set(index, existing);
+          }
+        }
+
         const finishReason = chunk.choices[0]?.finish_reason;
         if (finishReason) {
+          if (finishReason === "tool_calls") {
+            for (const [, toolCall] of [...partialToolCalls.entries()].sort((a, b) => a[0] - b[0])) {
+              yield {
+                toolCall: {
+                  id: toolCall.id,
+                  name: toolCall.name,
+                  input: safeParseJson(toolCall.arguments),
+                },
+                done: false,
+              };
+            }
+          }
+
           yield {
             done: true,
             metadata: {
@@ -209,4 +270,12 @@ export function createPrimaryProvider(options: {
       model: options.model,
     }),
   );
+}
+
+function safeParseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }

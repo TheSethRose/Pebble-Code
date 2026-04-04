@@ -43,7 +43,13 @@ coverage/
 .cache/
 
 # Repomix / AI context dumps
-repomix-output.xml
+repomix-output*
+repomix-*.xml
+repomix-*.json
+repomix-*.md
+repomix-*.txt
+repomix.config.*
+.repomixignore
 
 # Misc
 docs/
@@ -52,6 +58,7 @@ findings.md
 progress.md
 
 # Local agent/runtime artifacts
+.github/
 .agents/
 .pebble/
 .pebble/sessions/

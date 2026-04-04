@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 import type { Tool, ToolContext, ToolResult } from "../Tool.js";
+import { TodoStore, type TodoItem } from "../../persistence/todoStore.js";
 
 const TodoInputSchema = z.object({
   action: z.enum(["add", "update", "list", "remove"]).describe("Action to perform"),
@@ -12,36 +13,27 @@ const TodoInputSchema = z.object({
   status: z.enum(["not-started", "in-progress", "completed"]).optional().describe("Task status (for add/update)"),
 });
 
-interface TodoItem {
-  id: number;
-  title: string;
-  status: "not-started" | "in-progress" | "completed";
-}
-
-let nextId = 1;
-const todos: TodoItem[] = [];
-
 export class TodoTool implements Tool {
   name = "Todo";
   description = "Manage a structured todo list to track progress on multi-step tasks. Use add, update, list, and remove actions.";
 
   inputSchema = TodoInputSchema;
 
-  async execute(input: unknown, _context: ToolContext): Promise<ToolResult> {
+  async execute(input: unknown, context: ToolContext): Promise<ToolResult> {
     const parsed = TodoInputSchema.safeParse(input);
     if (!parsed.success) {
       return { success: false, output: "", error: `Invalid input: ${parsed.error.message}` };
     }
 
     const { action, id, title, status } = parsed.data;
+    const store = new TodoStore(context.cwd);
 
     switch (action) {
       case "add": {
         if (!title) {
           return { success: false, output: "", error: "title is required for add action" };
         }
-        const todo: TodoItem = { id: nextId++, title, status: status ?? "not-started" };
-        todos.push(todo);
+        const todo = store.add(title, status ?? "not-started");
         return {
           success: true,
           output: `Added todo #${todo.id}: ${todo.title}`,
@@ -53,12 +45,10 @@ export class TodoTool implements Tool {
         if (id === undefined) {
           return { success: false, output: "", error: "id is required for update action" };
         }
-        const todo = todos.find((t) => t.id === id);
+        const todo = store.update(id, { title, status });
         if (!todo) {
           return { success: false, output: "", error: `Todo #${id} not found` };
         }
-        if (title) todo.title = title;
-        if (status) todo.status = status;
         return {
           success: true,
           output: `Updated todo #${todo.id}: ${todo.title} (${todo.status})`,
@@ -67,6 +57,7 @@ export class TodoTool implements Tool {
       }
 
       case "list": {
+        const todos = store.list();
         if (todos.length === 0) {
           return { success: true, output: "No todos", data: { todos: [] } };
         }
@@ -83,12 +74,11 @@ export class TodoTool implements Tool {
         if (id === undefined) {
           return { success: false, output: "", error: "id is required for remove action" };
         }
-        const index = todos.findIndex((t) => t.id === id);
-        if (index === -1) {
+        const removed = store.remove(id);
+        if (!removed) {
           return { success: false, output: "", error: `Todo #${id} not found` };
         }
-        const removed = todos.splice(index, 1)[0];
-        return { success: true, output: `Removed todo #${removed!.id}: ${removed!.title}`, data: { removed } };
+        return { success: true, output: `Removed todo #${removed.id}: ${removed.title}`, data: { removed } };
       }
     }
   }

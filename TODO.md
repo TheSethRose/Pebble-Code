@@ -52,7 +52,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - Unit tests pass
 - Core `QueryEngine` multi-turn tool loop exists
 - Primary provider makes real OpenAI-compatible API calls
-- Core tools exist: Bash, FileRead, FileEdit, Glob, Grep, AskUserQuestion, Todo
+- Core tools exist: Bash, FileRead, FileEdit, FileWrite, ApplyPatch, Glob, Grep, AskUserQuestion, Todo
 - Trust/config/instruction loading exists
 - Permission manager exists and is partly wired into engine execution
 - Session store and compaction helpers exist
@@ -63,18 +63,17 @@ But the current repo is still **far from reference breadth**, especially in:
 
 ### What is partial or weak
 
-- REPL has streaming, tool rendering, and permission approval but still lacks full reference UX breadth
-- Headless mode exists but is still thin compared to the docs promise
+- REPL now has real streaming, richer tool/result rendering, and permission approval, but still lacks full reference UX breadth
+- Headless mode exists and supports plain-text / JSON / JSON-stream output, but is still thin compared to the docs promise
 - `/memory` now manages persisted session summaries, but runtime memory injection is still placeholder-heavy
 - Persistence is wired for session storage and resume, but memory loading/injection is still placeholder-heavy
-- Compaction exists but is not triggered automatically by runtime
-- AskUserQuestionTool returns structured prompt data but not a full interactive approval flow
-- Permission approval dialogs exist in the REPL; the engine supports async user resolution via `resolvePermission`
-- Todo state is in-memory only
+- AskUserQuestionTool has a working structured request/response path, but still lacks richer multi-question and preview UX like the reference
+- Permission approval dialogs exist in the REPL; the engine supports async user resolution via `resolvePermission`, including the streaming interactive path
+- Todo state is persisted under `.pebble/`, but it is still much thinner than the reference task/todo/background-work model
 
 ### What is still scaffolding/stub territory
 
-- Extension loading now supports local plugin discovery, but MCP/skills and extension tool/provider wiring remain incomplete
+- Extension loading now supports local plugin discovery plus extension-provided command/tool merging, but MCP/skills and provider wiring remain incomplete
 - MCP/plugin/skill runtime integration is not implemented
 - Hooks/worktrees/background sessions are mostly future-facing scaffolding
 - Tests do not yet cover the real CLI/REPL/headless/extension flows end-to-end
@@ -222,40 +221,28 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] AskUserQuestion tool exists
 - [x] Todo tool exists
 - [x] risky tool approval detection exists for Bash/FileEdit
-- [ ] AskUserQuestion provides a full user-response loop rather than just returning prompt data
-- [ ] Todo state persists across sessions/process restarts
-- [ ] Todo tool is backed by a file-backed store under `.pebble/` rather than process-global memory only
+- [x] AskUserQuestion provides a full user-response loop rather than just returning prompt data
+- [x] Todo state persists across sessions/process restarts
+- [x] Todo tool is backed by a file-backed store under `.pebble/` rather than process-global memory only
+- [ ] tool surface is consolidated around a small number of capability tools instead of proliferating one-off tools for every niche workflow
 - [ ] risky tools share a reusable approval request/result model instead of custom per-tool prompt wiring
 - [ ] pending tool approvals persist with session IDs so interrupted runs can resume or fail them deterministically
 - [ ] tool approval UX is surfaced properly in the interactive UI
-- [ ] FileWrite tool is implemented (file creation, distinct from FileEdit)
-- [ ] ApplyPatch tool is implemented (unified diff patch application)
-- [ ] WebFetch tool is implemented (HTTP fetch with pre-approved domains)
-- [ ] WebSearch tool is implemented (web search integration)
-- [ ] Agent tool is implemented (sub-agent spawning and orchestration)
-- [ ] SendMessage tool is implemented (cross-agent messaging)
-- [ ] LSP tool is implemented (language server protocol queries)
-- [ ] NotebookEdit tool is implemented (Jupyter notebook cell editing)
-- [ ] Config tool is implemented (runtime config read/write from agent)
-- [ ] EnterPlanMode / ExitPlanMode tools are implemented (plan mode toggling)
-- [ ] EnterWorktree / ExitWorktree tools are implemented (worktree management)
-- [ ] MCP tools are implemented (MCPTool, McpAuthTool, ListMcpResources, ReadMcpResource)
-- [ ] Skill tool is implemented (skill invocation from agent context)
-- [ ] Brief tool is implemented (attachment/upload handling)
-- [ ] Snip tool is implemented (content snipping/extraction)
-- [ ] Sleep tool is implemented (agent delay/wait)
-- [ ] REPL tool primitives are implemented (primitive inline evaluation tools)
-- [ ] ScheduleCron tools are implemented (CronCreate, CronDelete, CronList)
-- [ ] Task management tools are implemented (TaskCreate, TaskGet, TaskList, TaskOutput, TaskStop, TaskUpdate)
-- [ ] Team management tools are implemented (TeamCreate, TeamDelete)
-- [ ] TodoWrite tool is implemented (structured todo writing, distinct from in-memory Todo tool)
-- [ ] ToolSearch tool is implemented (dynamic tool discovery by the agent)
-- [ ] RemoteTrigger tool is implemented (remote event/webhook trigger)
-- [ ] VerifyPlanExecution tool is implemented (plan execution verification)
-- [ ] SyntheticOutput tool is implemented (injected synthetic tool responses)
-- [ ] Workflow tool is implemented (workflow orchestration primitives)
-- [ ] PowerShell tool is implemented (Windows shell support)
-- [ ] Tungsten tool is implemented (live monitoring integration)
+- [x] FileWrite tool is implemented (file creation, distinct from FileEdit)
+- [x] ApplyPatch tool is implemented (unified diff patch application)
+- [ ] tool registry supports richer metadata (capability categories, aliases, qualified source names, model-specific definitions, and compatibility mappings from legacy/reference tool names)
+- [ ] tool execution emits richer structured metadata (tool call IDs, durations, success/failure, resumable task references, and prompt/debug summaries) for UI, tracing, and headless reporting
+- [ ] `WorkspaceRead` tool is implemented as the consolidated read/inspect surface for directory listing, file reading, glob/grep/project-structure queries, diagnostics/git/test/LSP inspection, image/content summarisation, and dynamic tool discovery
+- [ ] `WorkspaceEdit` tool is implemented as the consolidated local mutation surface for create-directory, create-file, edit/replace, apply-patch, config mutation, brief/snip extraction, and other deterministic workspace edits
+- [ ] `Shell` tool is implemented as the consolidated execution surface for Bash/PowerShell commands, REPL-style inline evaluation, and controlled wait/poll behaviors
+- [ ] `UserInteraction` tool is implemented as the consolidated ask/approve surface for clarifying questions, confirmation prompts, and reusable permission request/result flows
+- [ ] `Memory` tool is implemented as the consolidated persistence surface for memories, todos/todo-write, lightweight session state, and related file-backed agent notes
+- [ ] `Web` tool is implemented as the consolidated remote-content surface for web fetch, web search, external repo/doc retrieval, batched URLs, ranked snippets, and domain controls
+- [ ] `Notebook` tool is implemented as the consolidated notebook workflow surface (`CreateNewJupyterNotebook`, `NotebookSummary`, `RunNotebookCell`, `ReadCellOutput`, `EditNotebook`)
+- [ ] `Orchestrate` tool is implemented as the consolidated coordination surface for agent/subagent spawning, search/execution wrappers, cross-agent messaging, tasks, cron, teams, workflows, verification, plan/worktree transitions, and remote triggers
+- [ ] `Integration` tool is implemented as the consolidated external-system surface for MCP auth/resources/tools, skills, Tungsten/live-monitoring hooks, and other pluggable runtime integrations
+- [ ] compatibility aliases exist so legacy/reference concepts still work through the consolidated set (for example: `ListDirectory` → `WorkspaceRead`, `WebFetch`/`WebSearch` → `Web`, `Agent`/`SearchSubagent`/`ExecutionSubagent` → `Orchestrate`)
+- [ ] low-level concrete tool implementations are hidden behind capability tools unless a separate permission boundary or execution model truly requires user-visible separation
 
 ## UI
 
@@ -294,7 +281,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - [ ] skill/plugin/MCP discovery has tests for manifest typing, load success, and isolated failure reporting
 - [ ] hook firing order has tests across session start, turn boundaries, tool execution, and runtime error paths
 - [ ] memory injection and todo persistence have tests covering restart/resume behavior
-- [ ] streaming/approval UI renderer selection has tests for typed message and prompt states
+- [x] streaming/approval UI renderer selection has tests for typed message and prompt states
 - [x] extension loading/isolation has tests
 - [ ] engine/tool flows have end-to-end tests
 
@@ -313,8 +300,13 @@ These are the next honest priority slices if we want the repo to materially clos
 Concrete reusable slices worth landing inside those priorities:
 
 - [ ] land shared approval flow primitives before expanding risky-tool UX further
+- [ ] land the capability-tool boundaries and alias strategy before adding any new reference-style tool names
+- [ ] land registry metadata + tool search primitives before adding many more niche tools
+- [ ] land directory/diagnostic helper tools before exotic background-agent workflows
+- [ ] land notebook tools as a coherent cluster instead of a one-off edit-only primitive
 - [ ] land typed transcript/message renderer primitives before adding more event/message surface area
 - [ ] land skill + MCP discovery/loading primitives before expanding extension surface area further
+- [ ] land search/execution subagents as thin wrappers once generic agent/task plumbing exists
 - [ ] land persisted todo + memory injection primitives before deeper resume/background workflows
 - [ ] land provider fallback chain primitives together with failure-path tests
 

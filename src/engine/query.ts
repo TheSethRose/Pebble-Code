@@ -10,6 +10,7 @@ import type { Tool } from "../tools/Tool.js";
 import type { Message, StreamEvent } from "./types.js";
 import { QueryEngine } from "./QueryEngine.js";
 import type { PermissionManager } from "../runtime/permissionManager.js";
+import type { AskUserQuestionRequest } from "./QueryEngine.js";
 
 export interface QueryOptions {
   provider: Provider;
@@ -20,6 +21,7 @@ export interface QueryOptions {
   onEvent?: (event: StreamEvent) => void;
   permissionManager?: PermissionManager;
   cwd?: string;
+  resolveQuestion?: (request: AskUserQuestionRequest) => Promise<string>;
 }
 
 /**
@@ -38,6 +40,7 @@ export async function query(
     onEvent: options.onEvent,
     permissionManager: options.permissionManager,
     cwd: options.cwd,
+    resolveQuestion: options.resolveQuestion,
   });
 
   return engine.process(messages);
@@ -56,8 +59,10 @@ export async function *streamQuery(
     systemPrompt: options.systemPrompt,
     maxTurns: options.maxTurns,
     signal: options.signal,
+    onEvent: options.onEvent,
     permissionManager: options.permissionManager,
     cwd: options.cwd,
+    resolveQuestion: options.resolveQuestion,
   });
 
   yield* engine.stream(messages);

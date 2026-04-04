@@ -6,6 +6,8 @@ import type { Tool } from "./Tool.js";
 import { BashTool } from "./BashTool/index.js";
 import { FileReadTool } from "./FileReadTool/index.js";
 import { FileEditTool } from "./FileEditTool/index.js";
+import { FileWriteTool } from "./FileWriteTool/index.js";
+import { ApplyPatchTool } from "./ApplyPatchTool/index.js";
 import { GlobTool } from "./GlobTool/index.js";
 import { GrepTool } from "./GrepTool/index.js";
 import { AskUserQuestionTool } from "./AskUserQuestionTool/index.js";
@@ -19,6 +21,8 @@ export function createMvpTools(extensionTools: Tool[] = []): Tool[] {
     new BashTool(),
     new FileReadTool(),
     new FileEditTool(),
+    new FileWriteTool(),
+    new ApplyPatchTool(),
     new GlobTool(),
     new GrepTool(),
     new AskUserQuestionTool(),
