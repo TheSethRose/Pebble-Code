@@ -1,5 +1,9 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
+import {
+  OPENROUTER_DEFAULT_MODEL,
+  OPENROUTER_PROVIDER_ID,
+} from "../constants/openrouter.js";
 import { buildTrustConfig } from "./trust";
 import type { TrustConfig, PermissionMode } from "./permissions";
 import { loadRepositoryInstructions, type InstructionFile } from "./instructions";
@@ -11,6 +15,8 @@ export interface Settings {
   permissionMode: PermissionMode;
   model?: string;
   provider?: string;
+  apiKey?: string;
+  baseUrl?: string;
   maxTurns?: number;
   telemetryEnabled: boolean;
   compactThreshold?: number;
@@ -18,6 +24,8 @@ export interface Settings {
 
 const DEFAULT_SETTINGS: Settings = {
   permissionMode: "always-ask",
+  provider: OPENROUTER_PROVIDER_ID,
+  model: OPENROUTER_DEFAULT_MODEL,
   telemetryEnabled: false,
   maxTurns: 50,
 };
@@ -49,6 +57,19 @@ export function loadSettings(configPath: string): Settings {
   }
 }
 
+export function getConfigDir(cwd: string): string {
+  const trust = buildTrustConfig(cwd);
+  return join(trust.projectRoot, ".pebble");
+}
+
+export function getSettingsPath(cwd: string): string {
+  return join(getConfigDir(cwd), "settings.json");
+}
+
+export function loadSettingsForCwd(cwd: string): Settings {
+  return loadSettings(getSettingsPath(cwd));
+}
+
 /**
  * Save settings to a JSON file.
  */
@@ -60,13 +81,18 @@ export function saveSettings(configPath: string, settings: Settings): void {
   writeFileSync(configPath, JSON.stringify(settings, null, 2), "utf-8");
 }
 
+export function saveSettingsForCwd(cwd: string, settings: Settings): string {
+  const settingsPath = getSettingsPath(cwd);
+  saveSettings(settingsPath, settings);
+  return settingsPath;
+}
+
 /**
  * Build the full runtime configuration.
  */
 export function buildRuntimeConfig(cwd: string): RuntimeConfig {
   const trust = buildTrustConfig(cwd);
-  const configDir = join(trust.projectRoot, ".pebble");
-  const settings = loadSettings(join(configDir, "settings.json"));
+  const settings = loadSettings(getSettingsPath(trust.projectRoot));
   const instructions =
     trust.instructionsLoaded
       ? loadRepositoryInstructions(trust.projectRoot)

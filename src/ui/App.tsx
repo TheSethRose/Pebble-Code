@@ -6,8 +6,11 @@ import { registerBuiltinCommands } from "../commands/builtins";
 import type { CommandContext } from "../commands/types";
 import { QueryEngine } from "../engine/QueryEngine";
 import { createPrimaryProvider } from "../providers/primary";
+import { resolveProviderConfig } from "../providers/config";
 import { createMvpTools } from "../tools/orchestration";
 import { PermissionManager } from "../runtime/permissionManager";
+import { getSettingsPath, loadSettingsForCwd } from "../runtime/config";
+import { Settings } from "./Settings.js";
 import type { StreamEvent } from "../engine/types";
 import { createOrResumeSession, engineMessageToTranscriptMessage, transcriptToConversation, transcriptToDisplayMessages } from "../persistence/runtimeSessions";
 import type { SessionStore } from "../persistence/sessionStore";
@@ -35,6 +38,42 @@ interface AppState {
 }
 
 const VISIBLE_MESSAGE_COUNT = 12;
+
+function loadCommandConfig(cwd: string, currentConfig: Record<string, unknown>): Record<string, unknown> {
+  const settings = loadSettingsForCwd(cwd);
+  const resolved = resolveProviderConfig(settings);
+
+  return {
+    ...currentConfig,
+    provider: resolved.providerId,
+    providerLabel: resolved.providerLabel,
+    model: resolved.model,
+    baseUrl: resolved.baseUrl,
+    apiKeyConfigured: resolved.apiKeyConfigured,
+    apiKeySource: resolved.apiKeySource,
+    settingsPath: getSettingsPath(cwd),
+  };
+}
+
+function redactCommandEcho(name: string, args: string): string {
+  const trimmed = args.trim();
+  if (!trimmed) {
+    return `/${name}`;
+  }
+
+  if (name === "login") {
+    const tokens = trimmed.split(/\s+/);
+    return tokens.length > 1
+      ? `/${name} ${tokens[0]} [redacted]`
+      : `/${name} [redacted]`;
+  }
+
+  if (name === "config" && /^api-key\b/i.test(trimmed)) {
+    return `/${name} api-key [redacted]`;
+  }
+
+  return `/${name} ${trimmed}`;
+}
 
 function truncateSessionId(id: string): string {
   return id.length > 18 ? `${id.slice(0, 18)}…` : id;
@@ -89,13 +128,17 @@ function StatusPill({ label, value, color = "gray" }: { label: string; value: st
 }
 
 function HeaderSurface({
-  context,
+  cwd,
+  trustLevel,
+  config,
   activeSessionId,
   recentSessions,
   isProcessing,
   statusText,
 }: {
-  context: CommandContext;
+  cwd: string;
+  trustLevel?: string;
+  config: Record<string, unknown>;
   activeSessionId: string | null;
   recentSessions: RecentSessionSummary[];
   isProcessing: boolean;
@@ -108,11 +151,12 @@ function HeaderSurface({
           <Text bold color="cyan">Pebble Code</Text>
           <Text color={isProcessing ? "yellow" : "green"}>{isProcessing ? "Working" : "Ready"}</Text>
         </Box>
-        <Text color="gray">{context.cwd}</Text>
+        <Text color="gray">{cwd}</Text>
         <Box marginTop={1} flexWrap="wrap">
-          <StatusPill label="Trust" value={context.trustLevel ?? "unknown"} color={context.trustLevel === "trusted" ? "green" : "yellow"} />
-          <StatusPill label="Permissions" value={String(context.config.permissionMode ?? "unknown")} color="yellow" />
-          <StatusPill label="Model" value={String(context.config.model ?? "default")} color="magenta" />
+          <StatusPill label="Trust" value={trustLevel ?? "unknown"} color={trustLevel === "trusted" ? "green" : "yellow"} />
+          <StatusPill label="Permissions" value={String(config.permissionMode ?? "unknown")} color="yellow" />
+          <StatusPill label="Provider" value={String(config.providerLabel ?? config.provider ?? "default")} color="cyan" />
+          <StatusPill label="Model" value={String(config.model ?? "default")} color="magenta" />
           <StatusPill label="Session" value={activeSessionId ? truncateSessionId(activeSessionId) : "new"} color="blue" />
         </Box>
         <Box marginTop={1}>
@@ -230,11 +274,18 @@ function PromptComposer({
       <Box marginTop={1}>
         <Text color="gray">{statusText}</Text>
       </Box>
+      <Box marginTop={1}>
+        <Text color="gray">/help • /login • /config • /resume • /review • /memory</Text>
+      </Box>
     </Box>
   );
 }
 
 export function App({ context }: { context: CommandContext }) {
+  const [runtimeConfig, setRuntimeConfig] = React.useState<Record<string, unknown>>(() =>
+    loadCommandConfig(context.cwd, context.config),
+  );
+  const [showSettings, setShowSettings] = React.useState(false);
   const [state, setState] = React.useState<AppState>({
     messages: [],
     isProcessing: false,
@@ -257,7 +308,12 @@ export function App({ context }: { context: CommandContext }) {
 
   // Initialize engine on mount
   React.useEffect(() => {
-    const provider = createPrimaryProvider();
+    const settings = loadSettingsForCwd(context.cwd);
+    const provider = createPrimaryProvider({
+      settings,
+      provider: typeof runtimeConfig.provider === "string" ? runtimeConfig.provider : undefined,
+      model: typeof runtimeConfig.model === "string" ? runtimeConfig.model : undefined,
+    });
     const tools = createMvpTools();
     const permissionManager = context.permissionManager ?? new PermissionManager({
       mode: "always-ask",
@@ -331,7 +387,7 @@ export function App({ context }: { context: CommandContext }) {
         }
       },
     });
-  }, [context.cwd, context.permissionManager]);
+  }, [context.cwd, context.permissionManager, runtimeConfig.model, runtimeConfig.provider]);
 
   React.useEffect(() => {
     if (!sessionStore) {
@@ -361,9 +417,10 @@ export function App({ context }: { context: CommandContext }) {
 
   const buildCommandContext = React.useCallback((): CommandContext => ({
     ...context,
+    config: runtimeConfig,
     sessionStore,
     sessionId: sessionIdRef.current,
-  }), [context, sessionStore]);
+  }), [context, runtimeConfig, sessionStore]);
 
   const loadSession = React.useCallback((sessionId?: string | null) => {
     if (!sessionStore) {
@@ -411,11 +468,21 @@ export function App({ context }: { context: CommandContext }) {
             loadSession(typeof result.data.sessionId === "string" ? result.data.sessionId : null);
           }
 
+          if (result.data?.action === "config-updated") {
+            setRuntimeConfig(loadCommandConfig(context.cwd, runtimeConfig));
+          }
+
+          // If the command is /config, show the settings UI instead of text output
+          if (parsed.name === "config") {
+            setShowSettings(true);
+            return;
+          }
+
           setState((prev) => ({
             ...prev,
             messages: [
               ...prev.messages,
-              { role: "command", content: `/${parsed.name} ${parsed.args}` },
+              { role: "command", content: redactCommandEcho(parsed.name, parsed.args) },
               { role: "output", content: result.output },
             ],
             exitCode: result.exit ? 0 : prev.exitCode,
@@ -438,9 +505,9 @@ export function App({ context }: { context: CommandContext }) {
           messages: [
             ...prev.messages,
             { role: "user", content: trimmed },
-            { role: "assistant", content: "Engine not initialized. Set PEBBLE_API_KEY to enable." },
+            { role: "assistant", content: "Engine not initialized. Restart Pebble and try again." },
           ],
-          error: "Engine not initialized — set PEBBLE_API_KEY to enable.",
+          error: "Engine not initialized.",
         }));
         return;
       }
@@ -540,29 +607,44 @@ export function App({ context }: { context: CommandContext }) {
 
   return (
     <Box flexDirection="column" padding={1}>
-      <HeaderSurface
-        context={context}
-        activeSessionId={state.activeSessionId}
-        recentSessions={state.recentSessions}
-        isProcessing={state.isProcessing}
-        statusText={state.statusText}
-      />
+      {showSettings ? (
+        <Settings
+          context={buildCommandContext()}
+          onClose={() => {
+            setShowSettings(false);
+            setRuntimeConfig(loadCommandConfig(context.cwd, runtimeConfig));
+          }}
+          defaultTab="config"
+        />
+      ) : (
+        <>
+          <HeaderSurface
+            cwd={context.cwd}
+            trustLevel={context.trustLevel}
+            config={runtimeConfig}
+            activeSessionId={state.activeSessionId}
+            recentSessions={state.recentSessions}
+            isProcessing={state.isProcessing}
+            statusText={state.statusText}
+          />
 
-      {state.error && (
-        <Box marginBottom={1}>
-          <Box borderStyle="round" borderColor="yellow" paddingX={1} paddingY={0}>
-            <Text color="yellow">⚠ {state.error}</Text>
-          </Box>
-        </Box>
+          {state.error && (
+            <Box marginBottom={1}>
+              <Box borderStyle="round" borderColor="yellow" paddingX={1} paddingY={0}>
+                <Text color="yellow">⚠ {state.error}</Text>
+              </Box>
+            </Box>
+          )}
+
+          <TranscriptSurface messages={state.messages} isProcessing={state.isProcessing} />
+
+          <PromptComposer
+            isProcessing={state.isProcessing}
+            onSubmit={handleSubmit}
+            statusText={state.statusText}
+          />
+        </>
       )}
-
-      <TranscriptSurface messages={state.messages} isProcessing={state.isProcessing} />
-
-      <PromptComposer
-        isProcessing={state.isProcessing}
-        onSubmit={handleSubmit}
-        statusText={state.statusText}
-      />
     </Box>
   );
 }

@@ -12,6 +12,8 @@ import { buildRuntimeConfig } from "./config.js";
 import { PermissionManager } from "./permissionManager.js";
 import { loadRepositoryInstructions, formatInstructions } from "./instructions.js";
 import { createProjectSessionStore, createOrResumeSession, transcriptToConversation, engineMessageToTranscriptMessage } from "../persistence/runtimeSessions.js";
+import { getSettingsPath } from "./config.js";
+import { resolveProviderConfig } from "../providers/config.js";
 
 export interface RuntimeOptions {
   /** Run in headless/print mode */
@@ -41,8 +43,13 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
 
   // Phase 2: Initialize config layer
   const config = buildRuntimeConfig(cwd);
+  const resolvedProvider = resolveProviderConfig(config.settings, {
+    provider: options.provider,
+    model: options.model,
+  });
   console.error(`Trust level: ${config.trust.level}`);
   console.error(`Project root: ${config.trust.projectRoot}`);
+  console.error(`Provider: ${resolvedProvider.providerLabel} (${resolvedProvider.model})`);
 
   // Phase 3: Initialize trust system
   const permissionManager = new PermissionManager({
@@ -87,7 +94,11 @@ async function runHeadless(
   const { createMvpTools } = await import("../tools/orchestration.js");
   const { query } = await import("../engine/query.js");
 
-  const provider = createPrimaryProvider(options.model);
+  const provider = createPrimaryProvider({
+    settings: config.settings,
+    provider: options.provider,
+    model: options.model,
+  });
   const tools = createMvpTools();
   const sessionStore = createProjectSessionStore(config.cwd);
   const session = createOrResumeSession(sessionStore, options.resume);
@@ -162,6 +173,11 @@ async function runInteractive(
   permissionManager: PermissionManager,
   instructions: string,
 ): Promise<number> {
+  const resolvedProvider = resolveProviderConfig(config.settings, {
+    provider: options.provider,
+    model: options.model,
+  });
+
   console.error("Interactive mode: starting REPL...");
   console.error(`Trust level: ${config.trust.level}`);
   console.error(`Permission mode: ${config.settings.permissionMode}`);
@@ -176,7 +192,13 @@ async function runInteractive(
     config: {
       trust: config.trust.level,
       permissionMode: config.settings.permissionMode,
-      model: config.settings.model,
+      provider: resolvedProvider.providerId,
+      providerLabel: resolvedProvider.providerLabel,
+      model: resolvedProvider.model,
+      baseUrl: resolvedProvider.baseUrl,
+      apiKeyConfigured: resolvedProvider.apiKeyConfigured,
+      apiKeySource: resolvedProvider.apiKeySource,
+      settingsPath: getSettingsPath(config.cwd),
       compactThreshold: config.settings.compactThreshold,
     },
     sessionStore: createProjectSessionStore(config.cwd),

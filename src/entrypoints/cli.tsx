@@ -108,6 +108,7 @@ SLASH COMMANDS (interactive mode)
   /help               Show available commands
   /clear              Clear the current session
   /exit               Exit the REPL
+  /login              Save provider credentials
   /model              Change the model
   /config             Show current configuration
   /resume             Resume a previous session
@@ -120,5 +121,6 @@ EXAMPLES
   pebble --headless --prompt "fix the bug in src/index.ts"
   pebble --resume abc123
   pebble --model claude-sonnet-4-20250514
+  pebble --provider openrouter
 `);
 }

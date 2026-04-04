@@ -1,8 +1,22 @@
 import type { Command, CommandContext, CommandResult } from "./types";
 import { CommandRegistry } from "./registry";
+import {
+  isSupportedProvider,
+  normalizeProviderId,
+  OPENROUTER_DEFAULT_BASE_URL,
+  OPENROUTER_DEFAULT_MODEL,
+  OPENROUTER_PROVIDER_ID,
+} from "../constants/openrouter.js";
 import { estimateTokens } from "../persistence/compaction.js";
 import { createProjectSessionStore } from "../persistence/runtimeSessions.js";
+import {
+  getSettingsPath,
+  loadSettingsForCwd,
+  saveSettingsForCwd,
+  type Settings,
+} from "../runtime/config.js";
 import { findProjectRoot } from "../runtime/trust.js";
+import { resolveProviderConfig } from "../providers/config.js";
 
 /**
  * Register all built-in commands.
@@ -11,6 +25,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register(createHelpCommand(registry));
   registry.register(createClearCommand());
   registry.register(createExitCommand());
+  registry.register(createLoginCommand());
   registry.register(createConfigCommand());
   registry.register(createPermissionsCommand());
   registry.register(createModelCommand());
@@ -35,6 +50,51 @@ function getActiveSession(ctx: CommandContext, requestedId?: string) {
   }
 
   return store.getLatestSession();
+}
+
+function loadProjectSettings(ctx: CommandContext): Settings {
+  return loadSettingsForCwd(ctx.cwd);
+}
+
+function saveProjectSettings(ctx: CommandContext, settings: Settings): string {
+  return saveSettingsForCwd(ctx.cwd, settings);
+}
+
+function ensureProviderDefaults(settings: Settings): Settings {
+  const provider = normalizeProviderId(settings.provider);
+  if (provider === OPENROUTER_PROVIDER_ID) {
+    return {
+      ...settings,
+      provider,
+      model: settings.model?.trim() || OPENROUTER_DEFAULT_MODEL,
+      baseUrl: settings.baseUrl?.trim() || OPENROUTER_DEFAULT_BASE_URL,
+    };
+  }
+
+  return {
+    ...settings,
+    provider: OPENROUTER_PROVIDER_ID,
+    model: settings.model?.trim() || OPENROUTER_DEFAULT_MODEL,
+    baseUrl: settings.baseUrl?.trim() || OPENROUTER_DEFAULT_BASE_URL,
+  };
+}
+
+function getCurrentProviderId(ctx: CommandContext): string {
+  const provider = typeof ctx.config.provider === "string"
+    ? ctx.config.provider
+    : loadProjectSettings(ctx).provider;
+  return normalizeProviderId(provider);
+}
+
+function createConfigUpdatedResult(output: string, settingsPath: string): CommandResult {
+  return {
+    success: true,
+    output,
+    data: {
+      action: "config-updated",
+      settingsPath,
+    },
+  };
 }
 
 function createHelpCommand(registry: CommandRegistry): Command {
@@ -63,13 +123,12 @@ function createClearCommand(): Command {
   return {
     name: "clear",
     aliases: ["cls"],
-    description: "Clear the screen",
+    description: "Clear the conversation",
     type: "local",
     usage: "/clear",
     modes: ["interactive"],
     execute: (_args, _ctx): CommandResult => {
-      process.stdout.write("\x1Bc");
-      return { success: true, output: "" };
+      return { success: true, output: "", data: { action: "clear" } };
     },
   };
 }
@@ -92,20 +151,64 @@ function createConfigCommand(): Command {
   return {
     name: "config",
     aliases: ["settings"],
-    description: "Show current configuration",
-    type: "local",
+    description: "Open settings menu",
+    type: "ui",
     usage: "/config",
     modes: ["interactive"],
-    execute: (_args, ctx): CommandResult => {
-      const lines = [
-        `Working directory: ${ctx.cwd}`,
-        `Headless: ${ctx.headless}`,
-        `Config: ${JSON.stringify(ctx.config, null, 2)}`,
-        `Session ID: ${ctx.sessionId ?? "none"}`,
-        `Trust level: ${ctx.trustLevel ?? "unknown"}`,
-        `Extension commands: ${ctx.extensionCommandNames?.length ?? 0}`,
-      ];
-      return { success: true, output: lines.join("\n") };
+    execute: (_args, _ctx): CommandResult => {
+      return { success: true, output: "" };
+    },
+  };
+}
+
+function createLoginCommand(): Command {
+  return {
+    name: "login",
+    aliases: ["auth"],
+    description: "Save an API key for the current provider",
+    type: "local",
+    usage: "/login [openrouter] <api-key>",
+    modes: ["interactive"],
+    execute: (args, ctx): CommandResult => {
+      const trimmed = args.trim();
+      if (!trimmed) {
+        return {
+          success: true,
+          output: [
+            "Usage:",
+            "  /login <api-key>",
+            "  /login openrouter <api-key>",
+            "",
+            `Pebble defaults to ${OPENROUTER_PROVIDER_ID}. The key is stored in ${getSettingsPath(ctx.cwd)}.`,
+          ].join("\n"),
+        };
+      }
+
+      const tokens = trimmed.split(/\s+/);
+      const explicitProvider = tokens.length > 1 ? normalizeProviderId(tokens[0]) : getCurrentProviderId(ctx);
+      const apiKey = tokens.length > 1 ? tokens.slice(1).join(" ").trim() : tokens[0] ?? "";
+
+      if (!isSupportedProvider(explicitProvider)) {
+        return {
+          success: true,
+          output: `Unsupported provider: ${explicitProvider}. Currently supported: openrouter.`,
+        };
+      }
+
+      if (!apiKey) {
+        return { success: true, output: "Usage: /login [openrouter] <api-key>" };
+      }
+
+      const nextSettings = ensureProviderDefaults({
+        ...loadProjectSettings(ctx),
+        provider: explicitProvider,
+        apiKey,
+      });
+      const settingsPath = saveProjectSettings(ctx, nextSettings);
+      return createConfigUpdatedResult(
+        `Saved ${nextSettings.provider} credentials to ${settingsPath}.`,
+        settingsPath,
+      );
     },
   };
 }
@@ -141,13 +244,22 @@ function createModelCommand(): Command {
     usage: "/model [model-name]",
     modes: ["interactive"],
     execute: (args, ctx): CommandResult => {
-      if (args) {
-        (ctx.config as Record<string, unknown>).model = args;
-        return { success: true, output: `Model set to: ${args}` };
+      if (args.trim()) {
+        const settings = ensureProviderDefaults({
+          ...loadProjectSettings(ctx),
+          model: args.trim(),
+        });
+        const settingsPath = saveProjectSettings(ctx, settings);
+        return createConfigUpdatedResult(
+          `Model set to ${args.trim()}. Saved to ${settingsPath}.`,
+          settingsPath,
+        );
       }
+
+      const resolved = resolveProviderConfig(loadProjectSettings(ctx));
       return {
         success: true,
-        output: `Current model: ${(ctx.config as Record<string, unknown>).model ?? "not set"}`,
+        output: `Current model: ${resolved.model}`,
       };
     },
   };

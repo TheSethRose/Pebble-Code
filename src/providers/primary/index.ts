@@ -7,23 +7,33 @@ import type {
 } from "../types.js";
 import type { Message } from "../../engine/types.js";
 import OpenAI from "openai";
+import {
+  getProviderNotConfiguredMessage,
+  resolveProviderConfig,
+  type ResolvedProviderConfig,
+} from "../config.js";
+import type { Settings } from "../../runtime/config.js";
 
 /**
  * Primary provider adapter.
  * Connects to an OpenAI-compatible LLM API.
  */
 export class PrimaryProvider implements Provider {
-  readonly id = "primary";
-  readonly name = "Primary Provider";
+  readonly id: string;
+  readonly name: string;
   readonly model: string;
   private client: OpenAI | null = null;
+  private readonly config: ResolvedProviderConfig;
 
-  constructor(options: { apiKey: string; model: string; baseUrl?: string }) {
-    this.model = options.model;
-    if (options.apiKey.length > 0) {
+  constructor(config: ResolvedProviderConfig) {
+    this.config = config;
+    this.id = config.providerId;
+    this.name = config.providerLabel;
+    this.model = config.model;
+    if (config.apiKey.length > 0) {
       this.client = new OpenAI({
-        apiKey: options.apiKey,
-        baseURL: options.baseUrl,
+        apiKey: config.apiKey,
+        baseURL: config.baseUrl,
       });
     }
   }
@@ -46,7 +56,7 @@ export class PrimaryProvider implements Provider {
   ): Promise<ProviderResponse> {
     if (!this.client) {
       return {
-        text: "Provider not configured — set PEBBLE_API_KEY to enable.",
+        text: getProviderNotConfiguredMessage(this.config),
         toolCalls: [],
         stopReason: "end_turn",
         usage: { inputTokens: 0, outputTokens: 0 },
@@ -125,7 +135,7 @@ export class PrimaryProvider implements Provider {
   ): AsyncIterable<StreamChunk> {
     if (!this.client) {
       yield {
-        textDelta: "Provider not configured — set PEBBLE_API_KEY to enable.",
+        textDelta: getProviderNotConfiguredMessage(this.config),
         done: true,
       };
       return;
@@ -175,14 +185,15 @@ export class PrimaryProvider implements Provider {
 /**
  * Create a provider from environment/config.
  */
-export function createPrimaryProvider(model?: string): PrimaryProvider {
-  const apiKey = process.env.PEBBLE_API_KEY ?? "";
-  const modelName = model ?? process.env.PEBBLE_MODEL ?? "gpt-4o";
-  const baseUrl = process.env.PEBBLE_API_BASE;
-
-  return new PrimaryProvider({
-    apiKey,
-    model: modelName,
-    baseUrl,
-  });
+export function createPrimaryProvider(options: {
+  settings?: Partial<Settings>;
+  provider?: string;
+  model?: string;
+} = {}): PrimaryProvider {
+  return new PrimaryProvider(
+    resolveProviderConfig(options.settings, {
+      provider: options.provider,
+      model: options.model,
+    }),
+  );
 }

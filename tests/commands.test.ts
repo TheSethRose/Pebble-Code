@@ -1,10 +1,12 @@
 import { test, expect, describe } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { CommandRegistry } from "../src/commands/registry";
 import { registerBuiltinCommands } from "../src/commands/builtins";
 import { SessionStore } from "../src/persistence/sessionStore";
 import type { CommandContext } from "../src/commands/types";
+import { getSettingsPath } from "../src/runtime/config";
 
 function createCommandContext(overrides: Partial<CommandContext> = {}): CommandContext {
   return {
@@ -16,6 +18,12 @@ function createCommandContext(overrides: Partial<CommandContext> = {}): CommandC
   };
 }
 
+function createTempProjectDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: prefix }, null, 2), "utf-8");
+  return dir;
+}
+
 describe("Command Registry", () => {
   test("registers and finds commands", () => {
     const registry = new CommandRegistry();
@@ -25,6 +33,7 @@ describe("Command Registry", () => {
     expect(registry.find("exit")).toBeDefined();
     expect(registry.find("clear")).toBeDefined();
     expect(registry.find("config")).toBeDefined();
+    expect(registry.find("login")).toBeDefined();
     expect(registry.find("model")).toBeDefined();
     expect(registry.find("resume")).toBeDefined();
     expect(registry.find("memory")).toBeDefined();
@@ -153,5 +162,57 @@ describe("Command Registry", () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain("Session memory: memory-test");
     expect(result.output).toContain("Estimated tokens:");
+  });
+
+  test("/login persists an OpenRouter API key in project settings", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-login-");
+
+    const result = await registry.execute("login", "openrouter sk-or-v1-test-key", createCommandContext({
+      cwd: tempDir,
+      config: { provider: "openrouter" },
+    }));
+
+    expect(result.success).toBe(true);
+    const settingsPath = getSettingsPath(tempDir);
+    expect(existsSync(settingsPath)).toBe(true);
+
+    const saved = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
+      provider: string;
+      apiKey: string;
+      model: string;
+      baseUrl: string;
+    };
+
+    expect(saved.provider).toBe("openrouter");
+    expect(saved.apiKey).toBe("sk-or-v1-test-key");
+    expect(saved.model).toBe("openrouter/auto");
+    expect(saved.baseUrl).toBe("https://openrouter.ai/api/v1");
+  });
+
+  test("/config opens the settings UI", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-config-");
+    const previousOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
+    const previousPebbleApiKey = process.env.PEBBLE_API_KEY;
+
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.PEBBLE_API_KEY;
+
+    const result = await registry.execute("config", "", createCommandContext({
+      cwd: tempDir,
+      config: { provider: "openrouter" },
+    }));
+
+    process.env.OPENROUTER_API_KEY = previousOpenRouterApiKey;
+    process.env.PEBBLE_API_KEY = previousPebbleApiKey;
+
+    // /config is now a UI command that opens the Settings component, so it returns empty output
+    expect(result.success).toBe(true);
+    expect(result.output).toBe("");
   });
 });

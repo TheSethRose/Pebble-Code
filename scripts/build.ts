@@ -11,8 +11,9 @@
  */
 
 import { $ } from "bun";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const ROOT = import.meta.dir + "/..";
 const DIST = join(ROOT, "dist");
@@ -135,12 +136,33 @@ async function build() {
 type SpawnResult = ReturnType<typeof Bun.spawnSync>;
 
 function runBundledCli(...args: string[]): SpawnResult {
+  const smokeCwd = createSmokeProjectDir();
+
   return Bun.spawnSync({
     cmd: [process.execPath, join(DIST, "pebble.js"), ...args],
-    cwd: ROOT,
+    cwd: smokeCwd,
+    env: {
+      ...process.env,
+      OPENROUTER_API_KEY: "",
+      OPENROUTER_BASE_URL: "",
+      OPENROUTER_MODEL: "",
+      PEBBLE_API_KEY: "",
+      PEBBLE_API_BASE: "",
+      PEBBLE_MODEL: "",
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
+}
+
+function createSmokeProjectDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "pebble-build-smoke-"));
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({ name: "pebble-build-smoke", private: true }, null, 2),
+    "utf-8",
+  );
+  return dir;
 }
 
 function outputOf(result: SpawnResult): string {
