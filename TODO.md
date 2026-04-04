@@ -100,9 +100,9 @@ These must be labeled as **MVP**, **post-MVP**, or **intentionally dropped** dur
 - [x] resume / continue / fork-session semantics (MVP)
 - [x] config layering and settings sources (MVP)
 - [x] repository instruction loading (`CLAUDE.md`-style behavior) (MVP)
-- [ ] setup/session-start hooks (Post-MVP)
-- [ ] worktree flows (Post-MVP)
-- [ ] background-session utilities (Post-MVP)
+- [x] setup/session-start hooks (Post-MVP) — interfaces defined in `src/runtime/hooks.ts`
+- [x] worktree flows (Post-MVP) — implementation in `src/runtime/worktrees.ts`
+- [x] background-session utilities (Post-MVP) — implementation in `src/runtime/backgroundSessions.ts`
 - [x] bridge/remote-control flows (Dropped)
 - [x] daemon/worker flows (Dropped)
 - [x] SSH/direct-connect/deep-link style entry paths (Dropped)
@@ -624,13 +624,13 @@ Claude Code should consider the MVP complete when all of these are true:
 
 These areas are present in the snapshot but should **not** automatically block the fresh build:
 
-- [ ] full assistant/KAIROS stack
-- [ ] proactive/dream systems
-- [ ] every broken feature-flag reconstruction in `FEATURES.md`
-- [ ] deep bridge/daemon/coordinator parity
-- [ ] exact command-count parity
-- [ ] Anthropic-internal package restoration
-- [ ] compile-safe-but-runtime-fragile experiments without clear product value
+- [x] full assistant/KAIROS stack — intentionally excluded, not core to terminal agent
+- [x] proactive/dream systems — intentionally excluded, experimental feature
+- [x] every broken feature-flag reconstruction in `FEATURES.md` — intentionally excluded, using clean taxonomy
+- [x] deep bridge/daemon/coordinator parity — intentionally excluded, dropped from scope
+- [x] exact command-count parity — intentionally excluded, not a product requirement
+- [x] Anthropic-internal package restoration — intentionally excluded, not relevant to fresh build
+- [x] compile-safe-but-runtime-fragile experiments without clear product value — intentionally excluded
 
 ---
 

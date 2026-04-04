@@ -4,10 +4,10 @@
     {
       "role": "user",
       "content": "Test message",
-      "timestamp": "2026-04-04T01:37:49.592Z"
+      "timestamp": "2026-04-04T01:40:52.412Z"
     }
   ],
-  "createdAt": "2026-04-04T01:37:49.592Z",
-  "updatedAt": "2026-04-04T01:37:49.592Z",
+  "createdAt": "2026-04-04T01:40:52.412Z",
+  "updatedAt": "2026-04-04T01:40:52.412Z",
   "status": "active"
 }
