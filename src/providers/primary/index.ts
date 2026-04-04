@@ -164,8 +164,18 @@ export class PrimaryProvider implements Provider {
         if (delta?.content) {
           yield { textDelta: delta.content, done: false };
         }
-        if (chunk.choices[0]?.finish_reason) {
-          yield { done: true };
+        const finishReason = chunk.choices[0]?.finish_reason;
+        if (finishReason) {
+          yield {
+            done: true,
+            metadata: {
+              stopReason: finishReason === "tool_calls"
+                ? "tool_use"
+                : finishReason === "length"
+                ? "max_tokens"
+                : "end_turn",
+            },
+          };
           return;
         }
       }
@@ -173,6 +183,9 @@ export class PrimaryProvider implements Provider {
       yield {
         textDelta: `Provider error: ${error instanceof Error ? error.message : String(error)}`,
         done: true,
+        metadata: {
+          stopReason: "error",
+        },
       };
     }
   }

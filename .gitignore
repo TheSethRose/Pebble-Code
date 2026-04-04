@@ -53,6 +53,7 @@ progress.md
 
 # Local agent/runtime artifacts
 .agents/
+.pebble/
 .pebble/sessions/
 .pebble/test-command-memory/
 .pebble/test-command-sessions/

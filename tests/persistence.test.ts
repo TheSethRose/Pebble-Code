@@ -1,12 +1,22 @@
-import { test, expect, describe, beforeEach } from "bun:test";
+import { test, expect, describe, beforeEach, afterEach } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { SessionStore } from "../src/persistence/sessionStore";
 import { compactTranscript, estimateTokens, TokenTracker } from "../src/persistence/compaction";
+import { buildSessionMemory, isSessionMemoryStale } from "../src/persistence/memory";
 
 describe("Session Store", () => {
   let store: SessionStore;
+  let sessionsDir: string;
 
   beforeEach(() => {
-    store = new SessionStore(".pebble/test-sessions");
+    sessionsDir = mkdtempSync(join(tmpdir(), "pebble-test-sessions-"));
+    store = new SessionStore(sessionsDir);
+  });
+
+  afterEach(() => {
+    rmSync(sessionsDir, { recursive: true, force: true });
   });
 
   test("creates a new session", () => {
@@ -66,6 +76,64 @@ describe("Session Store", () => {
 
     const transcript = store.loadTranscript("status-test");
     expect(transcript!.status).toBe("completed");
+  });
+
+  test("persists generated session memory", () => {
+    store.createSession("memory-persist-test");
+    store.appendMessage("memory-persist-test", {
+      role: "user",
+      content: "Please remember that I am debugging the memory command",
+      timestamp: new Date().toISOString(),
+    });
+
+    const transcript = store.loadTranscript("memory-persist-test");
+    expect(transcript).not.toBeNull();
+
+    const memory = buildSessionMemory(transcript!);
+    store.updateMemory("memory-persist-test", memory);
+
+    const saved = store.loadTranscript("memory-persist-test");
+    expect(saved?.memory?.summary).toContain("Recent user focus");
+    expect(saved?.memory?.sourceMessageCount).toBe(1);
+  });
+
+  test("clears persisted session memory", () => {
+    store.createSession("memory-clear-test");
+    store.appendMessage("memory-clear-test", {
+      role: "assistant",
+      content: "I summarized the previous work.",
+      timestamp: new Date().toISOString(),
+    });
+
+    const transcript = store.loadTranscript("memory-clear-test");
+    expect(transcript).not.toBeNull();
+
+    store.updateMemory("memory-clear-test", buildSessionMemory(transcript!));
+    const cleared = store.clearMemory("memory-clear-test");
+    expect(cleared.memory).toBeUndefined();
+    expect(store.loadTranscript("memory-clear-test")?.memory).toBeUndefined();
+  });
+});
+
+describe("Session memory", () => {
+  test("marks stored memory stale when transcript grows", () => {
+    const transcript = {
+      messages: [
+        { role: "user" as const, content: "hello", timestamp: "2024-01-01" },
+      ],
+    };
+
+    const memory = buildSessionMemory(transcript);
+    expect(isSessionMemoryStale(memory, transcript)).toBe(false);
+
+    const updatedTranscript = {
+      messages: [
+        ...transcript.messages,
+        { role: "assistant" as const, content: "hi", timestamp: "2024-01-01" },
+      ],
+    };
+
+    expect(isSessionMemoryStale(memory, updatedTranscript)).toBe(true);
   });
 });
 

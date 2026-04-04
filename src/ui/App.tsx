@@ -92,8 +92,9 @@ export function App({ context }: { context: CommandContext }) {
   const registry = React.useMemo(() => {
     const reg = new CommandRegistry();
     registerBuiltinCommands(reg);
+    reg.registerMany(context.extensionCommands ?? []);
     return reg;
-  }, []);
+  }, [context.extensionCommands]);
 
   // ------------------------------------------------------------------
   // Engine initialisation

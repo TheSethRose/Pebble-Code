@@ -137,6 +137,19 @@ export class QueryEngine {
       };
       conversation.push(assistantMessage);
 
+      if (response.stopReason === "error") {
+        const errorMessage = response.text.trim() || "Provider error";
+        this.emit("error", { message: errorMessage });
+        this.emit("done", { reason: "error" });
+        return {
+          messages: conversation,
+          state: "error",
+          success: false,
+          error: errorMessage,
+          usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+        };
+      }
+
       // Check if the model wants to use tools
       if (response.toolCalls.length > 0) {
         // Execute each tool call
@@ -323,6 +336,10 @@ export class QueryEngine {
             if (usage.outputTokens) totalOutputTokens += usage.outputTokens;
           }
 
+          if (typeof chunk.metadata?.stopReason === "string" && this.isProviderStopReason(chunk.metadata.stopReason)) {
+            stopReason = chunk.metadata.stopReason;
+          }
+
           if (chunk.done) {
             break;
           }
@@ -339,6 +356,16 @@ export class QueryEngine {
         content: fullText,
         metadata: { toolCalls },
       });
+
+      if (stopReason === "error") {
+        const errorMessage = fullText.trim() || "Provider error";
+        yield emitStreamEvent("error", { message: errorMessage });
+        yield emitStreamEvent("done", {
+          reason: "error",
+          usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+        });
+        return;
+      }
 
       // Execute tool calls if any
       if (toolCalls.length > 0) {
@@ -442,5 +469,13 @@ export class QueryEngine {
 
   private zodSchemaToJsonSchema(schema: unknown): Record<string, unknown> {
     return zodToJsonSchema(schema as any) as Record<string, unknown>;
+  }
+
+  private isProviderStopReason(value: string): value is ProviderResponse["stopReason"] {
+    return value === "end_turn"
+      || value === "tool_use"
+      || value === "max_tokens"
+      || value === "stop_sequence"
+      || value === "error";
   }
 }

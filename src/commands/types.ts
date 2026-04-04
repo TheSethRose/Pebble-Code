@@ -26,6 +26,8 @@ export interface CommandContext {
   permissionManager?: PermissionManager;
   /** Loaded extension command names */
   extensionCommandNames?: string[];
+  /** Loaded extension command implementations */
+  extensionCommands?: Command[];
 }
 
 /**

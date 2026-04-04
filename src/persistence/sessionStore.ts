@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
+import type { SessionMemory } from "./memory.js";
 
 /**
  * A single message in a transcript.
@@ -24,6 +25,7 @@ export interface SessionTranscript {
   createdAt: string;
   updatedAt: string;
   status: "active" | "completed" | "error" | "interrupted";
+  memory?: SessionMemory;
   metadata?: Record<string, unknown>;
 }
 
@@ -151,6 +153,30 @@ export class SessionStore {
     transcript.status = status;
     transcript.updatedAt = new Date().toISOString();
     this.saveTranscript(transcript);
+  }
+
+  updateMemory(sessionId: string, memory: SessionMemory): SessionTranscript {
+    const transcript = this.loadTranscript(sessionId);
+    if (!transcript) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    transcript.memory = memory;
+    transcript.updatedAt = new Date().toISOString();
+    this.saveTranscript(transcript);
+    return transcript;
+  }
+
+  clearMemory(sessionId: string): SessionTranscript {
+    const transcript = this.loadTranscript(sessionId);
+    if (!transcript) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    delete transcript.memory;
+    transcript.updatedAt = new Date().toISOString();
+    this.saveTranscript(transcript);
+    return transcript;
   }
 
   private saveTranscript(transcript: SessionTranscript): void {

@@ -1,4 +1,4 @@
-import { test, expect, describe } from "bun:test";
+import { afterEach, test, expect, describe } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -7,6 +7,8 @@ import { registerBuiltinCommands } from "../src/commands/builtins";
 import { SessionStore } from "../src/persistence/sessionStore";
 import type { CommandContext } from "../src/commands/types";
 import { getSettingsPath } from "../src/runtime/config";
+
+const tempDirs: string[] = [];
 
 function createCommandContext(overrides: Partial<CommandContext> = {}): CommandContext {
   return {
@@ -20,9 +22,25 @@ function createCommandContext(overrides: Partial<CommandContext> = {}): CommandC
 
 function createTempProjectDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name: prefix }, null, 2), "utf-8");
   return dir;
 }
+
+function createTempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
 
 describe("Command Registry", () => {
   test("registers and finds commands", () => {
@@ -115,8 +133,7 @@ describe("Command Registry", () => {
     const registry = new CommandRegistry();
     registerBuiltinCommands(registry);
 
-    const tempDir = join(process.cwd(), ".pebble", "test-command-sessions");
-    rmSync(tempDir, { recursive: true, force: true });
+    const tempDir = createTempDir("pebble-command-sessions-");
     mkdirSync(tempDir, { recursive: true });
 
     const store = new SessionStore(tempDir);
@@ -141,8 +158,7 @@ describe("Command Registry", () => {
     const registry = new CommandRegistry();
     registerBuiltinCommands(registry);
 
-    const tempDir = join(process.cwd(), ".pebble", "test-command-memory");
-    rmSync(tempDir, { recursive: true, force: true });
+    const tempDir = createTempDir("pebble-command-memory-");
     mkdirSync(tempDir, { recursive: true });
 
     const store = new SessionStore(tempDir);
@@ -162,6 +178,40 @@ describe("Command Registry", () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain("Session memory: memory-test");
     expect(result.output).toContain("Estimated tokens:");
+
+    const transcript = store.loadTranscript(session.id);
+    expect(transcript?.memory?.summary).toBeTruthy();
+    expect(transcript?.memory?.sourceMessageCount).toBe(1);
+  });
+
+  test("/memory clear removes persisted session memory", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempDir("pebble-command-memory-clear-");
+    mkdirSync(tempDir, { recursive: true });
+
+    const store = new SessionStore(tempDir);
+    const session = store.createSession("memory-clear-test");
+    store.appendMessage(session.id, {
+      role: "user",
+      content: "remember this session",
+      timestamp: new Date().toISOString(),
+    });
+
+    await registry.execute("memory", "", createCommandContext({
+      sessionStore: store,
+      sessionId: session.id,
+    }));
+
+    const result = await registry.execute("memory", "clear", createCommandContext({
+      sessionStore: store,
+      sessionId: session.id,
+    }));
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Cleared session memory");
+    expect(store.loadTranscript(session.id)?.memory).toBeUndefined();
   });
 
   test("/login persists an OpenRouter API key in project settings", async () => {

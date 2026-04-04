@@ -17,6 +17,15 @@ export class CommandRegistry {
   }
 
   /**
+   * Register multiple commands at once.
+   */
+  registerMany(commands: Command[]): void {
+    for (const command of commands) {
+      this.register(command);
+    }
+  }
+
+  /**
    * Find a command by name or alias.
    */
   find(name: string): Command | undefined {

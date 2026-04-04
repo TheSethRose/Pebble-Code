@@ -8,6 +8,11 @@ import {
   OPENROUTER_PROVIDER_ID,
 } from "../constants/openrouter.js";
 import { estimateTokens } from "../persistence/compaction.js";
+import {
+  buildSessionMemory,
+  formatSessionMemory,
+  isSessionMemoryStale,
+} from "../persistence/memory.js";
 import { createProjectSessionStore } from "../persistence/runtimeSessions.js";
 import {
   getSettingsPath,
@@ -321,11 +326,20 @@ function createMemoryCommand(): Command {
   return {
     name: "memory",
     aliases: ["mem"],
-    description: "Show memory status",
+    description: "Show, refresh, or clear session memory",
     type: "local",
-    usage: "/memory",
+    usage: "/memory [refresh|clear]",
     modes: ["interactive"],
-    execute: (_args, ctx): CommandResult => {
+    execute: (args, ctx): CommandResult => {
+      const action = args.trim().toLowerCase();
+      if (action && action !== "refresh" && action !== "clear" && action !== "status") {
+        return {
+          success: true,
+          output: "Usage: /memory [refresh|clear]",
+        };
+      }
+
+      const store = getSessionStore(ctx);
       const transcript = getActiveSession(ctx);
       if (!transcript) {
         return {
@@ -334,20 +348,42 @@ function createMemoryCommand(): Command {
         };
       }
 
+      if (action === "clear") {
+        store.clearMemory(transcript.id);
+        return {
+          success: true,
+          output: `Cleared session memory for ${transcript.id}.`,
+        };
+      }
+
       const compactThreshold = Number(ctx.config.compactThreshold ?? 0);
       const tokenEstimate = estimateTokens(transcript.messages);
       const projectedCompaction = compactThreshold > 0 && tokenEstimate >= compactThreshold;
+      const shouldRefresh = action === "refresh" || isSessionMemoryStale(transcript.memory, transcript);
+      const memory = shouldRefresh
+        ? store.updateMemory(transcript.id, buildSessionMemory(transcript)).memory
+        : transcript.memory;
+
+      if (!memory) {
+        return {
+          success: true,
+          output: `Session ${transcript.id} has no conversation history to summarize yet.`,
+        };
+      }
 
       return {
         success: true,
         output: [
-          `Session memory: ${transcript.id}`,
-          `Messages: ${transcript.messages.length}`,
-          `Estimated tokens: ${tokenEstimate}`,
+          shouldRefresh ? `Session memory refreshed for ${transcript.id}.` : undefined,
+          formatSessionMemory(memory, transcript.id),
+          "",
+          "Compaction status:",
+          `Messages in transcript: ${transcript.messages.length}`,
+          `Estimated tokens in transcript: ${tokenEstimate}`,
           `Compaction threshold: ${compactThreshold || "not configured"}`,
           `Compaction needed: ${projectedCompaction ? "yes" : "no"}`,
           `Updated: ${transcript.updatedAt}`,
-        ].join("\n"),
+        ].filter(Boolean).join("\n"),
       };
     },
   };

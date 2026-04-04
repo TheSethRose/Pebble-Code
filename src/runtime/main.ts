@@ -14,6 +14,8 @@ import { loadRepositoryInstructions, formatInstructions } from "./instructions.j
 import { createProjectSessionStore, createOrResumeSession, transcriptToConversation, engineMessageToTranscriptMessage } from "../persistence/runtimeSessions.js";
 import { getSettingsPath } from "./config.js";
 import { resolveProviderConfig } from "../providers/config.js";
+import { getDefaultExtensionDirs, loadExtensions, reportExtensionStatus } from "../extensions/loaders.js";
+import type { Command } from "../commands/types.js";
 
 export interface RuntimeOptions {
   /** Run in headless/print mode */
@@ -63,15 +65,20 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
     console.error(`Loaded ${config.instructions.length} instruction file(s)`);
   }
 
-  // Phase 5: Initialize extensions (stub)
-  // TODO: Load MCP servers, plugins, skills
+  // Phase 5: Initialize extensions
+  const extensionResults = await loadExtensions(getDefaultExtensionDirs(cwd));
+  reportExtensionStatus(extensionResults);
+  const extensionCommands = extensionResults
+    .filter((result) => result.loaded && result.extension?.commands?.length)
+    .flatMap((result) => result.extension?.commands ?? []);
+  const extensionCommandNames = extensionCommands.map((command) => command.name);
 
   // Phase 6: Start the appropriate mode
   if (options.headless) {
-    return runHeadless(options, config, permissionManager, instructions);
+    return runHeadless(options, config, permissionManager, instructions, extensionCommandNames);
   }
 
-  return runInteractive(options, config, permissionManager, instructions);
+  return runInteractive(options, config, permissionManager, instructions, extensionCommands, extensionCommandNames);
 }
 
 async function runHeadless(
@@ -79,6 +86,7 @@ async function runHeadless(
   config: ReturnType<typeof buildRuntimeConfig>,
   permissionManager: PermissionManager,
   instructions: string,
+  extensionCommandNames: string[],
 ): Promise<number> {
   if (!options.prompt) {
     console.error("Error: headless mode requires --prompt");
@@ -88,6 +96,9 @@ async function runHeadless(
   console.error("Headless mode: processing prompt...");
   console.error(`Permission mode: ${config.settings.permissionMode}`);
   console.error(`Instructions: ${instructions ? "loaded" : "none"}`);
+  if (extensionCommandNames.length > 0) {
+    console.error(`Extension commands available: ${extensionCommandNames.join(", ")}`);
+  }
 
   // Initialize engine for headless execution
   const { createPrimaryProvider } = await import("../providers/primary/index.js");
@@ -172,6 +183,8 @@ async function runInteractive(
   config: ReturnType<typeof buildRuntimeConfig>,
   permissionManager: PermissionManager,
   instructions: string,
+  extensionCommands: Command[],
+  extensionCommandNames: string[],
 ): Promise<number> {
   const resolvedProvider = resolveProviderConfig(config.settings, {
     provider: options.provider,
@@ -205,7 +218,8 @@ async function runInteractive(
     sessionId: options.resume ?? null,
     trustLevel: config.trust.level,
     permissionManager,
-    extensionCommandNames: [],
+    extensionCommandNames,
+    extensionCommands,
   };
 
   return startREPL(context);

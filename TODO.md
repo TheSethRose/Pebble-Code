@@ -65,7 +65,7 @@ But the current repo is still **far from reference breadth**, especially in:
 
 - REPL is minimal and lacks rich terminal UX
 - Headless mode exists but is still thin compared to the docs promise
-- `/memory` is still a thin session-backed status view, not a full memory system
+- `/memory` now manages persisted session summaries, but runtime memory injection is still placeholder-heavy
 - Persistence is wired for session storage and resume, but memory loading/injection is still placeholder-heavy
 - Compaction exists but is not triggered automatically by runtime
 - AskUserQuestionTool returns structured prompt data but not a full interactive approval flow
@@ -73,7 +73,7 @@ But the current repo is still **far from reference breadth**, especially in:
 
 ### What is still scaffolding/stub territory
 
-- Extension loading (`src/extensions/loaders.ts`) is still stubbed
+- Extension loading now supports local plugin discovery, but MCP/skills and extension tool/provider wiring remain incomplete
 - MCP/plugin/skill runtime integration is not implemented
 - Hooks/worktrees/background sessions are mostly future-facing scaffolding
 - Tests do not yet cover the real CLI/REPL/headless/extension flows end-to-end
@@ -107,9 +107,9 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] command aliases work
 - [x] command discovery through `/help` works
 - [x] `/resume` actually resumes a stored session
-- [ ] `/memory` is backed by a real memory system
+- [x] `/memory` is backed by a real memory system
 - [x] `/review` performs a real review flow
-- [ ] command loading merges extension-provided commands at runtime
+- [x] command loading merges extension-provided commands at runtime
 - [x] command filtering by runtime mode/trust is implemented cleanly
 
 ## Engine
@@ -144,13 +144,13 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] extension contracts/interfaces exist
 - [x] loader API shape exists
 - [x] extension failure reporting shape exists
-- [ ] extension loading is actually implemented
+- [x] extension loading is actually implemented
 - [ ] MCP servers are loaded at runtime
-- [ ] plugins are discovered and loaded at runtime
+- [x] plugins are discovered and loaded at runtime
 - [ ] skills are discovered and loaded at runtime
 - [ ] extension-provided tools are merged into the live registry
-- [ ] extension-provided commands are merged into the live registry
-- [ ] extension isolation is proven by tests
+- [x] extension-provided commands are merged into the live registry
+- [x] extension isolation is proven by tests
 
 ## Persistence
 
