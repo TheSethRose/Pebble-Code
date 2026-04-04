@@ -65,7 +65,7 @@ export class PermissionManager {
     }
 
     // Default: ask user
-    return { decision: "allow", reason: "Requires user approval" };
+    return { decision: "ask", reason: "Requires user approval" };
   }
 
   /**

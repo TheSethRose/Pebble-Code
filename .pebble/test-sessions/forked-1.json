@@ -1,0 +1,13 @@
+{
+  "id": "forked-1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Test message",
+      "timestamp": "2026-04-04T01:37:49.592Z"
+    }
+  ],
+  "createdAt": "2026-04-04T01:37:49.593Z",
+  "updatedAt": "2026-04-04T01:37:49.593Z",
+  "status": "active"
+}

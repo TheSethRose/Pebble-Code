@@ -12,6 +12,9 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register(createPermissionsCommand());
   registry.register(createModelCommand());
   registry.register(createResumeCommand());
+  registry.register(createMemoryCommand());
+  registry.register(createPlanCommand());
+  registry.register(createReviewCommand());
 }
 
 function createHelpCommand(registry: CommandRegistry): Command {
@@ -127,6 +130,54 @@ function createResumeCommand(): Command {
       return {
         success: true,
         output: "Session resume not yet implemented (Phase 7)",
+      };
+    },
+  };
+}
+
+function createMemoryCommand(): Command {
+  return {
+    name: "memory",
+    aliases: ["mem"],
+    description: "Show memory status",
+    type: "local",
+    usage: "/memory",
+    execute: (_args, _ctx): CommandResult => {
+      return {
+        success: true,
+        output: "Memory system not yet implemented (Phase 7)",
+      };
+    },
+  };
+}
+
+function createPlanCommand(): Command {
+  return {
+    name: "plan",
+    aliases: ["think"],
+    description: "Show or create a plan",
+    type: "local",
+    usage: "/plan [description]",
+    execute: (args, _ctx): CommandResult => {
+      if (args) {
+        return { success: true, output: `Plan noted: ${args}` };
+      }
+      return { success: true, output: "No active plan. Use /plan <description> to create one." };
+    },
+  };
+}
+
+function createReviewCommand(): Command {
+  return {
+    name: "review",
+    aliases: ["check"],
+    description: "Review recent changes",
+    type: "local",
+    usage: "/review",
+    execute: (_args, _ctx): CommandResult => {
+      return {
+        success: true,
+        output: "Review system not yet implemented",
       };
     },
   };

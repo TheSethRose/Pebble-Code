@@ -13,7 +13,7 @@ export interface ToolContext {
   /** Abort signal for cancellation */
   signal?: AbortSignal;
   /** Permission mode for this tool */
-  permissionMode: "ask" | "auto-allow" | "auto-deny";
+  permissionMode: "always-ask" | "auto-edit" | "auto-all" | "restricted";
   /** Whether this is a dry run */
   dryRun?: boolean;
 }

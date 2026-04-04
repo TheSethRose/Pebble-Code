@@ -10,6 +10,8 @@ import type { Tool } from "../tools/Tool.js";
 import type { Message, StreamEvent, EngineState } from "./types.js";
 import { createResultEnvelope } from "./results.js";
 import { emitStreamEvent } from "./transitions.js";
+import { zodToJsonSchema } from "zod-to-json-schema";
+import type { PermissionManager } from "../runtime/permissionManager.js";
 
 export interface QueryEngineOptions {
   /** Maximum number of turns before forcing termination */
@@ -26,6 +28,10 @@ export interface QueryEngineOptions {
   onEvent?: (event: StreamEvent) => void;
   /** Callback for tool execution */
   onToolExecute?: (toolName: string, input: unknown) => void;
+  /** Permission manager for tool access control */
+  permissionManager?: PermissionManager;
+  /** Working directory for tool execution */
+  cwd?: string;
 }
 
 export interface QueryResult {
@@ -49,6 +55,8 @@ export class QueryEngine {
     signal?: AbortSignal;
     onEvent?: (event: StreamEvent) => void;
     onToolExecute?: (toolName: string, input: unknown) => void;
+    permissionManager?: import("../runtime/permissionManager.js").PermissionManager;
+    cwd?: string;
   };
 
   constructor(options: QueryEngineOptions) {
@@ -60,6 +68,8 @@ export class QueryEngine {
       signal: options.signal,
       onEvent: options.onEvent,
       onToolExecute: options.onToolExecute,
+      permissionManager: options.permissionManager,
+      cwd: options.cwd,
     };
   }
 
@@ -146,12 +156,38 @@ export class QueryEngine {
             continue;
           }
 
-          // Check approval
-          if (tool.requiresApproval?.(toolCall.input)) {
+          // Check approval via PermissionManager
+          const needsApproval = tool.requiresApproval?.(toolCall.input) ?? false;
+          if (needsApproval && this.options.permissionManager) {
+            const permissionResult = await this.options.permissionManager.checkPermission({
+              toolName: toolCall.name,
+              toolArgs: toolCall.input as Record<string, unknown>,
+              riskLevel: "high",
+            });
+
+            if (permissionResult.decision === "deny") {
+              this.emit("permission_denied", { tool: toolCall.name, input: toolCall.input });
+              conversation.push({
+                role: "tool",
+                content: `Tool execution denied: ${permissionResult.reason ?? "Permission denied"}`,
+                toolCallId: toolCall.id,
+                toolName: toolCall.name,
+              });
+              continue;
+            }
+
+            // Record the decision
+            this.options.permissionManager.recordDecision(
+              toolCall.name,
+              permissionResult.decision,
+              permissionResult.persisted ?? false,
+            );
+          } else if (needsApproval) {
+            // No permission manager — deny by default
             this.emit("permission_denied", { tool: toolCall.name, input: toolCall.input });
             conversation.push({
               role: "tool",
-              content: "Tool execution denied by user",
+              content: "Tool execution denied (no permission manager configured)",
               toolCallId: toolCall.id,
               toolName: toolCall.name,
             });
@@ -164,9 +200,9 @@ export class QueryEngine {
 
           try {
             const result = await tool.execute(toolCall.input, {
-              cwd: process.cwd(),
+              cwd: this.options.cwd ?? process.cwd(),
               signal: this.options.signal,
-              permissionMode: "ask",
+              permissionMode: this.options.permissionManager?.getMode() ?? "always-ask",
             });
 
             const output = result.truncated ? `${result.output}\n[Output truncated]` : result.output;
@@ -326,12 +362,36 @@ export class QueryEngine {
             input = tc.input;
           }
 
-          // Check approval (same as process() method)
-          if (tool.requiresApproval?.(input)) {
+          // Check approval via PermissionManager
+          const needsApproval = tool.requiresApproval?.(input) ?? false;
+          if (needsApproval && this.options.permissionManager) {
+            const permissionResult = await this.options.permissionManager.checkPermission({
+              toolName: tc.name,
+              toolArgs: input as Record<string, unknown>,
+              riskLevel: "high",
+            });
+
+            if (permissionResult.decision === "deny") {
+              yield emitStreamEvent("permission_denied", { tool: tc.name, input });
+              conversation.push({
+                role: "tool",
+                content: `Tool execution denied: ${permissionResult.reason ?? "Permission denied"}`,
+                toolCallId: tc.id,
+                toolName: tc.name,
+              });
+              continue;
+            }
+
+            this.options.permissionManager.recordDecision(
+              tc.name,
+              permissionResult.decision,
+              permissionResult.persisted ?? false,
+            );
+          } else if (needsApproval) {
             yield emitStreamEvent("permission_denied", { tool: tc.name, input });
             conversation.push({
               role: "tool",
-              content: "Tool execution denied by user",
+              content: "Tool execution denied (no permission manager configured)",
               toolCallId: tc.id,
               toolName: tc.name,
             });
@@ -340,9 +400,9 @@ export class QueryEngine {
 
           try {
             const result = await tool.execute(input, {
-              cwd: process.cwd(),
+              cwd: this.options.cwd ?? process.cwd(),
               signal: this.options.signal,
-              permissionMode: "ask",
+              permissionMode: this.options.permissionManager?.getMode() ?? "always-ask",
             });
             conversation.push({
               role: "tool",
@@ -380,9 +440,7 @@ export class QueryEngine {
     this.options.onEvent?.(emitStreamEvent(type, data));
   }
 
-  private zodSchemaToJsonSchema(_schema: unknown): Record<string, unknown> {
-    // TODO: Implement proper Zod → JSON Schema conversion
-    // For now, return a permissive schema
-    return { type: "object", additionalProperties: true };
+  private zodSchemaToJsonSchema(schema: unknown): Record<string, unknown> {
+    return zodToJsonSchema(schema as any) as Record<string, unknown>;
   }
 }

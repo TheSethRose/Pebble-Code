@@ -24,7 +24,8 @@ export type PermissionDecision =
   | "allow"
   | "deny"
   | "allow-session" // allow for this session only
-  | "allow-always"; // persist the allow decision
+  | "allow-always" // persist the allow decision
+  | "ask"; // requires user interaction
 
 /**
  * Context about the tool being requested.

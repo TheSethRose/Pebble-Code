@@ -1,0 +1,13 @@
+{
+  "id": "test-2",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello",
+      "timestamp": "2026-04-04T01:37:49.579Z"
+    }
+  ],
+  "createdAt": "2026-04-04T01:37:49.578Z",
+  "updatedAt": "2026-04-04T01:37:49.579Z",
+  "status": "active"
+}

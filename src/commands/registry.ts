@@ -56,7 +56,7 @@ export class CommandRegistry {
 
     try {
       const result = await cmd.execute(args, context);
-      return { success: true, output: result.output };
+      return { success: true, output: result.output, exit: result.exit };
     } catch (error) {
       return {
         success: false,
