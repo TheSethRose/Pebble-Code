@@ -63,7 +63,9 @@ findings.md
 progress.md
 
 # Local agent/runtime artifacts
-.github/
+.github/*
+!/.github/hooks/
+!/.github/hooks/**
 .agents/
 /.pebble/*
 !/.pebble/project-settings.json

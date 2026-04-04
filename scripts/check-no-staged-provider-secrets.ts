@@ -1,4 +1,5 @@
 type HookEventName = "PreToolUse";
+export type SecretScanMode = "staged" | "push";
 
 interface HookInput {
   cwd?: string;
@@ -31,8 +32,9 @@ interface SecretViolation {
   redactedLine: string;
 }
 
+const SUPPORTED_SCAN_MODES = ["staged", "push"] as const satisfies readonly SecretScanMode[];
 const SECRET_PREFIX = "sk-or-v1-";
-const SECRET_PATTERN = /sk-or-v1-[A-Za-z0-9_-]*/g;
+const SECRET_PATTERN = /sk-or-v1-[A-Za-z0-9_-]+/g;
 const GIT_COMMIT_PATTERN = /\bgit\s+commit\b/i;
 const GIT_PUSH_PATTERN = /\bgit\s+push\b/i;
 const PROVIDER_SENSITIVE_PATH_PREFIXES = [
@@ -53,6 +55,37 @@ async function readAllFromStdin(): Promise<string> {
   }
 
   return Buffer.concat(chunks).toString("utf8").trim();
+}
+
+export function parseSecretScanMode(argv: string[]): SecretScanMode {
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index]?.trim();
+    if (!token) {
+      continue;
+    }
+
+    if (token === "--mode") {
+      const nextValue = argv[index + 1]?.trim();
+      if (isSecretScanMode(nextValue)) {
+        return nextValue;
+      }
+      throw new Error(`Unsupported --mode value: ${nextValue ?? "(missing)"}`);
+    }
+
+    if (token.startsWith("--mode=")) {
+      const value = token.slice("--mode=".length).trim();
+      if (isSecretScanMode(value)) {
+        return value;
+      }
+      throw new Error(`Unsupported --mode value: ${value || "(missing)"}`);
+    }
+  }
+
+  return "staged";
+}
+
+function isSecretScanMode(value?: string): value is SecretScanMode {
+  return SUPPORTED_SCAN_MODES.includes(value as SecretScanMode);
 }
 
 function parseHookInput(raw: string): HookInput | null {
@@ -97,6 +130,25 @@ function shouldInspectTool(input: HookInput): boolean {
   return GIT_COMMIT_PATTERN.test(candidate) || GIT_PUSH_PATTERN.test(candidate);
 }
 
+function getModesForToolInput(input: HookInput): SecretScanMode[] {
+  if (!shouldInspectTool(input)) {
+    return [];
+  }
+
+  return getModesForToolText(extractToolInputText(input.tool_input));
+}
+
+function getModesForToolText(toolText: string): SecretScanMode[] {
+  const modes: SecretScanMode[] = [];
+  if (GIT_COMMIT_PATTERN.test(toolText)) {
+    modes.push("staged");
+  }
+  if (GIT_PUSH_PATTERN.test(toolText)) {
+    modes.push("push");
+  }
+  return modes;
+}
+
 function decodeBytes(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes).trim();
 }
@@ -129,29 +181,27 @@ function resolveUpstreamRef(cwd: string): string {
   }
 }
 
-function collectDiffs(cwd: string, toolText: string): DiffScanResult[] {
-  const scans: DiffScanResult[] = [];
-
-  if (GIT_COMMIT_PATTERN.test(toolText)) {
-    scans.push({
+function createDiffScan(cwd: string, mode: SecretScanMode): DiffScanResult {
+  if (mode === "staged") {
+    return {
       label: "staged changes",
       diffText: runGit(cwd, ["diff", "--cached", "--no-color", "--unified=0", "-G", SECRET_PREFIX, "--"]),
-    });
+    };
   }
 
-  if (GIT_PUSH_PATTERN.test(toolText)) {
-    const upstreamRef = resolveUpstreamRef(cwd);
-    scans.push({
-      label: `outgoing commits against ${upstreamRef}`,
-      diffText: runGit(cwd, ["diff", "--no-color", "--unified=0", "-G", SECRET_PREFIX, `${upstreamRef}...HEAD`, "--"]),
-    });
-  }
-
-  return scans;
+  const upstreamRef = resolveUpstreamRef(cwd);
+  return {
+    label: `outgoing commits against ${upstreamRef}`,
+    diffText: runGit(cwd, ["diff", "--no-color", "--unified=0", "-G", SECRET_PREFIX, `${upstreamRef}...HEAD`, "--"]),
+  };
 }
 
 function redactSecrets(value: string): string {
   return value.replaceAll(SECRET_PATTERN, `${SECRET_PREFIX}•••`);
+}
+
+function findSecretMatches(value: string): string[] {
+  return Array.from(value.matchAll(SECRET_PATTERN), (match) => match[0]);
 }
 
 function detectViolations(scan: DiffScanResult): SecretViolation[] {
@@ -174,7 +224,7 @@ function detectViolations(scan: DiffScanResult): SecretViolation[] {
 
     if (line.startsWith("+") && !line.startsWith("+++ ")) {
       const addedLine = line.slice(1);
-      if (addedLine.includes(SECRET_PREFIX)) {
+      if (findSecretMatches(addedLine).length > 0) {
         violations.push({
           source: scan.label,
           filePath: currentFilePath,
@@ -234,6 +284,10 @@ function buildAdditionalContext(violations: SecretViolation[]): string {
   ].join("\n");
 }
 
+export function scanForMode(cwd: string, mode: SecretScanMode): SecretViolation[] {
+  return detectViolations(createDiffScan(cwd, mode));
+}
+
 function allow(message?: string): HookOutput {
   return {
     hookSpecificOutput: {
@@ -257,15 +311,15 @@ function deny(reason: string, additionalContext?: string): HookOutput {
 }
 
 function runHookCheck(input: HookInput): HookOutput {
-  if (!shouldInspectTool(input)) {
+  const modes = getModesForToolInput(input);
+  if (modes.length === 0) {
     return allow();
   }
 
   const cwd = input.cwd?.trim() || process.cwd();
-  const toolText = extractToolInputText(input.tool_input);
 
   try {
-    const scans = collectDiffs(cwd, toolText);
+    const scans = modes.map((mode) => createDiffScan(cwd, mode));
     const violations = scans.flatMap((scan) => detectViolations(scan));
 
     if (violations.length === 0) {
@@ -283,15 +337,14 @@ function runHookCheck(input: HookInput): HookOutput {
   }
 }
 
-function runStandaloneCheck(cwd: string): number {
+export function runStandaloneCheck(cwd: string, mode: SecretScanMode = "staged"): number {
   try {
-    const scan = {
-      label: "staged changes",
-      diffText: runGit(cwd, ["diff", "--cached", "--no-color", "--unified=0", "-G", SECRET_PREFIX, "--"]),
-    } satisfies DiffScanResult;
-    const violations = detectViolations(scan);
+    const violations = scanForMode(cwd, mode);
     if (violations.length === 0) {
-      console.log(`No staged additions contain ${SECRET_PREFIX}.`);
+      const summary = mode === "push"
+        ? `No outgoing commits contain ${SECRET_PREFIX}.`
+        : `No staged additions contain ${SECRET_PREFIX}.`;
+      console.log(summary);
       return 0;
     }
 
@@ -303,15 +356,18 @@ function runStandaloneCheck(cwd: string): number {
   }
 }
 
-async function main(): Promise<void> {
+async function main(argv: string[] = []): Promise<void> {
+  const mode = parseSecretScanMode(argv);
   const rawInput = await readAllFromStdin();
   const hookInput = parseHookInput(rawInput);
 
   if (!hookInput) {
-    process.exit(runStandaloneCheck(process.cwd()));
+    process.exit(runStandaloneCheck(process.cwd(), mode));
   }
 
   printJson(runHookCheck(hookInput));
 }
 
-await main();
+if (import.meta.main) {
+  await main(Bun.argv.slice(2));
+}

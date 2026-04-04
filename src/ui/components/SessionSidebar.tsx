@@ -14,6 +14,7 @@ interface SessionSidebarProps {
   sessions: SessionSummary[];
   activeSessionId: string | null;
   onSelect: (sessionId: string | null, index: number) => void;
+  onRequestDelete?: (session: SessionSummary, index: number) => void;
   selectedIndex: number;
   isFocused: boolean;
   mouseEnabled?: boolean;
@@ -25,9 +26,10 @@ interface SidebarRailProps {
   isFocused: boolean;
 }
 
-const SIDEBAR_WIDTH = 24;
+const SIDEBAR_WIDTH = 30;
 const SIDEBAR_HORIZONTAL_PADDING = 2;
 const SIDEBAR_LABEL_PREFIX_WIDTH = 2;
+const DELETE_BUTTON_SLOT_WIDTH = 3;
 
 interface SidebarSelectableRowProps {
   children: React.ReactNode;
@@ -66,6 +68,7 @@ export function SessionSidebar({
   sessions,
   activeSessionId,
   onSelect,
+  onRequestDelete,
   selectedIndex,
   isFocused,
   mouseEnabled = false,
@@ -113,7 +116,7 @@ export function SessionSidebar({
     >
       {/* Header */}
       <Box marginBottom={sessions.length > 0 ? 1 : 0}>
-        <Text dimColor bold>
+        <Text color="#aaaaaa" bold>
           Chats {isFocused ? "◀" : " "}
         </Text>
       </Box>
@@ -138,33 +141,50 @@ export function SessionSidebar({
         const label = isCursor
           ? getScrollingSessionLabel(s.title, width, marqueeTick)
           : truncateSessionLabel(s.title, width);
+        const labelWidth = Math.max(12, width - DELETE_BUTTON_SLOT_WIDTH);
+        const deleteLabel = " x ";
 
         return (
-          <SidebarSelectableRow
-            key={s.id}
-            mouseEnabled={mouseEnabled}
-            onSelect={() => onSelect(s.id, rowIndex)}
-          >
-            <Text
-              color={isCursor ? "black" : isActive ? "green" : "gray"}
-              backgroundColor={isCursor ? "green" : undefined}
-              bold={isCursor || isActive}
-            >
-              {buildSidebarRow(label, width, prefix)}
-            </Text>
-          </SidebarSelectableRow>
+          <Box key={s.id} flexDirection="row" width={width}>
+            <Box flexGrow={1} width={labelWidth}>
+              <SidebarSelectableRow
+                mouseEnabled={mouseEnabled}
+                onSelect={() => onSelect(s.id, rowIndex)}
+              >
+                <Text
+                  color={isCursor ? "black" : isActive ? "green" : "#aaaaaa"}
+                  backgroundColor={isCursor ? "green" : undefined}
+                  bold={isCursor || isActive}
+                >
+                  {buildSidebarRow(label, labelWidth, prefix)}
+                </Text>
+              </SidebarSelectableRow>
+            </Box>
+
+            <Box width={DELETE_BUTTON_SLOT_WIDTH} justifyContent="flex-start">
+              {mouseEnabled && onRequestDelete ? (
+                <MousePressableRegion onPress={() => onRequestDelete(s, rowIndex)}>
+                  <Text>
+                    {deleteLabel}
+                  </Text>
+                </MousePressableRegion>
+              ) : (
+                <Text dimColor>{" ".repeat(DELETE_BUTTON_SLOT_WIDTH)}</Text>
+              )}
+            </Box>
+          </Box>
         );
       })}
 
       {sessions.length === 0 && (
         <Box marginTop={1}>
-          <Text dimColor>No sessions yet</Text>
+          <Text color="#aaaaaa">No sessions yet</Text>
         </Box>
       )}
 
       {/* Hint */}
       <Box marginTop={1}>
-        <Text dimColor>{getSidebarHintText(isFocused, mouseEnabled)}</Text>
+        <Text color="#aaaaaa">{getSidebarHintText(isFocused, mouseEnabled)}</Text>
       </Box>
     </Box>
   );
@@ -254,11 +274,11 @@ export function shouldAnimateSessionLabel(title: string, width: number): boolean
 export function getSidebarHintText(isFocused: boolean, mouseEnabled = false): string {
   if (isFocused) {
     return mouseEnabled
-      ? "↑↓ move  ⏎ select\nClick to switch · Del deletes"
+      ? "↑↓ move  ⏎ select\nClick to switch · x deletes"
       : "↑↓ move  ⏎ select\nDel to Delete Chats";
   }
 
-  return mouseEnabled ? "→ Tab to Select Chats\nClick chats to switch" : "→ Tab to Select Chats";
+  return mouseEnabled ? "→ Tab to Select Chats\nClick chats · x deletes" : "→ Tab to Select Chats";
 }
 
 export function buildVerticalDivider(height: number): string {

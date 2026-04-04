@@ -32,6 +32,7 @@ function mountSidebar(
     sessions: SessionSummary[];
     activeSessionId: string | null;
     onSelect: (sessionId: string | null, index: number) => void;
+    onRequestDelete?: (session: SessionSummary, index: number) => void;
     selectedIndex?: number;
     isFocused?: boolean;
     width?: number;
@@ -58,10 +59,11 @@ function mountSidebar(
         sessions={props.sessions}
         activeSessionId={props.activeSessionId}
         onSelect={props.onSelect}
+        onRequestDelete={props.onRequestDelete}
         selectedIndex={props.selectedIndex ?? 0}
         isFocused={props.isFocused ?? false}
         mouseEnabled
-        width={props.width ?? 24}
+        width={props.width ?? 30}
       />
     </TerminalMouseProvider>,
     {
@@ -92,6 +94,23 @@ function mountSidebar(
 async function sendMousePress(stdin: TestInput, x: number, y: number): Promise<void> {
   stdin.write(`\u001B[<0;${x + 1};${y + 1}M`);
   await flushInteractiveUi();
+}
+
+async function clickUntilTriggered(
+  stdin: TestInput,
+  predicate: () => boolean,
+  area: { left: number; right: number; top: number; bottom: number },
+): Promise<void> {
+  for (let y = area.top; y <= area.bottom; y += 1) {
+    for (let x = area.left; x <= area.right; x += 1) {
+      await sendMousePress(stdin, x, y);
+      if (predicate()) {
+        return;
+      }
+    }
+  }
+
+  throw new Error("Timed out locating clickable sidebar region");
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
@@ -170,6 +189,38 @@ describe("SessionSidebar mouse interaction", () => {
       await waitFor(() => selections.length === 1);
 
       expect(selections).toEqual([{ sessionId: null, index: 0 }]);
+    } finally {
+      sidebar.cleanup();
+    }
+  });
+
+  test("clicking the x delete target requests deletion without also selecting the chat", async () => {
+    const selections: Array<{ sessionId: string | null; index: number }> = [];
+    const deletions: Array<{ sessionId: string; index: number }> = [];
+    const sidebar = mountSidebar({
+      sessions,
+      activeSessionId: null,
+      onSelect: (sessionId, index) => {
+        selections.push({ sessionId, index });
+      },
+      onRequestDelete: (session, index) => {
+        deletions.push({ sessionId: session.id, index });
+      },
+    });
+
+    try {
+      await waitFor(() => sidebar.output().includes(" x "));
+
+      await clickUntilTriggered(sidebar.stdin, () => deletions.length === 1, {
+        left: 27,
+        right: 29,
+        top: 3,
+        bottom: 4,
+      });
+
+      expect(deletions.length).toBeGreaterThan(0);
+      expect(deletions[0]).toEqual({ sessionId: "session-a", index: 1 });
+      expect(selections).toEqual([]);
     } finally {
       sidebar.cleanup();
     }

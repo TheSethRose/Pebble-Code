@@ -185,9 +185,9 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] provider configuration reads from environment variables
 - [x] provider auth/setup UX exists in the product
 - [ ] provider fallback behavior is implemented and tested
-- [ ] multi-provider support exists beyond the primary adapter
+- [x] multi-provider support exists beyond the primary adapter
 - [ ] provider settings can express a primary + ordered fallback chain with per-provider model overrides
-- [ ] provider resolution records which provider/model actually answered for debug and headless reporting
+- [x] provider resolution records which provider/model actually answered for debug and headless reporting
 - [ ] provider failure scenarios are covered by tests
 
 ### Provider coverage backlog
@@ -195,18 +195,20 @@ But the current repo is still **far from reference breadth**, especially in:
 Source-backed inventory and implementation notes live in `docs/PROVIDERS.md`.
 Every provider task below should check `docs/PROVIDERS.md` first for auth type, env/config inputs, model refs, routing quirks, and Pebble-specific implementation guidance.
 
+Checked items below mean Pebble now has real config/runtime wiring for that provider path and regression coverage around selection/config behavior. Most of them still need **live credential smoke tests** before we should claim production-hardened support, and cataloged-but-unimplemented providers intentionally stay unchecked.
+
 #### API-key and token providers
 
-- [ ] implement OpenAI
+- [x] implement OpenAI
 - [ ] implement Anthropic
-- [ ] implement OpenRouter
+- [x] implement OpenRouter
 - [ ] implement Google Gemini API-key mode
-- [ ] implement xAI
-- [ ] implement Groq
-- [ ] implement Mistral
-- [ ] implement DeepSeek
-- [ ] implement Together AI
-- [ ] implement NVIDIA
+- [x] implement xAI
+- [x] implement Groq
+- [x] implement Mistral
+- [x] implement DeepSeek
+- [x] implement Together AI
+- [x] implement NVIDIA
 - [ ] implement Hugging Face
 - [ ] implement Qianfan
 - [ ] implement Z.AI / GLM
@@ -225,12 +227,12 @@ Every provider task below should check `docs/PROVIDERS.md` first for auth type, 
 - [ ] implement Venice
 - [ ] implement Vercel AI Gateway
 - [ ] implement Cloudflare AI Gateway
-- [ ] implement Perplexity
+- [x] implement Perplexity
 - [ ] implement Deepgram
-- [ ] implement LiteLLM
+- [x] implement LiteLLM
 - [ ] implement Cohere
-- [ ] implement Cerebras
-- [ ] implement DeepInfra
+- [x] implement Cerebras
+- [x] implement DeepInfra
 - [ ] implement Vercel AI provider
 - [ ] implement Kilo
 - [ ] implement ZenMux
@@ -247,10 +249,10 @@ Every provider task below should check `docs/PROVIDERS.md` first for auth type, 
 
 #### Local, URL-only, and self-hosted providers
 
-- [ ] implement Ollama local runtime support
-- [ ] implement vLLM support
-- [ ] implement SGLang support
-- [ ] implement custom OpenAI-compatible endpoints
+- [x] implement Ollama local runtime support
+- [x] implement vLLM support
+- [x] implement SGLang support
+- [x] implement custom OpenAI-compatible endpoints
 
 #### Cloud-credential and enterprise-identity providers
 
@@ -266,8 +268,8 @@ Every provider task below should check `docs/PROVIDERS.md` first for auth type, 
 
 #### Cross-cutting provider work
 
-- [ ] implement per-provider config/env resolution for every provider listed in `docs/PROVIDERS.md`
-- [ ] implement provider bootstrap and runtime selection for every provider listed in `docs/PROVIDERS.md`
+- [x] implement per-provider config/env resolution for every provider listed in `docs/PROVIDERS.md`
+- [x] implement provider bootstrap and runtime selection for every provider listed in `docs/PROVIDERS.md`
 - [ ] implement streaming and non-streaming execution coverage for every provider listed in `docs/PROVIDERS.md`
 - [ ] implement actionable failure handling and fallback behavior for every provider listed in `docs/PROVIDERS.md`
 - [ ] add provider-specific tests for every provider listed in `docs/PROVIDERS.md`

@@ -4,6 +4,7 @@ import {
   resolveProviderConfig,
   type ResolvedProviderConfig,
 } from "./config.js";
+import { getBuiltinProviderDefinitions, normalizeProviderId } from "./catalog.js";
 import type { Settings } from "../runtime/config.js";
 
 export interface RuntimeProviderResolution extends ResolvedProviderConfig {
@@ -24,6 +25,8 @@ export function resolveRuntimeProvider(
   );
 
   if (extensionProvider) {
+    const configured = extensionProvider.isConfigured();
+    const envKeyName = `${extensionProvider.id.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
     return {
       provider: extensionProvider,
       source: "extension",
@@ -31,11 +34,18 @@ export function resolveRuntimeProvider(
       providerLabel: extensionProvider.name,
       model: extensionProvider.model,
       apiKey: "",
-      apiKeyConfigured: extensionProvider.isConfigured(),
-      apiKeySource: extensionProvider.isConfigured() ? "settings" : "unset",
+      apiKeyConfigured: configured,
+      apiKeySource: configured ? "settings" : "unset",
       baseUrl: "managed-by-extension",
       baseUrlSource: "default",
-      envKeyName: `${extensionProvider.id.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`,
+      envKeyName,
+      envKeyNames: [envKeyName],
+      transport: "unimplemented",
+      authKind: "api-key",
+      implemented: true,
+      runtimeReady: configured,
+      missingConfiguration: configured ? [] : ["extension provider configuration"],
+      help: "This provider is supplied by an extension and manages its own runtime transport.",
     };
   }
 
@@ -59,7 +69,11 @@ export function listRuntimeProviders(extensionProviders: Provider[] = []): Array
   source: "builtin" | "extension";
 }> {
   const providers = [
-    { id: "openrouter", name: "OpenRouter", source: "builtin" as const },
+    ...getBuiltinProviderDefinitions().map((provider) => ({
+      id: provider.id,
+      name: provider.label,
+      source: "builtin" as const,
+    })),
     ...extensionProviders.map((provider) => ({
       id: provider.id,
       name: provider.name,
@@ -80,5 +94,5 @@ export function listRuntimeProviders(extensionProviders: Provider[] = []): Array
 }
 
 function normalizeRuntimeProviderId(provider?: string): string {
-  return provider?.trim().toLowerCase() || "openrouter";
+  return normalizeProviderId(provider);
 }

@@ -51,7 +51,10 @@ Pebble Code solves those problems. It is designed to feel immediate, controllabl
 git clone https://github.com/TheSethRose/Pebble-Code.git
 cd Pebble-Code
 bun install
+bun run hooks:install
 ```
+
+`bun run hooks:install` configures the repository-local `core.hooksPath` to use the committed `.githooks/` directory, enabling the bundled `pre-commit` and `pre-push` protections.
 
 ### Run locally
 
@@ -256,6 +259,20 @@ Contributions are welcome. Please follow these guidelines:
 3. Use atomic commits with the format: `type: short description` followed by bullet-point details.
 4. Open a PR against `main` with a clear description of what changed and why.
 5. Keep changes focused — one concern per PR.
+
+### Git safety hooks
+
+Pebble ships with committed native Git hooks under `.githooks/`.
+
+- `pre-commit` blocks staged additions containing the `sk-or-v1-` secret prefix.
+- `pre-push` blocks outgoing commits containing the same prefix before they leave your machine.
+- Both hooks reuse `scripts/check-no-staged-provider-secrets.ts` so the VS Code agent hook and native Git hooks share one enforcement path.
+
+If your local repository is missing the hook installation, re-run:
+
+```bash
+bun run hooks:install
+```
 
 ---
 

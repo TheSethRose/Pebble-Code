@@ -1,11 +1,15 @@
 import {
-  isSupportedProvider,
-  normalizeProviderId,
   OPENROUTER_DEFAULT_BASE_URL,
   OPENROUTER_DEFAULT_MODEL,
   OPENROUTER_PROVIDER_ID,
   OPENROUTER_PROVIDER_LABEL,
 } from "../constants/openrouter.js";
+import {
+  getBuiltinProviderDefinition,
+  normalizeProviderId,
+  type ProviderAuthKind,
+  type ProviderTransport,
+} from "./catalog.js";
 import type { Settings } from "../runtime/config.js";
 
 type ConfigSource = "settings" | "env" | "default" | "unset";
@@ -16,10 +20,17 @@ export interface ResolvedProviderConfig {
   model: string;
   apiKey: string;
   apiKeyConfigured: boolean;
-  apiKeySource: Extract<ConfigSource, "settings" | "env" | "unset">;
+  apiKeySource: ConfigSource;
   baseUrl: string;
-  baseUrlSource: Extract<ConfigSource, "settings" | "env" | "default">;
+  baseUrlSource: ConfigSource;
   envKeyName: string;
+  envKeyNames: string[];
+  transport: ProviderTransport;
+  authKind: ProviderAuthKind;
+  implemented: boolean;
+  runtimeReady: boolean;
+  missingConfiguration: string[];
+  help?: string;
 }
 
 export function resolveProviderConfig(
@@ -29,52 +40,113 @@ export function resolveProviderConfig(
   const requestedProvider = normalizeProviderId(
     overrides.provider ?? settings.provider ?? process.env.PEBBLE_PROVIDER,
   );
-  const providerId = isSupportedProvider(requestedProvider)
-    ? requestedProvider
-    : OPENROUTER_PROVIDER_ID;
+  const definition = getBuiltinProviderDefinition(requestedProvider)
+    ?? getBuiltinProviderDefinition(OPENROUTER_PROVIDER_ID);
 
-  if (providerId === OPENROUTER_PROVIDER_ID) {
-    const settingsApiKey = settings.apiKey?.trim();
-    const envApiKey = process.env.OPENROUTER_API_KEY?.trim() || process.env.PEBBLE_API_KEY?.trim();
-    const settingsBaseUrl = settings.baseUrl?.trim();
-    const envBaseUrl = process.env.OPENROUTER_BASE_URL?.trim() || process.env.PEBBLE_API_BASE?.trim();
-    const model =
-      overrides.model?.trim() ||
-      settings.model?.trim() ||
-      process.env.OPENROUTER_MODEL?.trim() ||
-      process.env.PEBBLE_MODEL?.trim() ||
-      OPENROUTER_DEFAULT_MODEL;
-
+  if (!definition) {
     return {
-      providerId,
+      providerId: OPENROUTER_PROVIDER_ID,
       providerLabel: OPENROUTER_PROVIDER_LABEL,
-      model,
-      apiKey: settingsApiKey || envApiKey || "",
-      apiKeyConfigured: Boolean(settingsApiKey || envApiKey),
-      apiKeySource: settingsApiKey ? "settings" : envApiKey ? "env" : "unset",
-      baseUrl: settingsBaseUrl || envBaseUrl || OPENROUTER_DEFAULT_BASE_URL,
-      baseUrlSource: settingsBaseUrl ? "settings" : envBaseUrl ? "env" : "default",
+      model: OPENROUTER_DEFAULT_MODEL,
+      apiKey: "",
+      apiKeyConfigured: false,
+      apiKeySource: "unset",
+      baseUrl: OPENROUTER_DEFAULT_BASE_URL,
+      baseUrlSource: "default",
       envKeyName: "OPENROUTER_API_KEY",
+      envKeyNames: ["OPENROUTER_API_KEY"],
+      transport: "openai-compatible",
+      authKind: "api-key",
+      implemented: true,
+      runtimeReady: false,
+      missingConfiguration: ["API key"],
     };
   }
 
+  const settingsApiKey = settings.apiKey?.trim();
+  const envApiKey = firstConfiguredEnv(definition.envKeys);
+  const defaultApiKey = definition.defaultApiKey?.trim();
+  const settingsBaseUrl = settings.baseUrl?.trim();
+  const envBaseUrl = firstConfiguredEnv(definition.baseUrlEnvKeys);
+  const model =
+    overrides.model?.trim() ||
+    settings.model?.trim() ||
+    firstConfiguredEnv(definition.modelEnvKeys) ||
+    definition.defaultModel ||
+    "";
+  const apiKey = settingsApiKey || envApiKey || defaultApiKey || "";
+  const baseUrl = settingsBaseUrl || envBaseUrl || definition.defaultBaseUrl || "";
+  const apiKeySource: ConfigSource = settingsApiKey
+    ? "settings"
+    : envApiKey
+      ? "env"
+      : defaultApiKey
+        ? "default"
+        : "unset";
+  const baseUrlSource: ConfigSource = settingsBaseUrl
+    ? "settings"
+    : envBaseUrl
+      ? "env"
+      : definition.defaultBaseUrl
+        ? "default"
+        : "unset";
+  const missingConfiguration: string[] = [];
+
+  if (!model.trim()) {
+    missingConfiguration.push("model");
+  }
+
+  if (definition.requiresBaseUrl && !baseUrl.trim()) {
+    missingConfiguration.push("base URL");
+  }
+
+  if (definition.requiresApiKey && !apiKey.trim()) {
+    missingConfiguration.push("API key");
+  }
+
   return {
-    providerId: OPENROUTER_PROVIDER_ID,
-    providerLabel: OPENROUTER_PROVIDER_LABEL,
-    model: OPENROUTER_DEFAULT_MODEL,
-    apiKey: "",
-    apiKeyConfigured: false,
-    apiKeySource: "unset",
-    baseUrl: OPENROUTER_DEFAULT_BASE_URL,
-    baseUrlSource: "default",
-    envKeyName: "OPENROUTER_API_KEY",
+    providerId: definition.id,
+    providerLabel: definition.label,
+    model,
+    apiKey,
+    apiKeyConfigured: definition.requiresApiKey ? Boolean(apiKey) : true,
+    apiKeySource,
+    baseUrl,
+    baseUrlSource,
+    envKeyName: definition.envKeys[0] ?? "",
+    envKeyNames: definition.envKeys,
+    transport: definition.transport,
+    authKind: definition.authKind,
+    implemented: definition.implemented,
+    runtimeReady: definition.implemented && missingConfiguration.length === 0,
+    missingConfiguration,
+    help: definition.help,
   };
 }
 
 export function getProviderNotConfiguredMessage(
   config: ResolvedProviderConfig,
 ): string {
-  return `${config.providerLabel} is not configured — run /login <api-key>, /config api-key <api-key>, or set ${config.envKeyName}.`;
+  if (!config.implemented) {
+    return `${config.providerLabel} is cataloged in Pebble, but its built-in runtime path is not implemented yet. ${config.help ?? "See docs/PROVIDERS.md for the required auth and transport details."}`;
+  }
+
+  const hints: string[] = [];
+  if (config.missingConfiguration.includes("API key") && config.envKeyNames.length > 0) {
+    hints.push(`set ${config.envKeyNames.join(" or ")}`);
+  }
+  if (config.missingConfiguration.includes("base URL") && config.baseUrlSource === "unset") {
+    hints.push("configure a base URL in settings or env");
+  }
+  if (config.missingConfiguration.includes("model")) {
+    hints.push("set a model in settings, env, or /model");
+  }
+
+  const detail = config.missingConfiguration.length > 0
+    ? `missing ${config.missingConfiguration.join(", ")}`
+    : "configuration is incomplete";
+  const guidance = hints.length > 0 ? ` — ${hints.join("; ")}` : "";
+  return `${config.providerLabel} is not configured (${detail})${guidance}.`;
 }
 
 export function maskSecret(value?: string | null): string {
@@ -87,4 +159,15 @@ export function maskSecret(value?: string | null): string {
   }
 
   return `${value.slice(0, 4)}••••${value.slice(-4)}`;
+}
+
+function firstConfiguredEnv(keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = process.env[key]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return undefined;
 }

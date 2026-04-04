@@ -151,6 +151,26 @@ describe("headless runtime", () => {
     expect(stdout[0]?.trim().startsWith("{")).toBe(false);
   });
 
+  test("surfaces cataloged-but-unimplemented provider messaging instead of falling back to OpenRouter", async () => {
+    const projectDir = createTempProject("pebble-runtime-unsupported-provider-", {
+      settings: {
+        provider: "anthropic",
+      },
+    });
+
+    const { result: exitCode, stdout, stderr } = await captureConsole(() =>
+      run({
+        headless: true,
+        prompt: "hello",
+        cwd: projectDir,
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout.join("\n")).toContain("Anthropic is cataloged in Pebble");
+    expect(stderr.some((line) => line.includes("Provider: Anthropic"))).toBe(true);
+  });
+
   test("automatically compacts long resumed sessions during headless execution", async () => {
     const projectDir = createTempProject("pebble-runtime-compact-", {
       settings: {

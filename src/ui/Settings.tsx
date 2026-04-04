@@ -13,9 +13,9 @@ import {
   resolveProviderConfig,
   maskSecret,
 } from "../providers/config.js";
+import { applyProviderDefaults, normalizeProviderId } from "../providers/catalog.js";
 import { listRuntimeProviders, resolveRuntimeProvider } from "../providers/runtime.js";
 import {
-  normalizeProviderId,
   OPENROUTER_DEFAULT_MODEL,
   OPENROUTER_DEFAULT_BASE_URL,
   OPENROUTER_PROVIDER_ID,
@@ -55,20 +55,19 @@ interface SettingsProps {
 }
 
 function ensureProviderDefaults(settings: Settings): Settings {
-  const provider = normalizeProviderId(settings.provider);
-  if (provider === OPENROUTER_PROVIDER_ID) {
+  const withDefaults = applyProviderDefaults(settings);
+  if (withDefaults.provider === OPENROUTER_PROVIDER_ID) {
     return {
-      ...settings,
-      provider,
-      model: settings.model?.trim() || OPENROUTER_DEFAULT_MODEL,
-      baseUrl: settings.baseUrl?.trim() || OPENROUTER_DEFAULT_BASE_URL,
+      ...withDefaults,
+      model: withDefaults.model?.trim() || OPENROUTER_DEFAULT_MODEL,
+      baseUrl: withDefaults.baseUrl?.trim() || OPENROUTER_DEFAULT_BASE_URL,
     };
   }
+
   return {
-    ...settings,
-    provider,
-    model: settings.model?.trim(),
-    baseUrl: settings.baseUrl?.trim(),
+    ...withDefaults,
+    model: withDefaults.model?.trim(),
+    baseUrl: withDefaults.baseUrl?.trim(),
   };
 }
 
@@ -211,7 +210,12 @@ function ProviderTab({
       }
       const provider = normalizeProviderId(value);
       if (provider === settings.provider) return;
-      const next = ensureProviderDefaults({ ...settings, provider });
+      const next = ensureProviderDefaults({
+        ...settings,
+        provider,
+        model: undefined,
+        baseUrl: undefined,
+      });
       onSave(next);
       setMessage(`Provider set to ${provider}`);
     },
@@ -225,7 +229,12 @@ function ProviderTab({
         setMessage("Provider ID cannot be empty");
         return;
       }
-      const next = ensureProviderDefaults({ ...settings, provider });
+      const next = ensureProviderDefaults({
+        ...settings,
+        provider,
+        model: undefined,
+        baseUrl: undefined,
+      });
       onSave(next);
       setMessage(`Provider set to ${provider}`);
     },

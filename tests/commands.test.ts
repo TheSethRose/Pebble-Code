@@ -264,6 +264,36 @@ describe("Command Registry", () => {
     expect(loaded.baseUrl).toBe("https://openrouter.ai/api/v1");
   });
 
+  test("/login persists non-default built-in providers with their defaults", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-login-openai-");
+
+    const result = await registry.execute("login", "openai sk-openai-test-key", createCommandContext({
+      cwd: tempDir,
+      config: { provider: "openai" },
+    }));
+
+    expect(result.success).toBe(true);
+
+    const settingsPath = getSettingsPath(tempDir);
+    const saved = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
+      apiKey: string;
+      provider?: string;
+      model?: string;
+      baseUrl?: string;
+    };
+
+    expect(saved.apiKey).toBe("sk-openai-test-key");
+    expect(saved.provider).toBe("openai");
+
+    const loaded = loadSettingsForCwd(tempDir);
+    expect(loaded.provider).toBe("openai");
+    expect(loaded.model).toBe("gpt-4o-mini");
+    expect(loaded.baseUrl).toBe("https://api.openai.com/v1");
+  });
+
   test("migrates legacy workspace settings into ~/.pebble and deletes the leaked copy", () => {
     const tempDir = createTempProjectDir("pebble-command-migrate-");
     const legacySettingsPath = join(tempDir, ".pebble", "settings.json");

@@ -1,12 +1,15 @@
 import type { Command, CommandContext, CommandResult } from "./types";
 import { CommandRegistry } from "./registry";
 import {
-  isSupportedProvider,
-  normalizeProviderId,
   OPENROUTER_DEFAULT_BASE_URL,
   OPENROUTER_DEFAULT_MODEL,
   OPENROUTER_PROVIDER_ID,
 } from "../constants/openrouter.js";
+import {
+  applyProviderDefaults,
+  isSupportedProvider,
+  normalizeProviderId,
+} from "../providers/catalog.js";
 import { estimateTokens } from "../persistence/compaction.js";
 import {
   buildSessionMemory,
@@ -67,21 +70,19 @@ function saveProjectSettings(ctx: CommandContext, settings: Settings): string {
 }
 
 function ensureProviderDefaults(settings: Settings): Settings {
-  const provider = normalizeProviderId(settings.provider);
-  if (provider === OPENROUTER_PROVIDER_ID) {
+  const withDefaults = applyProviderDefaults(settings);
+  if (withDefaults.provider === OPENROUTER_PROVIDER_ID) {
     return {
-      ...settings,
-      provider,
-      model: settings.model?.trim() || OPENROUTER_DEFAULT_MODEL,
-      baseUrl: settings.baseUrl?.trim() || OPENROUTER_DEFAULT_BASE_URL,
+      ...withDefaults,
+      model: withDefaults.model?.trim() || OPENROUTER_DEFAULT_MODEL,
+      baseUrl: withDefaults.baseUrl?.trim() || OPENROUTER_DEFAULT_BASE_URL,
     };
   }
 
   return {
-    ...settings,
-    provider,
-    model: settings.model?.trim(),
-    baseUrl: settings.baseUrl?.trim(),
+    ...withDefaults,
+    model: withDefaults.model?.trim(),
+    baseUrl: withDefaults.baseUrl?.trim(),
   };
 }
 
@@ -183,7 +184,7 @@ function createLoginCommand(): Command {
     aliases: ["auth"],
     description: "Save an API key for the current provider",
     type: "local",
-    usage: "/login [openrouter] <api-key>",
+    usage: "/login [provider] <api-key>",
     modes: ["interactive"],
     execute: (args, ctx): CommandResult => {
       const trimmed = args.trim();
@@ -196,23 +197,29 @@ function createLoginCommand(): Command {
       }
 
       const tokens = trimmed.split(/\s+/);
-      const explicitProvider = tokens.length > 1 ? normalizeProviderId(tokens[0]) : getCurrentProviderId(ctx);
+      const currentProvider = getCurrentProviderId(ctx);
+      const explicitProvider = tokens.length > 1 ? normalizeProviderId(tokens[0]) : currentProvider;
       const apiKey = tokens.length > 1 ? tokens.slice(1).join(" ").trim() : tokens[0] ?? "";
 
       if (!isSupportedProvider(explicitProvider)) {
         return {
           success: true,
-          output: `Unsupported provider: ${explicitProvider}. Currently supported: openrouter.`,
+          output: `Unsupported provider: ${explicitProvider}. Choose a built-in provider from /provider or configure an extension provider instead.`,
         };
       }
 
       if (!apiKey) {
-        return { success: true, output: "Usage: /login [openrouter] <api-key>" };
+        return { success: true, output: "Usage: /login [provider] <api-key>" };
       }
 
+      const currentSettings = loadProjectSettings(ctx);
+      const persistedProvider = normalizeProviderId(currentSettings.provider);
+      const switchingProvider = explicitProvider !== persistedProvider;
       const nextSettings = ensureProviderDefaults({
-        ...loadProjectSettings(ctx),
+        ...currentSettings,
         provider: explicitProvider,
+        model: switchingProvider ? undefined : currentSettings.model,
+        baseUrl: switchingProvider ? undefined : currentSettings.baseUrl,
         apiKey,
       });
       const settingsPath = saveProjectSettings(ctx, nextSettings);

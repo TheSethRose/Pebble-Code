@@ -69,7 +69,7 @@ export function PromptInput({
             const isSelected = i === selectedSuggestionIndex;
             return (
               <Box key={s.name}>
-                <Text color={isSelected ? "cyan" : "gray"}>
+                <Text color={isSelected ? "cyan" : "#aaaaaa"}>
                   {isSelected ? "▶ " : "  "}
                 </Text>
                 <Text color={isSelected ? "cyan" : "white"} bold={isSelected}>
@@ -84,14 +84,14 @@ export function PromptInput({
         </Box>
       )}
 
-      <Text color="gray">{rule}</Text>
+      <Text color="#aaaaaa">{rule}</Text>
 
       {showActionRow && (
         <Box justifyContent={actionHint ? "space-between" : "flex-start"} paddingX={1}>
           <Text color={actionColor} bold>
             {actionLabel}
           </Text>
-          {actionHint ? <Text color="gray">{actionHint}</Text> : null}
+          {actionHint ? <Text color="#aaaaaa">{actionHint}</Text> : null}
         </Box>
       )}
 
@@ -106,7 +106,7 @@ export function PromptInput({
           {promptGlyph}{" "}
         </Text>
         {disabled ? (
-          <Text color="gray">Interactive prompt is temporarily paused above.</Text>
+          <Text color="#aaaaaa">Interactive prompt is temporarily paused above.</Text>
         ) : (
           <TextInput
             key={`${isProcessing ? "busy" : "idle"}-${inputKey}`}
@@ -118,14 +118,14 @@ export function PromptInput({
         )}
       </Box>
 
-      <Text color="gray">{rule}</Text>
+      <Text color="#aaaaaa">{rule}</Text>
 
       <Box justifyContent="space-between" paddingX={1}>
-        <Text color={isProcessing || disabled ? "yellow" : "gray"}>
+        <Text color={isProcessing || disabled ? "yellow" : "#aaaaaa"}>
           {footerStatusLabel}
           {!isProcessing && !disabled ? " · Enter sends · Tab ⇄ sessions" : ""}
         </Text>
-        <Text color="gray">
+        <Text color="#aaaaaa">
           {model} · {sessionLabel} · {IS_MAC ? "⌘" : "Ctrl"}+P help
         </Text>
       </Box>

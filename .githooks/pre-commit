@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+exec bun ./scripts/check-no-staged-provider-secrets.ts --mode staged

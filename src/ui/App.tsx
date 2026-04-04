@@ -33,6 +33,7 @@ import { TerminalMouseProvider } from "./components/TerminalMouseProvider.js";
 import { SessionSidebar, SidebarRail, deriveSessionTitle } from "./components/SessionSidebar.js";
 import type { SessionSummary } from "./components/SessionSidebar.js";
 import { KeybindingsPopup } from "./components/KeybindingsPopup.js";
+import { DeleteConfirmDialog } from "./components/DeleteConfirmDialog.js";
 import { PermissionPrompt } from "./components/PermissionPrompt.js";
 import { QuestionPrompt } from "./components/QuestionPrompt.js";
 import { Settings } from "./Settings.js";
@@ -406,6 +407,15 @@ export function App({ context }: { context: CommandContext }) {
     [handleSessionSelect, sidebarSessions],
   );
 
+  const openDeleteConfirm = React.useCallback(
+    (session: SessionSummary, index: number, focusArea: "input" | "sidebar" = "sidebar") => {
+      setSidebarIndex(index);
+      setFocusArea(focusArea);
+      setDeleteConfirm({ sessionId: session.id, title: session.title, selectedButton: "cancel" });
+    },
+    [],
+  );
+
   const handleDeleteSession = React.useCallback(
     (sessionId: string) => {
       if (!sessionStore) return;
@@ -647,7 +657,7 @@ export function App({ context }: { context: CommandContext }) {
         if ((key.backspace || key.delete) && sidebarIndex > 0) {
           const session = sidebarSessions[sidebarIndex - 1];
           if (session) {
-            setDeleteConfirm({ sessionId: session.id, title: session.title, selectedButton: "cancel" });
+            openDeleteConfirm(session, sidebarIndex, "sidebar");
           }
           return;
         }
@@ -1055,7 +1065,7 @@ export function App({ context }: { context: CommandContext }) {
   const HORIZONTAL_FRAME_WIDTH = 2;
   const MAIN_RIGHT_GAP = sidebarVisible ? 1 : 0;
   const transcriptRows = Math.max(4, rows - FIXED_UI_ROWS);
-  const sidebarWidth = 29;
+  const sidebarWidth = 35;
   const effectiveSidebarWidth = sidebarVisible ? sidebarWidth : 0;
   const availableWidth = isFullscreen ? Math.max(20, columns - HORIZONTAL_FRAME_WIDTH) : undefined;
   const mainWidth = isFullscreen
@@ -1112,7 +1122,7 @@ export function App({ context }: { context: CommandContext }) {
 
   // --- Modals rendered as full-screen replacements (Ink has no z-index) ---
   if (deleteConfirm) {
-    return (
+    const dialog = (
       <Box
         flexDirection="column"
         alignItems="center"
@@ -1120,46 +1130,20 @@ export function App({ context }: { context: CommandContext }) {
         width={isFullscreen ? columns : undefined}
         height={isFullscreen ? rows : undefined}
       >
-        <Box
-          flexDirection="column"
-          borderStyle="round"
-          borderColor="red"
-          paddingX={3}
-          paddingY={1}
-          width={44}
-        >
-          <Box marginBottom={1} justifyContent="center">
-            <Text bold color="red">Delete session?</Text>
-          </Box>
-          <Box marginBottom={1} justifyContent="center">
-            <Text color="white">
-              {deleteConfirm.title.length > 34
-                ? deleteConfirm.title.slice(0, 33) + "…"
-                : deleteConfirm.title}
-            </Text>
-          </Box>
-          <Box justifyContent="center" gap={3}>
-            <Text
-              color={deleteConfirm.selectedButton === "delete" ? "white" : "gray"}
-              backgroundColor={deleteConfirm.selectedButton === "delete" ? "red" : undefined}
-              bold={deleteConfirm.selectedButton === "delete"}
-            >
-              {"  Delete  "}
-            </Text>
-            <Text
-              color={deleteConfirm.selectedButton === "cancel" ? "black" : "gray"}
-              backgroundColor={deleteConfirm.selectedButton === "cancel" ? "white" : undefined}
-              bold={deleteConfirm.selectedButton === "cancel"}
-            >
-              {"  Cancel  "}
-            </Text>
-          </Box>
-          <Box marginTop={1} justifyContent="center">
-            <Text dimColor>← → switch · Enter confirm · Esc cancel</Text>
-          </Box>
-        </Box>
+        <DeleteConfirmDialog
+          title={deleteConfirm.title}
+          selectedButton={deleteConfirm.selectedButton}
+          mouseEnabled={isFullscreen}
+          onDelete={() => {
+            handleDeleteSession(deleteConfirm.sessionId);
+            setDeleteConfirm(null);
+          }}
+          onCancel={() => setDeleteConfirm(null)}
+        />
       </Box>
     );
+
+    return isFullscreen ? <TerminalMouseProvider>{dialog}</TerminalMouseProvider> : dialog;
   }
 
   if (showKeybindings) {
@@ -1311,6 +1295,7 @@ export function App({ context }: { context: CommandContext }) {
             sessions={sidebarSessions}
             activeSessionId={state.activeSessionId}
             onSelect={(_sessionId, index) => activateSidebarSelection(index, { focusArea: "input" })}
+            onRequestDelete={(session, index) => openDeleteConfirm(session, index, "sidebar")}
             selectedIndex={sidebarIndex}
             isFocused={focusArea === "sidebar"}
             mouseEnabled={isFullscreen}

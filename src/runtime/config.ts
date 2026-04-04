@@ -13,6 +13,7 @@ import {
   OPENROUTER_DEFAULT_MODEL,
   OPENROUTER_PROVIDER_ID,
 } from "../constants/openrouter.js";
+import { applyProviderDefaults } from "../providers/catalog.js";
 import type { McpServerConfig } from "../extensions/contracts.js";
 import { buildTrustConfig } from "./trust";
 import type { TrustConfig, PermissionMode } from "./permissions";
@@ -37,8 +38,6 @@ export interface Settings {
 const DEFAULT_SETTINGS: Settings = {
   permissionMode: "always-ask",
   provider: OPENROUTER_PROVIDER_ID,
-  model: OPENROUTER_DEFAULT_MODEL,
-  baseUrl: OPENROUTER_DEFAULT_BASE_URL,
   telemetryEnabled: false,
   maxTurns: 50,
   fullscreenRenderer: true,
@@ -81,9 +80,11 @@ function readSettingsFile(configPath: string): SettingsInput {
 }
 
 function mergeSettingsLayers(...layers: SettingsInput[]): Settings {
-  return layers.reduce<Settings>(
-    (merged, layer) => ({ ...merged, ...layer }),
-    { ...DEFAULT_SETTINGS },
+  return applyProviderDefaults(
+    layers.reduce<Settings>(
+      (merged, layer) => ({ ...merged, ...layer }),
+      { ...DEFAULT_SETTINGS },
+    ),
   );
 }
 

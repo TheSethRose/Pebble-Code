@@ -202,8 +202,8 @@ function buildBannerRows(
   }));
 
   rows.push({ key: "banner:gap:0", segments: [createSpan("")] });
-  rows.push({ key: "banner:meta", segments: [createSpan(metadataLine, { color: "gray" })] });
-  rows.push({ key: "banner:cwd", segments: [createSpan(cwdLine, { color: "gray" })] });
+  rows.push({ key: "banner:meta", segments: [createSpan(metadataLine, { color: "#aaaaaa" })] });
+  rows.push({ key: "banner:cwd", segments: [createSpan(cwdLine, { color: "#aaaaaa" })] });
   rows.push({ key: "banner:gap:1", segments: [createSpan("")] });
 
   if (isEmptyState) {
@@ -214,7 +214,7 @@ function buildBannerRows(
       "",
       "Use /help if you want commands.",
       width,
-      { color: "gray" },
+      { color: "#aaaaaa" },
     );
 
     return rows;
@@ -222,7 +222,7 @@ function buildBannerRows(
 
   rows.push({
     key: "banner:hint",
-    segments: [createSpan("Ask Pebble anything, or use /help", { color: "gray" })],
+    segments: [createSpan("Ask Pebble anything, or use /help", { color: "#aaaaaa" })],
   });
 
   return rows;
@@ -311,7 +311,7 @@ function messageToRows(
       return rows;
 
     case "command":
-      pushWrappedRows(rows, keyBase, "› ", "  ", message.content || "(empty)", width, { color: "gray" });
+      pushWrappedRows(rows, keyBase, "› ", "  ", message.content || "(empty)", width, { color: "#aaaaaa" });
       return rows;
 
     case "output":
@@ -336,7 +336,7 @@ function messageToRows(
         ? `requested as ${meta.requestedToolName}`
         : meta?.qualifiedToolName;
       if (aliasLine) {
-        pushWrappedRows(rows, `${keyBase}:alias`, "  ", "  ", aliasLine, width, { color: "gray", dimColor: true });
+        pushWrappedRows(rows, `${keyBase}:alias`, "  ", "  ", aliasLine, width, { color: "#888888" });
       }
       return rows;
     }
@@ -370,7 +370,7 @@ function messageToRows(
       }
 
       if (!collapseDetails && meta?.summary && meta.summary !== meta.toolOutput) {
-        pushWrappedRows(rows, `${keyBase}:summary`, "  ", "  ", meta.summary, width, { color: "gray", dimColor: true });
+        pushWrappedRows(rows, `${keyBase}:summary`, "  ", "  ", meta.summary, width, { color: "#888888" });
       }
 
       if (meta?.errorMessage && meta.errorMessage !== meta.toolOutput) {
@@ -379,7 +379,7 @@ function messageToRows(
 
       const extraMeta = compactParts([meta?.toolCallId, meta?.requestedToolName, meta?.qualifiedToolName]);
       if (!collapseDetails && extraMeta) {
-        pushWrappedRows(rows, `${keyBase}:meta`, "  ", "  ", extraMeta, width, { color: "gray", dimColor: true });
+        pushWrappedRows(rows, `${keyBase}:meta`, "  ", "  ", extraMeta, width, { color: "#888888" });
       }
 
       return rows;

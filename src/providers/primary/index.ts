@@ -30,7 +30,7 @@ export class PrimaryProvider implements Provider {
     this.id = config.providerId;
     this.name = config.providerLabel;
     this.model = config.model;
-    if (config.apiKey.length > 0) {
+    if (config.transport === "openai-compatible" && config.runtimeReady) {
       this.client = new OpenAI({
         apiKey: config.apiKey,
         baseURL: config.baseUrl,
@@ -263,7 +263,7 @@ export function createPrimaryProvider(options: {
   settings?: Partial<Settings>;
   provider?: string;
   model?: string;
-} = {}): PrimaryProvider {
+} = {}): Provider {
   return new PrimaryProvider(
     resolveProviderConfig(options.settings, {
       provider: options.provider,
