@@ -247,18 +247,19 @@ describe("Command Registry", () => {
     expect(existsSync(join(tempDir, ".pebble", "settings.json"))).toBe(false);
 
     const saved = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
-      apiKey: string;
+      providerAuth?: Record<string, { credential: string }>;
       provider?: string;
       model?: string;
       baseUrl?: string;
     };
 
-    expect(saved.apiKey).toBe("sk-or-v1-test-key");
+    expect(saved.providerAuth?.openrouter?.credential).toBe("sk-or-v1-test-key");
     expect(saved.provider).toBeUndefined();
     expect(saved.model).toBeUndefined();
     expect(saved.baseUrl).toBeUndefined();
 
     const loaded = loadSettingsForCwd(tempDir);
+    expect(loaded.apiKey).toBe("sk-or-v1-test-key");
     expect(loaded.provider).toBe("openrouter");
     expect(loaded.model).toBe("openrouter/auto");
     expect(loaded.baseUrl).toBe("https://openrouter.ai/api/v1");
@@ -279,19 +280,62 @@ describe("Command Registry", () => {
 
     const settingsPath = getSettingsPath(tempDir);
     const saved = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
-      apiKey: string;
+      providerAuth?: Record<string, { credential: string }>;
       provider?: string;
       model?: string;
       baseUrl?: string;
     };
 
-    expect(saved.apiKey).toBe("sk-openai-test-key");
+    expect(saved.providerAuth?.openai?.credential).toBe("sk-openai-test-key");
     expect(saved.provider).toBe("openai");
 
     const loaded = loadSettingsForCwd(tempDir);
+    expect(loaded.apiKey).toBe("sk-openai-test-key");
     expect(loaded.provider).toBe("openai");
     expect(loaded.model).toBe("gpt-4o-mini");
     expect(loaded.baseUrl).toBe("https://api.openai.com/v1");
+  });
+
+  test("/login stores multiple provider credentials without overwriting prior ones", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-multi-login-");
+
+    const first = await registry.execute("login", "openai sk-openai-test-key", createCommandContext({
+      cwd: tempDir,
+      config: { provider: "openai" },
+    }));
+    const second = await registry.execute("login", "openrouter sk-or-v1-test-key", createCommandContext({
+      cwd: tempDir,
+      config: { provider: "openrouter" },
+    }));
+
+    expect(first.success).toBe(true);
+    expect(second.success).toBe(true);
+
+    const saved = JSON.parse(readFileSync(getSettingsPath(tempDir), "utf-8")) as {
+      providerAuth?: Record<string, { credential: string }>;
+    };
+
+    expect(saved.providerAuth?.openai?.credential).toBe("sk-openai-test-key");
+    expect(saved.providerAuth?.openrouter?.credential).toBe("sk-or-v1-test-key");
+  });
+
+  test("/login refuses oauth-only providers instead of storing a fake API key", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-oauth-login-");
+
+    const result = await registry.execute("login", "github-copilot fake-token", createCommandContext({
+      cwd: tempDir,
+      config: { provider: "github-copilot" },
+    }));
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("cannot be configured with a pasted");
+    expect(existsSync(getSettingsPath(tempDir))).toBe(false);
   });
 
   test("migrates legacy workspace settings into ~/.pebble and deletes the leaked copy", () => {
@@ -314,10 +358,10 @@ describe("Command Registry", () => {
 
     const migrated = JSON.parse(readFileSync(migratedSettingsPath, "utf-8")) as {
       provider: string;
-      apiKey: string;
+      providerAuth?: Record<string, { credential: string }>;
     };
     expect(migrated.provider).toBe("openrouter");
-    expect(migrated.apiKey).toBe("legacy-secret");
+    expect(migrated.providerAuth?.openrouter?.credential).toBe("legacy-secret");
   });
 
   test("loads committed repo defaults from .pebble/project-settings.json", () => {
@@ -371,7 +415,7 @@ describe("Command Registry", () => {
     const userSettingsPath = getSettingsPath(tempDir);
     const saved = JSON.parse(readFileSync(userSettingsPath, "utf-8")) as Record<string, unknown>;
 
-    expect(saved.apiKey).toBe("sk-or-v1-test-key");
+    expect((saved.providerAuth as Record<string, { credential: string }> | undefined)?.openrouter?.credential).toBe("sk-or-v1-test-key");
     expect(saved.model).toBeUndefined();
     expect(saved.baseUrl).toBeUndefined();
     expect(saved.maxTurns).toBeUndefined();

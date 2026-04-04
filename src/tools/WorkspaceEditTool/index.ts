@@ -9,6 +9,33 @@ import { resolveWorkspacePath } from "../shared/common.js";
 
 const SensitivePathSchema = z.string();
 
+const booleanish = z.preprocess((value) => {
+  if (typeof value === "string") {
+    if (value === "true") {
+      return true;
+    }
+    if (value === "false") {
+      return false;
+    }
+  }
+
+  return value;
+}, z.boolean());
+
+const numberish = z.preprocess((value) => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      const parsed = Number(trimmed);
+      if (!Number.isNaN(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return value;
+}, z.number());
+
 const WorkspaceEditInputSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("create_directory"),
@@ -18,15 +45,15 @@ const WorkspaceEditInputSchema = z.discriminatedUnion("action", [
     action: z.literal("write_file"),
     file_path: z.string(),
     content: z.string(),
-    overwrite: z.boolean().optional(),
-    create_directories: z.boolean().optional(),
+    overwrite: booleanish.optional(),
+    create_directories: booleanish.optional(),
   }),
   z.object({
     action: z.literal("edit_file"),
     file_path: z.string(),
     old_string: z.string(),
     new_string: z.string(),
-    expected_replacements: z.number().optional(),
+    expected_replacements: numberish.optional(),
   }),
   z.object({
     action: z.literal("apply_patch"),
@@ -35,13 +62,13 @@ const WorkspaceEditInputSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("delete_path"),
     path: z.string(),
-    recursive: z.boolean().optional(),
+    recursive: booleanish.optional(),
   }),
   z.object({
     action: z.literal("move_path"),
     source_path: z.string(),
     destination_path: z.string(),
-    overwrite: z.boolean().optional(),
+    overwrite: booleanish.optional(),
   }),
 ]);
 

@@ -43,6 +43,8 @@ export function resolveRuntimeProvider(
       transport: "unimplemented",
       authKind: "api-key",
       implemented: true,
+      requestHeaders: {},
+      exampleModels: [extensionProvider.model],
       runtimeReady: configured,
       missingConfiguration: configured ? [] : ["extension provider configuration"],
       help: "This provider is supplied by an extension and manages its own runtime transport.",

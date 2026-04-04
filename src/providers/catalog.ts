@@ -28,6 +28,8 @@ export interface BuiltinProviderDefinition {
   requiresApiKey: boolean;
   requiresBaseUrl: boolean;
   implemented: boolean;
+  exampleModels: string[];
+  requestHeaders?: Record<string, string>;
   aliases?: string[];
   help?: string;
 }
@@ -46,6 +48,8 @@ function openAiCompatible(
     authKind?: ProviderAuthKind;
     requiresApiKey?: boolean;
     requiresBaseUrl?: boolean;
+    exampleModels?: string[];
+    requestHeaders?: Record<string, string>;
     help?: string;
   },
 ): BuiltinProviderDefinition {
@@ -63,6 +67,8 @@ function openAiCompatible(
     requiresApiKey: options.requiresApiKey ?? true,
     requiresBaseUrl: options.requiresBaseUrl ?? true,
     implemented: true,
+    exampleModels: options.exampleModels ?? compactModels(options.defaultModel),
+    requestHeaders: options.requestHeaders,
     aliases: options.aliases,
     help: options.help,
   };
@@ -91,9 +97,86 @@ function catalogOnly(
     requiresApiKey: options.authKind === "api-key" || options.authKind === "gateway" || options.authKind === "service-key",
     requiresBaseUrl: options.authKind === "gateway" || options.authKind === "local-url",
     implemented: false,
+    exampleModels: [],
     aliases: options.aliases,
     help: options.help,
   };
+}
+
+function compactModels(...values: Array<string | undefined>): string[] {
+  return values.filter((value): value is string => Boolean(value?.trim()));
+}
+
+function resolveDefinition(
+  provider?: string | BuiltinProviderDefinition,
+): BuiltinProviderDefinition | undefined {
+  if (!provider) {
+    return undefined;
+  }
+
+  return typeof provider === "string"
+    ? getBuiltinProviderDefinition(provider)
+    : provider;
+}
+
+export function providerSupportsManualCredentialEntry(
+  provider?: string | BuiltinProviderDefinition,
+): boolean {
+  const definition = resolveDefinition(provider);
+  if (!definition) {
+    return false;
+  }
+
+  return definition.authKind === "api-key"
+    || definition.authKind === "gateway"
+    || definition.authKind === "service-key"
+    || definition.authKind === "local-url";
+}
+
+export function getProviderCredentialLabel(
+  provider?: string | BuiltinProviderDefinition,
+): string {
+  const definition = resolveDefinition(provider);
+  switch (definition?.authKind) {
+    case "gateway":
+      return "gateway token";
+    case "service-key":
+      return "service key";
+    case "local-url":
+      return "local token / marker key";
+    case "oauth":
+      return "OAuth session";
+    case "cloud-credentials":
+      return "cloud credentials";
+    case "api-key":
+    default:
+      return "API key";
+  }
+}
+
+export function getProviderAuthDescription(
+  provider?: string | BuiltinProviderDefinition,
+): string {
+  const definition = resolveDefinition(provider);
+  if (!definition) {
+    return "Configure a provider first.";
+  }
+
+  switch (definition.authKind) {
+    case "oauth":
+      return `${definition.label} uses browser/device OAuth. Pebble catalogs that flow, but direct OAuth login is not implemented yet.`;
+    case "cloud-credentials":
+      return `${definition.label} uses cloud credentials or IAM identity instead of a single API key.`;
+    case "gateway":
+      return `${definition.label} routes through a gateway or proxy token and may also need upstream provider credentials.`;
+    case "service-key":
+      return `${definition.label} uses a service key / enterprise credential instead of a standard API token.`;
+    case "local-url":
+      return `${definition.label} usually runs against a local or self-hosted URL and may only need a marker key.`;
+    case "api-key":
+    default:
+      return `${definition.label} uses direct API-key authentication.`;
+  }
 }
 
 function envPrefixForProvider(id: string): string {
@@ -107,12 +190,22 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     baseUrlEnvKeys: ["OPENROUTER_BASE_URL", "PEBBLE_API_BASE"],
     defaultModel: OPENROUTER_DEFAULT_MODEL,
     defaultBaseUrl: OPENROUTER_DEFAULT_BASE_URL,
+    exampleModels: [
+      OPENROUTER_DEFAULT_MODEL,
+      "anthropic/claude-sonnet-4.6",
+      "openai/gpt-4.1-mini",
+    ],
+    requestHeaders: {
+      "HTTP-Referer": "https://github.com/TheSethRose/Pebble-Code",
+      "X-Title": "Pebble Code",
+    },
     aliases: ["or"],
   }),
   openAiCompatible("openai", "OpenAI", {
     envKeys: ["OPENAI_API_KEY"],
     defaultModel: "gpt-4o-mini",
     defaultBaseUrl: "https://api.openai.com/v1",
+    exampleModels: ["gpt-4o-mini", "gpt-4.1-mini", "gpt-4.1"],
   }),
   catalogOnly("anthropic", "Anthropic", {
     envKeys: ["ANTHROPIC_API_KEY"],
@@ -129,46 +222,140 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     envKeys: ["XAI_API_KEY"],
     defaultModel: "grok-2-latest",
     defaultBaseUrl: "https://api.x.ai/v1",
+    exampleModels: ["grok-2-latest", "grok-beta"],
   }),
   openAiCompatible("groq", "Groq", {
     envKeys: ["GROQ_API_KEY"],
     defaultModel: "llama-3.3-70b-versatile",
     defaultBaseUrl: "https://api.groq.com/openai/v1",
+    exampleModels: ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
   }),
   openAiCompatible("mistral", "Mistral", {
     envKeys: ["MISTRAL_API_KEY"],
     defaultModel: "mistral-large-latest",
     defaultBaseUrl: "https://api.mistral.ai/v1",
+    exampleModels: ["mistral-large-latest", "ministral-8b-latest"],
   }),
   openAiCompatible("deepseek", "DeepSeek", {
     envKeys: ["DEEPSEEK_API_KEY"],
     defaultModel: "deepseek-chat",
     defaultBaseUrl: "https://api.deepseek.com/v1",
+    exampleModels: ["deepseek-chat", "deepseek-reasoner"],
   }),
   openAiCompatible("together", "Together AI", {
     envKeys: ["TOGETHER_API_KEY"],
     defaultModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
     defaultBaseUrl: "https://api.together.xyz/v1",
+    exampleModels: [
+      "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      "deepseek-ai/DeepSeek-V3",
+    ],
   }),
   openAiCompatible("cerebras", "Cerebras", {
     envKeys: ["CEREBRAS_API_KEY"],
     defaultModel: "llama-3.3-70b",
     defaultBaseUrl: "https://api.cerebras.ai/v1",
+    exampleModels: ["llama-3.3-70b", "qwen-3-coder-480b"],
   }),
   openAiCompatible("deepinfra", "DeepInfra", {
     envKeys: ["DEEPINFRA_API_KEY"],
     defaultModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
     defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
+    exampleModels: [
+      "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      "deepseek-ai/DeepSeek-V3.1",
+    ],
   }),
   openAiCompatible("nvidia", "NVIDIA", {
     envKeys: ["NVIDIA_API_KEY"],
     defaultModel: "meta/llama-3.3-70b-instruct",
     defaultBaseUrl: "https://integrate.api.nvidia.com/v1",
+    exampleModels: ["meta/llama-3.3-70b-instruct", "mistralai/mistral-large"],
   }),
   openAiCompatible("perplexity", "Perplexity", {
     envKeys: ["PERPLEXITY_API_KEY"],
     defaultModel: "sonar",
     defaultBaseUrl: "https://api.perplexity.ai",
+    exampleModels: ["sonar", "sonar-pro"],
+  }),
+  openAiCompatible("huggingface", "Hugging Face", {
+    envKeys: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
+    defaultModel: "huggingface/deepseek-ai/DeepSeek-R1",
+    defaultBaseUrl: "https://router.huggingface.co/v1",
+    aliases: ["hf"],
+    exampleModels: [
+      "huggingface/deepseek-ai/DeepSeek-R1",
+      "huggingface/Qwen/Qwen3-8B",
+      "huggingface/meta-llama/Llama-3.3-70B-Instruct",
+    ],
+    help: "Hugging Face can also discover models from /v1/models when a valid token is configured; Pebble seeds a static fallback list until live smoke tests are added.",
+  }),
+  openAiCompatible("zai", "Z.AI", {
+    envKeys: ["ZAI_API_KEY"],
+    defaultModel: "zai/glm-5",
+    defaultBaseUrl: "https://api.z.ai/api/paas/v4",
+    aliases: ["glm"],
+    exampleModels: ["zai/glm-5", "zai/glm-5.1", "zai/glm-4.7"],
+    help: "Pebble defaults to the Z.AI global endpoint. Switch base URL manually for CN or coding-plan surfaces until automatic endpoint detection exists.",
+  }),
+  openAiCompatible("moonshot", "Moonshot", {
+    envKeys: ["MOONSHOT_API_KEY"],
+    defaultModel: "moonshot/kimi-k2.5",
+    defaultBaseUrl: "https://api.moonshot.ai/v1",
+    exampleModels: [
+      "moonshot/kimi-k2.5",
+      "moonshot/kimi-k2-thinking",
+      "moonshot/kimi-k2-turbo",
+    ],
+    help: "Pebble currently wires the Moonshot OpenAI-compatible surface only. Kimi Coding remains a separate Anthropic-compatible path.",
+  }),
+  openAiCompatible("qianfan", "Qianfan", {
+    envKeys: ["QIANFAN_API_KEY"],
+    defaultModel: "qianfan/deepseek-v3.2",
+    defaultBaseUrl: "https://qianfan.baidubce.com/v2",
+    exampleModels: ["qianfan/deepseek-v3.2", "qianfan/ernie-4.5-300b-a47b"],
+  }),
+  openAiCompatible("qwen", "Qwen / Model Studio", {
+    envKeys: ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"],
+    defaultModel: "qwen/qwen3.5-plus",
+    defaultBaseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    aliases: ["model-studio"],
+    exampleModels: ["qwen/qwen3.5-plus", "qwen/qwen3-coder-plus"],
+    help: "Pebble defaults to the global Model Studio endpoint. Override the base URL for China-region or coding-specific endpoints if needed.",
+  }),
+  openAiCompatible("stepfun", "StepFun", {
+    envKeys: ["STEPFUN_API_KEY"],
+    defaultModel: "stepfun/step-3.5-flash",
+    defaultBaseUrl: "https://api.stepfun.ai/v1",
+    exampleModels: ["stepfun/step-3.5-flash", "stepfun/step-3.5v-mini"],
+  }),
+  openAiCompatible("stepfun-plan", "StepFun Plan", {
+    envKeys: ["STEPFUN_API_KEY"],
+    defaultModel: "stepfun-plan/step-3.5-flash",
+    defaultBaseUrl: "https://api.stepfun.ai/step_plan/v1",
+    exampleModels: ["stepfun-plan/step-3.5-flash"],
+    help: "StepFun Plan uses the separate coding-plan endpoint; live smoke tests are still pending.",
+  }),
+  openAiCompatible("volcengine", "Volcengine", {
+    envKeys: ["VOLCANO_ENGINE_API_KEY"],
+    defaultModel: "volcengine/doubao-seed-1.6",
+    defaultBaseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    aliases: ["doubao"],
+    exampleModels: ["volcengine/doubao-seed-1.6", "volcengine/doubao-vision-pro-32k"],
+  }),
+  openAiCompatible("volcengine-plan", "Volcengine Plan", {
+    envKeys: ["VOLCANO_ENGINE_API_KEY"],
+    defaultModel: "volcengine-plan/ark-code-latest",
+    defaultBaseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+    exampleModels: ["volcengine-plan/ark-code-latest"],
+    help: "Volcengine Plan uses the separate coding endpoint; live smoke tests are still pending.",
+  }),
+  openAiCompatible("kilocode", "Kilocode", {
+    envKeys: ["KILOCODE_API_KEY"],
+    defaultModel: "kilocode/kilo/auto",
+    defaultBaseUrl: "https://api.kilo.ai/api/gateway",
+    exampleModels: ["kilocode/kilo/auto"],
+    help: "Kilocode is wired through its OpenAI-compatible smart router. Upstream-model reporting and live smoke tests are still pending.",
   }),
   openAiCompatible("ollama", "Ollama", {
     envKeys: ["OLLAMA_API_KEY"],
@@ -177,6 +364,7 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     defaultModel: "llama3.2",
     defaultBaseUrl: "http://localhost:11434/v1",
     requiresApiKey: false,
+    exampleModels: ["llama3.2", "qwen2.5-coder:7b"],
     aliases: ["ollama-local"],
     help: "Local Ollama runs typically use a URL-only setup; Pebble seeds the conventional local marker key when no explicit credential is configured.",
   }),
@@ -187,6 +375,7 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     defaultModel: "gpt-4o-mini",
     defaultBaseUrl: "http://localhost:4000/v1",
     requiresApiKey: false,
+    exampleModels: ["gpt-4o-mini", "claude-3-7-sonnet"],
   }),
   openAiCompatible("vllm", "vLLM", {
     envKeys: ["VLLM_API_KEY"],
@@ -195,6 +384,7 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     defaultModel: "local-model",
     defaultBaseUrl: "http://localhost:8000/v1",
     requiresApiKey: false,
+    exampleModels: ["local-model"],
   }),
   openAiCompatible("sglang", "SGLang", {
     envKeys: ["SGLANG_API_KEY"],
@@ -203,6 +393,7 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     defaultModel: "local-model",
     defaultBaseUrl: "http://localhost:30000/v1",
     requiresApiKey: false,
+    exampleModels: ["local-model"],
   }),
   openAiCompatible("custom-openai", "Custom OpenAI-Compatible Endpoint", {
     envKeys: ["CUSTOM_OPENAI_API_KEY", "CUSTOMOAI_API_KEY"],
@@ -210,6 +401,7 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     baseUrlEnvKeys: ["CUSTOM_OPENAI_BASE_URL", "CUSTOMOAI_BASE_URL"],
     aliases: ["customoai", "custom-openai-endpoint"],
     requiresBaseUrl: true,
+    exampleModels: ["custom/model"],
     help: "Set a custom base URL plus model metadata to route Pebble through another OpenAI-compatible endpoint.",
   }),
   catalogOnly("github-copilot", "GitHub Copilot", {
@@ -291,41 +483,20 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     authKind: "api-key",
     help: "Pebble has cataloged Deepgram, but it belongs on a media/transcription tool path instead of Pebble's chat-model runtime.",
   }),
-  catalogOnly("zai", "Z.AI", {
-    envKeys: ["ZAI_API_KEY"],
-    aliases: ["glm"],
-    authKind: "api-key",
-    help: "Pebble has cataloged Z.AI / GLM, but the built-in runtime still needs a verified provider-specific endpoint/default-model path.",
-  }),
-  catalogOnly("huggingface", "Hugging Face", {
-    envKeys: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
-    authKind: "api-key",
-    help: "Pebble has cataloged Hugging Face, but the built-in runtime still needs a verified inference/chat transport path.",
-  }),
   catalogOnly("kilo", "Kilo", {
     envKeys: ["KILO_API_KEY"],
     authKind: "api-key",
     help: "Pebble has cataloged Kilo, but the built-in runtime still needs a verified provider-specific endpoint/default-model path.",
-  }),
-  catalogOnly("kilocode", "Kilocode", {
-    envKeys: ["KILOCODE_API_KEY"],
-    authKind: "api-key",
-    help: "Pebble has cataloged Kilocode, but the built-in runtime still needs the smart-router request path and upstream-model reporting.",
   }),
   catalogOnly("minimax", "MiniMax", {
     envKeys: ["MINIMAX_API_KEY"],
     authKind: "api-key",
     help: "Pebble has cataloged MiniMax API-key mode, but the built-in runtime still needs a verified provider-specific endpoint/default-model path.",
   }),
-  catalogOnly("moonshot", "Moonshot", {
-    envKeys: ["MOONSHOT_API_KEY"],
-    authKind: "api-key",
-    help: "Pebble has cataloged Moonshot, but the built-in runtime still needs a verified provider-specific endpoint/default-model path.",
-  }),
   catalogOnly("kimi", "Kimi", {
     envKeys: ["KIMI_API_KEY"],
     authKind: "api-key",
-    help: "Pebble has cataloged Kimi, but the built-in runtime still needs the separate Kimi coding endpoint/model path.",
+    help: "Pebble catalogs Kimi Coding, but the mirrored source describes it as a separate Anthropic-compatible provider path rather than an OpenAI-compatible one.",
   }),
   catalogOnly("opencode", "OpenCode", {
     envKeys: ["OPENCODE_API_KEY"],
@@ -337,31 +508,10 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     authKind: "api-key",
     help: "Pebble has cataloged OpenCode Go, but the built-in runtime still needs the provider-specific catalog/routing path.",
   }),
-  catalogOnly("qianfan", "Qianfan", {
-    envKeys: ["QIANFAN_API_KEY"],
-    authKind: "api-key",
-    help: "Pebble has cataloged Qianfan, but the built-in runtime still needs a verified provider-specific endpoint/default-model path.",
-  }),
-  catalogOnly("qwen", "Qwen / Model Studio", {
-    envKeys: ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"],
-    aliases: ["model-studio"],
-    authKind: "api-key",
-    help: "Pebble has cataloged Qwen / Model Studio, but the built-in runtime still needs a verified provider-specific endpoint/default-model path.",
-  }),
   catalogOnly("sap-ai-core", "SAP AI Core", {
     envKeys: ["AICORE_SERVICE_KEY"],
     authKind: "service-key",
     help: "Pebble has cataloged SAP AI Core, but the built-in runtime still needs service-key parsing and enterprise deployment routing.",
-  }),
-  catalogOnly("stepfun", "StepFun", {
-    envKeys: ["STEPFUN_API_KEY"],
-    authKind: "api-key",
-    help: "Pebble has cataloged StepFun, but the built-in runtime still needs a verified provider-specific endpoint/default-model path.",
-  }),
-  catalogOnly("stepfun-plan", "StepFun Plan", {
-    envKeys: ["STEPFUN_API_KEY"],
-    authKind: "api-key",
-    help: "Pebble has cataloged StepFun Plan, but the built-in runtime still needs the separate coding-plan endpoint/model path.",
   }),
   catalogOnly("synthetic", "Synthetic", {
     envKeys: ["SYNTHETIC_API_KEY"],
@@ -383,17 +533,6 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     envKeys: ["AI_GATEWAY_API_KEY"],
     authKind: "gateway",
     help: "Pebble has cataloged Vercel AI Gateway, but the built-in runtime still needs gateway-specific auth/header handling.",
-  }),
-  catalogOnly("volcengine", "Volcengine", {
-    envKeys: ["VOLCANO_ENGINE_API_KEY"],
-    aliases: ["doubao"],
-    authKind: "api-key",
-    help: "Pebble has cataloged Volcengine, but the built-in runtime still needs a verified provider-specific endpoint/default-model path.",
-  }),
-  catalogOnly("volcengine-plan", "Volcengine Plan", {
-    envKeys: ["VOLCANO_ENGINE_API_KEY"],
-    authKind: "api-key",
-    help: "Pebble has cataloged Volcengine Plan, but the built-in runtime still needs the separate coding-plan endpoint/model path.",
   }),
   catalogOnly("xiaomi", "Xiaomi", {
     envKeys: ["XIAOMI_API_KEY"],

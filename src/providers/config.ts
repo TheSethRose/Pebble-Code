@@ -10,7 +10,7 @@ import {
   type ProviderAuthKind,
   type ProviderTransport,
 } from "./catalog.js";
-import type { Settings } from "../runtime/config.js";
+import { getStoredProviderCredential, type Settings } from "../runtime/config.js";
 
 type ConfigSource = "settings" | "env" | "default" | "unset";
 
@@ -28,6 +28,8 @@ export interface ResolvedProviderConfig {
   transport: ProviderTransport;
   authKind: ProviderAuthKind;
   implemented: boolean;
+  requestHeaders: Record<string, string>;
+  exampleModels: string[];
   runtimeReady: boolean;
   missingConfiguration: string[];
   help?: string;
@@ -58,12 +60,14 @@ export function resolveProviderConfig(
       transport: "openai-compatible",
       authKind: "api-key",
       implemented: true,
+      requestHeaders: {},
+      exampleModels: [OPENROUTER_DEFAULT_MODEL],
       runtimeReady: false,
       missingConfiguration: ["API key"],
     };
   }
 
-  const settingsApiKey = settings.apiKey?.trim();
+  const settingsApiKey = getStoredProviderCredential(settings, definition.id);
   const envApiKey = firstConfiguredEnv(definition.envKeys);
   const defaultApiKey = definition.defaultApiKey?.trim();
   const settingsBaseUrl = settings.baseUrl?.trim();
@@ -118,6 +122,8 @@ export function resolveProviderConfig(
     transport: definition.transport,
     authKind: definition.authKind,
     implemented: definition.implemented,
+    requestHeaders: { ...(definition.requestHeaders ?? {}) },
+    exampleModels: [...definition.exampleModels],
     runtimeReady: definition.implemented && missingConfiguration.length === 0,
     missingConfiguration,
     help: definition.help,

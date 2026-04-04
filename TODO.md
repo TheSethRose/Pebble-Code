@@ -59,7 +59,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - Interactive and headless runtimes persist session transcripts and support basic resume flows
 - Basic Ink REPL exists and can invoke the engine
 - UI now exposes trust/session startup chrome, recent-session history, and a tabbed settings panel
-- Settings now support provider/model selection plus provider/model list filtering
+- Settings now support per-provider auth storage, provider-aware login messaging, and provider-first model selection with searchable model lists
 
 ### What is partial or weak
 
@@ -209,20 +209,21 @@ Checked items below mean Pebble now has real config/runtime wiring for that prov
 - [x] implement DeepSeek
 - [x] implement Together AI
 - [x] implement NVIDIA
-- [ ] implement Hugging Face
-- [ ] implement Qianfan
-- [ ] implement Z.AI / GLM
-- [ ] implement Qwen / Model Studio
-- [ ] implement Moonshot / Kimi
+- [x] implement Hugging Face
+- [x] implement Qianfan
+- [x] implement Z.AI / GLM
+- [x] implement Qwen / Model Studio
+- [x] implement Moonshot
+- [ ] implement Kimi Coding
 - [ ] implement MiniMax API-key mode
 - [ ] implement Chutes API-key mode
-- [ ] implement StepFun
+- [x] implement StepFun
 - [ ] implement BytePlus
-- [ ] implement Volcengine / Doubao
+- [x] implement Volcengine / Doubao
 - [ ] implement Xiaomi
 - [ ] implement OpenCode
 - [ ] implement OpenCode Go
-- [ ] implement Kilocode
+- [x] implement Kilocode
 - [ ] implement Synthetic
 - [ ] implement Venice
 - [ ] implement Vercel AI Gateway

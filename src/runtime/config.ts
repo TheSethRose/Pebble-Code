@@ -13,11 +13,17 @@ import {
   OPENROUTER_DEFAULT_MODEL,
   OPENROUTER_PROVIDER_ID,
 } from "../constants/openrouter.js";
-import { applyProviderDefaults } from "../providers/catalog.js";
+import { applyProviderDefaults, normalizeProviderId } from "../providers/catalog.js";
 import type { McpServerConfig } from "../extensions/contracts.js";
 import { buildTrustConfig } from "./trust";
 import type { TrustConfig, PermissionMode } from "./permissions";
 import { loadRepositoryInstructions, type InstructionFile } from "./instructions";
+
+export interface ProviderCredentialSettings {
+  credential?: string;
+}
+
+export type ProviderCredentialMap = Record<string, ProviderCredentialSettings>;
 
 /**
  * Global settings loaded from config files.
@@ -27,6 +33,7 @@ export interface Settings {
   model?: string;
   provider?: string;
   apiKey?: string;
+  providerAuth?: ProviderCredentialMap;
   baseUrl?: string;
   mcpServers?: McpServerConfig[];
   maxTurns?: number;
@@ -49,6 +56,103 @@ const USER_SETTINGS_FILE_NAME = "settings.json";
 const PROJECT_SETTINGS_FILE_NAME = "project-settings.json";
 
 type SettingsInput = Partial<Settings>;
+
+function normalizeProviderCredentialMap(input: unknown): ProviderCredentialMap | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return undefined;
+  }
+
+  const normalizedEntries = Object.entries(input).flatMap(([provider, value]) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return [];
+    }
+
+    const credential = typeof (value as { credential?: unknown }).credential === "string"
+      ? (value as { credential: string }).credential.trim()
+      : "";
+    if (!credential) {
+      return [];
+    }
+
+    return [[normalizeProviderId(provider), { credential }] as const];
+  });
+
+  if (normalizedEntries.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(normalizedEntries);
+}
+
+function normalizeSettingsInput(settings: SettingsInput): SettingsInput {
+  const normalizedProviderAuth = normalizeProviderCredentialMap(settings.providerAuth);
+  const legacyApiKey = typeof settings.apiKey === "string" ? settings.apiKey.trim() : "";
+  const normalizedProvider = normalizeProviderId(settings.provider);
+
+  if (!legacyApiKey) {
+    return {
+      ...settings,
+      providerAuth: normalizedProviderAuth,
+    };
+  }
+
+  return {
+    ...settings,
+    providerAuth: {
+      ...(normalizedProviderAuth ?? {}),
+      [normalizedProvider]: {
+        credential: normalizedProviderAuth?.[normalizedProvider]?.credential ?? legacyApiKey,
+      },
+    },
+  };
+}
+
+export function getStoredProviderCredential(
+  settings: Partial<Settings> = {},
+  provider?: string,
+): string | undefined {
+  const normalizedProvider = normalizeProviderId(provider ?? settings.provider);
+  const storedCredential = settings.providerAuth?.[normalizedProvider]?.credential?.trim();
+  if (storedCredential) {
+    return storedCredential;
+  }
+
+  if (normalizeProviderId(settings.provider) === normalizedProvider) {
+    return settings.apiKey?.trim() || undefined;
+  }
+
+  return undefined;
+}
+
+export function setStoredProviderCredential(
+  settings: Settings,
+  provider: string,
+  credential: string,
+): Settings {
+  const normalizedProvider = normalizeProviderId(provider);
+  const trimmedCredential = credential.trim();
+  const nextProviderAuth = { ...(settings.providerAuth ?? {}) };
+
+  if (trimmedCredential) {
+    nextProviderAuth[normalizedProvider] = { credential: trimmedCredential };
+  } else {
+    delete nextProviderAuth[normalizedProvider];
+  }
+
+  const activeProvider = normalizeProviderId(settings.provider);
+  return {
+    ...settings,
+    providerAuth: Object.keys(nextProviderAuth).length > 0 ? nextProviderAuth : undefined,
+    apiKey: activeProvider === normalizedProvider ? trimmedCredential || undefined : settings.apiKey,
+  };
+}
+
+function synchronizeActiveProviderCredential(settings: Settings): Settings {
+  return {
+    ...settings,
+    apiKey: getStoredProviderCredential(settings, settings.provider),
+  };
+}
 
 /**
  * Runtime configuration combining settings, trust, and instructions.
@@ -80,12 +184,12 @@ function readSettingsFile(configPath: string): SettingsInput {
 }
 
 function mergeSettingsLayers(...layers: SettingsInput[]): Settings {
-  return applyProviderDefaults(
-    layers.reduce<Settings>(
+  return synchronizeActiveProviderCredential(applyProviderDefaults(
+    layers.map((layer) => normalizeSettingsInput(layer)).reduce<Settings>(
       (merged, layer) => ({ ...merged, ...layer }),
       { ...DEFAULT_SETTINGS },
     ),
-  );
+  ));
 }
 
 export function loadSettings(configPath: string): Settings {
@@ -145,7 +249,11 @@ export function getSettingsPath(cwd: string): string {
 }
 
 function sanitizeProjectSettings(settings: SettingsInput): SettingsInput {
-  const { apiKey: _ignoredApiKey, ...rest } = settings;
+  const {
+    apiKey: _ignoredApiKey,
+    providerAuth: _ignoredProviderAuth,
+    ...rest
+  } = normalizeSettingsInput(settings);
   return rest;
 }
 
@@ -193,14 +301,14 @@ function settingsValuesEqual(left: unknown, right: unknown): boolean {
 
 function buildUserSettingsPayload(cwd: string, settings: Settings): SettingsInput {
   const projectDefaults = mergeSettingsLayers(loadProjectSettingsForCwd(cwd));
-  const entries = Object.entries(settings) as Array<[keyof Settings, Settings[keyof Settings]]>;
+  const normalizedSettings = synchronizeActiveProviderCredential(
+    ensureSettingsProviderAuth(settings),
+  );
+  const entries = Object.entries(normalizedSettings) as Array<[keyof Settings, Settings[keyof Settings]]>;
   const payload: SettingsInput = {};
 
   for (const [key, value] of entries) {
     if (key === "apiKey") {
-      if (typeof value === "string" && value.trim()) {
-        payload.apiKey = value.trim();
-      }
       continue;
     }
 
@@ -216,6 +324,14 @@ function buildUserSettingsPayload(cwd: string, settings: Settings): SettingsInpu
   return payload;
 }
 
+function ensureSettingsProviderAuth(settings: Settings): Settings {
+  const normalized = normalizeSettingsInput(settings) as Settings;
+  return {
+    ...settings,
+    providerAuth: normalized.providerAuth,
+  };
+}
+
 export function loadSettingsForCwd(cwd: string): Settings {
   return mergeSettingsLayers(
     loadProjectSettingsForCwd(cwd),
@@ -227,12 +343,14 @@ export function loadSettingsForCwd(cwd: string): Settings {
  * Save settings to a JSON file.
  */
 export function saveSettings(configPath: string, settings: SettingsInput): void {
+  const normalizedSettings = normalizeSettingsInput(settings);
+  const { apiKey: _ignoredApiKey, ...persistedSettings } = normalizedSettings;
   const dir = dirname(configPath);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: CONFIG_DIR_MODE });
   }
   applySecurePermissions(dir, CONFIG_DIR_MODE);
-  writeFileSync(configPath, JSON.stringify(settings, null, 2), {
+  writeFileSync(configPath, JSON.stringify(persistedSettings, null, 2), {
     encoding: "utf-8",
     mode: SETTINGS_FILE_MODE,
   });

@@ -62,7 +62,7 @@ export function DeleteConfirmDialog({
             backgroundColor="red"
             bold
           >
-            {selectedButton === "delete" ? "[ Delete ]" : " Delete "}
+            {selectedButton === "delete" ? " Delete " : " Delete "}
           </Text>
         </PressableDialogButton>
         <PressableDialogButton mouseEnabled={mouseEnabled} onPress={onCancel}>
@@ -71,7 +71,7 @@ export function DeleteConfirmDialog({
             backgroundColor={selectedButton === "cancel" ? "white" : undefined}
             bold={selectedButton === "cancel"}
           >
-            {selectedButton === "cancel" ? "[ Cancel ]" : " Cancel "}
+            {selectedButton === "cancel" ? " Cancel " : " Cancel "}
           </Text>
         </PressableDialogButton>
       </Box>

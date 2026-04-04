@@ -7,8 +7,12 @@ import {
 } from "../constants/openrouter.js";
 import {
   applyProviderDefaults,
+  getBuiltinProviderDefinition,
+  getProviderAuthDescription,
+  getProviderCredentialLabel,
   isSupportedProvider,
   normalizeProviderId,
+  providerSupportsManualCredentialEntry,
 } from "../providers/catalog.js";
 import { estimateTokens } from "../persistence/compaction.js";
 import {
@@ -18,9 +22,11 @@ import {
 } from "../persistence/memory.js";
 import { createProjectSessionStore } from "../persistence/runtimeSessions.js";
 import {
+  getStoredProviderCredential,
   getSettingsPath,
   loadSettingsForCwd,
   saveSettingsForCwd,
+  setStoredProviderCredential,
   type Settings,
 } from "../runtime/config.js";
 import { findProjectRoot } from "../runtime/trust.js";
@@ -71,9 +77,11 @@ function saveProjectSettings(ctx: CommandContext, settings: Settings): string {
 
 function ensureProviderDefaults(settings: Settings): Settings {
   const withDefaults = applyProviderDefaults(settings);
+  const activeCredential = getStoredProviderCredential(withDefaults, withDefaults.provider);
   if (withDefaults.provider === OPENROUTER_PROVIDER_ID) {
     return {
       ...withDefaults,
+      apiKey: activeCredential,
       model: withDefaults.model?.trim() || OPENROUTER_DEFAULT_MODEL,
       baseUrl: withDefaults.baseUrl?.trim() || OPENROUTER_DEFAULT_BASE_URL,
     };
@@ -81,6 +89,7 @@ function ensureProviderDefaults(settings: Settings): Settings {
 
   return {
     ...withDefaults,
+    apiKey: activeCredential,
     model: withDefaults.model?.trim(),
     baseUrl: withDefaults.baseUrl?.trim(),
   };
@@ -182,9 +191,9 @@ function createLoginCommand(): Command {
   return {
     name: "login",
     aliases: ["auth"],
-    description: "Save an API key for the current provider",
+    description: "Configure authentication for a provider",
     type: "local",
-    usage: "/login [provider] <api-key>",
+    usage: "/login [provider] <credential>",
     modes: ["interactive"],
     execute: (args, ctx): CommandResult => {
       const trimmed = args.trim();
@@ -208,23 +217,46 @@ function createLoginCommand(): Command {
         };
       }
 
+      const definition = getBuiltinProviderDefinition(explicitProvider);
+      if (!definition) {
+        return {
+          success: true,
+          output: `Unsupported provider: ${explicitProvider}.`,
+        };
+      }
+
+      if (!providerSupportsManualCredentialEntry(definition)) {
+        return {
+          success: true,
+          output: `${definition.label} cannot be configured with a pasted ${getProviderCredentialLabel(definition)} in Pebble yet. ${getProviderAuthDescription(definition)}`,
+        };
+      }
+
       if (!apiKey) {
-        return { success: true, output: "Usage: /login [provider] <api-key>" };
+        return { success: true, output: `Usage: /login [provider] <${getProviderCredentialLabel(definition)}>` };
       }
 
       const currentSettings = loadProjectSettings(ctx);
       const persistedProvider = normalizeProviderId(currentSettings.provider);
       const switchingProvider = explicitProvider !== persistedProvider;
-      const nextSettings = ensureProviderDefaults({
-        ...currentSettings,
-        provider: explicitProvider,
-        model: switchingProvider ? undefined : currentSettings.model,
-        baseUrl: switchingProvider ? undefined : currentSettings.baseUrl,
-        apiKey,
-      });
+      const nextSettings = ensureProviderDefaults(
+        setStoredProviderCredential(
+          {
+            ...currentSettings,
+            provider: explicitProvider,
+            model: switchingProvider ? undefined : currentSettings.model,
+            baseUrl: switchingProvider ? undefined : currentSettings.baseUrl,
+          },
+          explicitProvider,
+          apiKey,
+        ),
+      );
       const settingsPath = saveProjectSettings(ctx, nextSettings);
+      const implementationNote = definition.implemented
+        ? ""
+        : ` ${definition.label} is still cataloged-only, so live execution remains unimplemented or un-smoke-tested.`;
       return createConfigUpdatedResult(
-        `Saved ${nextSettings.provider} credentials to ${settingsPath}.`,
+        `Saved ${getProviderCredentialLabel(definition)} for ${nextSettings.provider} to ${settingsPath}.${implementationNote}`,
         settingsPath,
       );
     },

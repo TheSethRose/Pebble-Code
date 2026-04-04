@@ -410,6 +410,116 @@ describe("capability tool implementations", () => {
     expect(directoryListing.output.split("\n")).toHaveLength(2);
   });
 
+  test("WorkspaceEdit tolerates string boolean and numeric fields for edits", async () => {
+    const projectDir = createTempProject("pebble-tools-workspace-edit-coercion-");
+    writeFileSync(join(projectDir, "notes.txt"), "alpha\nbeta\n", "utf-8");
+
+    const tool = new WorkspaceEditTool();
+    const createResult = await tool.execute(
+      {
+        action: "write_file",
+        file_path: "nested/generated.txt",
+        content: "hello\n",
+        create_directories: "true",
+      },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+    const editResult = await tool.execute(
+      {
+        action: "edit_file",
+        file_path: "notes.txt",
+        old_string: "beta",
+        new_string: "gamma",
+        expected_replacements: "1",
+      },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+    const overwriteResult = await tool.execute(
+      {
+        action: "write_file",
+        file_path: "nested/generated.txt",
+        content: "updated\n",
+        overwrite: "true",
+      },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(createResult.success).toBe(true);
+    expect(editResult.success).toBe(true);
+    expect(overwriteResult.success).toBe(true);
+    expect(readFileSync(join(projectDir, "notes.txt"), "utf-8")).toBe("alpha\ngamma\n");
+    expect(readFileSync(join(projectDir, "nested/generated.txt"), "utf-8")).toBe("updated\n");
+  });
+
+  test("QueryEngine executes WorkspaceEdit write_file calls with string booleans without unnecessary approval", async () => {
+    const projectDir = createTempProject("pebble-tools-workspace-edit-engine-");
+    const permissionManager = new PermissionManager({
+      mode: "always-ask",
+      projectRoot: projectDir,
+    });
+    const approvalRequests: string[] = [];
+
+    const provider = new ScriptedProvider((messages, callNumber) => {
+      if (callNumber === 1) {
+        return {
+          text: "Creating the file.",
+          toolCalls: [
+            {
+              id: "write-1",
+              name: "WorkspaceEdit",
+              input: {
+                action: "write_file",
+                file_path: "test.md",
+                content: "Hello World\n",
+                overwrite: "false",
+              },
+            },
+          ],
+          stopReason: "tool_use",
+          usage: { inputTokens: 4, outputTokens: 3 },
+        };
+      }
+
+      expect(messages.at(-1)).toMatchObject({
+        role: "tool",
+        toolName: "WorkspaceEdit",
+        metadata: {
+          success: true,
+          input: {
+            action: "write_file",
+            file_path: "test.md",
+            content: "Hello World\n",
+            overwrite: "false",
+          },
+        },
+      });
+
+      return {
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 3, outputTokens: 1 },
+      };
+    });
+
+    const engine = new QueryEngine({
+      provider,
+      tools: [new WorkspaceEditTool()],
+      cwd: projectDir,
+      permissionManager,
+      resolvePermission: async (request) => {
+        approvalRequests.push(request.approvalMessage);
+        return "allow";
+      },
+    });
+
+    const result = await engine.process([{ role: "user", content: "Create test.md with Hello World" }]);
+
+    expect(result.success).toBe(true);
+    expect(approvalRequests).toEqual([]);
+    expect(readFileSync(join(projectDir, "test.md"), "utf-8")).toBe("Hello World\n");
+  });
+
   test("MemoryTool can manage session memory and notes", async () => {
     const projectDir = createTempProject("pebble-tools-memory-");
     const sessionStore = createProjectSessionStore(projectDir);

@@ -34,6 +34,7 @@ export class PrimaryProvider implements Provider {
       this.client = new OpenAI({
         apiKey: config.apiKey,
         baseURL: config.baseUrl,
+        defaultHeaders: config.requestHeaders,
       });
     }
   }
