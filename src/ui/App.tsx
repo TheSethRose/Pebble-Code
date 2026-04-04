@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from "react";
-import { MouseProvider } from "@zenobius/ink-mouse";
 import { render, Box, Text, useStdout, useInput } from "ink";
 import { CommandRegistry } from "../commands/registry.js";
 import { registerBuiltinCommands } from "../commands/builtins.js";
@@ -28,6 +27,7 @@ import type { CommandSuggestion } from "./components/PromptInput.js";
 import { WelcomeHeader } from "./components/WelcomeHeader.js";
 import { TranscriptView, getTranscriptLineCount } from "./components/TranscriptView.js";
 import { MouseScrollableRegion } from "./components/MouseScrollableRegion.js";
+import { TerminalMouseProvider } from "./components/TerminalMouseProvider.js";
 import { SessionSidebar, deriveSessionTitle } from "./components/SessionSidebar.js";
 import type { SessionSummary } from "./components/SessionSidebar.js";
 import { KeybindingsPopup } from "./components/KeybindingsPopup.js";
@@ -1198,7 +1198,7 @@ export function App({ context }: { context: CommandContext }) {
     </Box>
   );
 
-  return isFullscreen ? <MouseProvider>{appBody}</MouseProvider> : appBody;
+  return isFullscreen ? <TerminalMouseProvider>{appBody}</TerminalMouseProvider> : appBody;
 }
 
 // ---------------------------------------------------------------------------

@@ -56,7 +56,7 @@ export function TranscriptView({
   return (
     <Box flexDirection="column">
       {hiddenAbove > 0 && (
-        <Text color="gray">· earlier history above · PgUp to scroll · End to jump live</Text>
+        <Text color="gray">· earlier history above · scroll to browse · End to jump live</Text>
       )}
 
       {visibleRows.map((row) => (
@@ -66,7 +66,7 @@ export function TranscriptView({
       ))}
 
       {hiddenBelow > 0 && (
-        <Text color="gray">· newer history below · PgDn to scroll down</Text>
+        <Text color="gray">· newer history below · scroll down to continue</Text>
       )}
     </Box>
   );

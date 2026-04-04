@@ -21,7 +21,6 @@
   },
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
-    "@zenobius/ink-mouse": "^1.0.3",
     "ink": "^6.8.0",
     "openai": "^6.33.0",
     "react": "^19.2.4",

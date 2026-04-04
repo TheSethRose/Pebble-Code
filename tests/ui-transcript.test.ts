@@ -28,8 +28,11 @@ describe("TranscriptView", () => {
     const flat = flattenText(element);
 
     expect(flat).toContain("earlier history above");
+    expect(flat).toContain("scroll to browse");
     expect(flat).toContain("message 25");
     expect(flat).not.toContain("message 01");
+    expect(flat).not.toContain("PgDn");
+    expect(flat).not.toContain("PgUp");
   });
 
   test("trims older tall messages when maxRows is constrained", () => {
