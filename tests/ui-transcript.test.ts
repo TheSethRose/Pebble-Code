@@ -15,6 +15,8 @@ function createMessage(role: DisplayMessage["role"], content = "test", meta?: Di
 }
 
 describe("TranscriptView", () => {
+  const sampleCwd = "/Users/example/workspaces/demo-project";
+
   test("renders user messages with a contrasting background treatment", () => {
     const element = TranscriptView({ messages: [createMessage("user", "highlight me")], width: 60 });
     const segments = collectTextSegments(element);
@@ -49,7 +51,7 @@ describe("TranscriptView", () => {
       messages: [],
       width: 80,
       banner: {
-        cwd: "/Users/sethrose/Developer/Pebble-Code",
+        cwd: sampleCwd,
         model: "qwen/qwen3.6-plus:free",
         providerLabel: "OpenRouter",
         sessionId: null,
@@ -72,7 +74,7 @@ describe("TranscriptView", () => {
       messages: [],
       width: 80,
       banner: {
-        cwd: "/Users/sethrose/Developer/Pebble-Code",
+        cwd: sampleCwd,
         model: "qwen/qwen3.6-plus:free",
         providerLabel: "OpenRouter",
         sessionId: null,
@@ -87,7 +89,7 @@ describe("TranscriptView", () => {
       messages: [createMessage("assistant", "Ready when you are")],
       width: 80,
       banner: {
-        cwd: "/Users/sethrose/Developer/Pebble-Code",
+        cwd: sampleCwd,
         model: "qwen/qwen3.6-plus:free",
         providerLabel: "OpenRouter",
         sessionId: "session-1234",
@@ -136,6 +138,24 @@ describe("TranscriptView", () => {
     ];
 
     expect(getTranscriptLineCount(messages, 80)).toBe(6);
+  });
+
+  test("hides empty assistant placeholder rows around tool cycles", () => {
+    const messages = [
+      createMessage("user", "Give me an overview of the current workspace tree"),
+      createMessage("assistant", ""),
+      createMessage("tool_result", "WorkspaceRead done", {
+        toolName: "WorkspaceRead",
+        toolOutput: "src/\nprivate/",
+      }),
+      createMessage("assistant", "   "),
+    ];
+
+    const flat = flattenText(TranscriptView({ messages, width: 80, isProcessing: true }));
+
+    expect(flat).toContain("Give me an overview of the current workspace tree");
+    expect(flat).toContain("WorkspaceRead done");
+    expect(flat).not.toContain("(empty)");
   });
 
   test("omits progress messages from the transcript", () => {
@@ -312,6 +332,25 @@ describe("TranscriptView", () => {
 
     expect(successSegments.some((segment) => segment.text.includes("●") && segment.color === "green")).toBe(true);
     expect(errorSegments.some((segment) => segment.text.includes("●") && segment.color === "red")).toBe(true);
+  });
+
+  test("does not render tool call ids or qualified names beneath tool results", () => {
+    const flat = flattenText(TranscriptView({
+      messages: [createMessage("tool_result", "WorkspaceEdit failed", {
+        toolName: "WorkspaceEdit",
+        toolOutput: "Tool execution error: bad input",
+        isError: true,
+        toolCallId: "call_64ff834fe52B4e0685ca7913",
+        requestedToolName: "WorkspaceEdit",
+        qualifiedToolName: "builtin:WorkspaceEdit",
+      })],
+      width: 80,
+      isProcessing: true,
+    }));
+
+    expect(flat).toContain("WorkspaceEdit failed");
+    expect(flat).not.toContain("call_64ff834fe52B4e0685ca7913");
+    expect(flat).not.toContain("builtin:WorkspaceEdit");
   });
 });
 

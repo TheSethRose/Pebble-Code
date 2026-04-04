@@ -19,8 +19,19 @@ import { buildTrustConfig } from "./trust";
 import type { TrustConfig, PermissionMode } from "./permissions";
 import { loadRepositoryInstructions, type InstructionFile } from "./instructions";
 
+export interface ProviderOAuthSession {
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  accountId?: string;
+  baseUrl?: string;
+  tokenType?: string;
+  metadata?: Record<string, string>;
+}
+
 export interface ProviderCredentialSettings {
   credential?: string;
+  oauth?: ProviderOAuthSession;
 }
 
 export type ProviderCredentialMap = Record<string, ProviderCredentialSettings>;
@@ -57,6 +68,62 @@ const PROJECT_SETTINGS_FILE_NAME = "project-settings.json";
 
 type SettingsInput = Partial<Settings>;
 
+function normalizeProviderOAuthSession(input: unknown): ProviderOAuthSession | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return undefined;
+  }
+
+  const value = input as {
+    accessToken?: unknown;
+    refreshToken?: unknown;
+    expiresAt?: unknown;
+    accountId?: unknown;
+    baseUrl?: unknown;
+    tokenType?: unknown;
+    metadata?: unknown;
+  };
+
+  const accessToken = typeof value.accessToken === "string" ? value.accessToken.trim() : "";
+  const refreshToken = typeof value.refreshToken === "string" ? value.refreshToken.trim() : "";
+  const accountId = typeof value.accountId === "string" ? value.accountId.trim() : "";
+  const baseUrl = typeof value.baseUrl === "string" ? value.baseUrl.trim() : "";
+  const tokenType = typeof value.tokenType === "string" ? value.tokenType.trim() : "";
+  const expiresAt =
+    typeof value.expiresAt === "number" && Number.isFinite(value.expiresAt)
+      ? value.expiresAt
+      : typeof value.expiresAt === "string" && value.expiresAt.trim()
+        ? Number(value.expiresAt)
+        : undefined;
+  const metadata = value.metadata && typeof value.metadata === "object" && !Array.isArray(value.metadata)
+    ? Object.fromEntries(
+        Object.entries(value.metadata).flatMap(([key, metadataValue]) => {
+          if (typeof metadataValue === "string") {
+            const trimmed = metadataValue.trim();
+            return trimmed ? [[key, trimmed] as const] : [];
+          }
+
+          if (typeof metadataValue === "number" || typeof metadataValue === "boolean") {
+            return [[key, String(metadataValue)] as const];
+          }
+
+          return [];
+        }),
+      )
+    : undefined;
+
+  const normalized: ProviderOAuthSession = {
+    ...(accessToken ? { accessToken } : {}),
+    ...(refreshToken ? { refreshToken } : {}),
+    ...(typeof expiresAt === "number" && Number.isFinite(expiresAt) ? { expiresAt } : {}),
+    ...(accountId ? { accountId } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(tokenType ? { tokenType } : {}),
+    ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizeProviderCredentialMap(input: unknown): ProviderCredentialMap | undefined {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return undefined;
@@ -70,11 +137,16 @@ function normalizeProviderCredentialMap(input: unknown): ProviderCredentialMap |
     const credential = typeof (value as { credential?: unknown }).credential === "string"
       ? (value as { credential: string }).credential.trim()
       : "";
-    if (!credential) {
+    const oauth = normalizeProviderOAuthSession((value as { oauth?: unknown }).oauth);
+
+    if (!credential && !oauth) {
       return [];
     }
 
-    return [[normalizeProviderId(provider), { credential }] as const];
+    return [[normalizeProviderId(provider), {
+      ...(credential ? { credential } : {}),
+      ...(oauth ? { oauth } : {}),
+    }] as const];
   });
 
   if (normalizedEntries.length === 0) {
@@ -124,6 +196,14 @@ export function getStoredProviderCredential(
   return undefined;
 }
 
+export function getStoredProviderOAuthSession(
+  settings: Partial<Settings> = {},
+  provider?: string,
+): ProviderOAuthSession | undefined {
+  const normalizedProvider = normalizeProviderId(provider ?? settings.provider);
+  return normalizeProviderOAuthSession(settings.providerAuth?.[normalizedProvider]?.oauth);
+}
+
 export function setStoredProviderCredential(
   settings: Settings,
   provider: string,
@@ -134,9 +214,19 @@ export function setStoredProviderCredential(
   const nextProviderAuth = { ...(settings.providerAuth ?? {}) };
 
   if (trimmedCredential) {
-    nextProviderAuth[normalizedProvider] = { credential: trimmedCredential };
+    nextProviderAuth[normalizedProvider] = {
+      ...(nextProviderAuth[normalizedProvider]?.oauth
+        ? { oauth: nextProviderAuth[normalizedProvider]?.oauth }
+        : {}),
+      credential: trimmedCredential,
+    };
   } else {
-    delete nextProviderAuth[normalizedProvider];
+    const existingOauth = nextProviderAuth[normalizedProvider]?.oauth;
+    if (existingOauth) {
+      nextProviderAuth[normalizedProvider] = { oauth: existingOauth };
+    } else {
+      delete nextProviderAuth[normalizedProvider];
+    }
   }
 
   const activeProvider = normalizeProviderId(settings.provider);
@@ -144,6 +234,33 @@ export function setStoredProviderCredential(
     ...settings,
     providerAuth: Object.keys(nextProviderAuth).length > 0 ? nextProviderAuth : undefined,
     apiKey: activeProvider === normalizedProvider ? trimmedCredential || undefined : settings.apiKey,
+  };
+}
+
+export function setStoredProviderOAuthSession(
+  settings: Settings,
+  provider: string,
+  oauth: ProviderOAuthSession | undefined,
+): Settings {
+  const normalizedProvider = normalizeProviderId(provider);
+  const normalizedOauth = normalizeProviderOAuthSession(oauth);
+  const nextProviderAuth = { ...(settings.providerAuth ?? {}) };
+  const existingCredential = nextProviderAuth[normalizedProvider]?.credential?.trim();
+
+  if (normalizedOauth) {
+    nextProviderAuth[normalizedProvider] = {
+      ...(existingCredential ? { credential: existingCredential } : {}),
+      oauth: normalizedOauth,
+    };
+  } else if (existingCredential) {
+    nextProviderAuth[normalizedProvider] = { credential: existingCredential };
+  } else {
+    delete nextProviderAuth[normalizedProvider];
+  }
+
+  return {
+    ...settings,
+    providerAuth: Object.keys(nextProviderAuth).length > 0 ? nextProviderAuth : undefined,
   };
 }
 

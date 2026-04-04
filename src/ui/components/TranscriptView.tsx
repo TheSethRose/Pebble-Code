@@ -237,6 +237,11 @@ function groupMessages(messages: DisplayMessage[]): GroupedItem[] {
   while (index < messages.length) {
     const message = messages[index]!;
 
+    if (shouldHideMessage(message)) {
+      index += 1;
+      continue;
+    }
+
     if (message.role === "tool" && messages[index + 1]?.role === "tool_result") {
       items.push({
         type: "tool-group",
@@ -385,11 +390,6 @@ function messageToRows(
 
       if (meta?.errorMessage && meta.errorMessage !== meta.toolOutput) {
         pushWrappedRows(rows, `${keyBase}:error`, "  ", "  ", meta.errorMessage, width, { color: "red" });
-      }
-
-      const extraMeta = compactParts([meta?.toolCallId, meta?.requestedToolName, meta?.qualifiedToolName]);
-      if (!collapseDetails && extraMeta) {
-        pushWrappedRows(rows, `${keyBase}:meta`, "  ", "  ", extraMeta, width, { color: "#888888" });
       }
 
       return rows;
@@ -1083,6 +1083,10 @@ function appendCursor(value: string): string {
 
 function compactParts(values: Array<string | undefined>): string {
   return values.filter((value): value is string => Boolean(value && value.trim())).join(" · ");
+}
+
+function shouldHideMessage(message: DisplayMessage): boolean {
+  return message.role === "assistant" && message.content.trim().length === 0;
 }
 
 function formatBodyPreview(value: string, maxLines = 10, maxChars = 1_200): string {

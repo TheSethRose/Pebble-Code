@@ -10,7 +10,11 @@ import {
   type ProviderAuthKind,
   type ProviderTransport,
 } from "./catalog.js";
-import { getStoredProviderCredential, type Settings } from "../runtime/config.js";
+import {
+  getStoredProviderCredential,
+  getStoredProviderOAuthSession,
+  type Settings,
+} from "../runtime/config.js";
 
 type ConfigSource = "settings" | "env" | "default" | "unset";
 
@@ -68,6 +72,8 @@ export function resolveProviderConfig(
   }
 
   const settingsApiKey = getStoredProviderCredential(settings, definition.id);
+  const storedOauth = getStoredProviderOAuthSession(settings, definition.id);
+  const storedOauthToken = storedOauth?.accessToken?.trim() || storedOauth?.refreshToken?.trim() || "";
   const envApiKey = firstConfiguredEnv(definition.envKeys);
   const defaultApiKey = definition.defaultApiKey?.trim();
   const settingsBaseUrl = settings.baseUrl?.trim();
@@ -78,15 +84,17 @@ export function resolveProviderConfig(
     firstConfiguredEnv(definition.modelEnvKeys) ||
     definition.defaultModel ||
     "";
-  const apiKey = settingsApiKey || envApiKey || defaultApiKey || "";
+  const apiKey = settingsApiKey || storedOauthToken || envApiKey || defaultApiKey || "";
   const baseUrl = settingsBaseUrl || envBaseUrl || definition.defaultBaseUrl || "";
   const apiKeySource: ConfigSource = settingsApiKey
     ? "settings"
-    : envApiKey
-      ? "env"
-      : defaultApiKey
-        ? "default"
-        : "unset";
+    : storedOauthToken
+      ? "settings"
+      : envApiKey
+        ? "env"
+        : defaultApiKey
+          ? "default"
+          : "unset";
   const baseUrlSource: ConfigSource = settingsBaseUrl
     ? "settings"
     : envBaseUrl
@@ -104,7 +112,11 @@ export function resolveProviderConfig(
     missingConfiguration.push("base URL");
   }
 
-  if (definition.requiresApiKey && !apiKey.trim()) {
+  if (definition.authKind === "oauth") {
+    if (!apiKey.trim()) {
+      missingConfiguration.push("OAuth login");
+    }
+  } else if (definition.requiresApiKey && !apiKey.trim()) {
     missingConfiguration.push("API key");
   }
 
@@ -113,7 +125,11 @@ export function resolveProviderConfig(
     providerLabel: definition.label,
     model,
     apiKey,
-    apiKeyConfigured: definition.requiresApiKey ? Boolean(apiKey) : true,
+    apiKeyConfigured: definition.authKind === "oauth"
+      ? Boolean(apiKey)
+      : definition.requiresApiKey
+        ? Boolean(apiKey)
+        : true,
     apiKeySource,
     baseUrl,
     baseUrlSource,
@@ -138,6 +154,9 @@ export function getProviderNotConfiguredMessage(
   }
 
   const hints: string[] = [];
+  if (config.missingConfiguration.includes("OAuth login")) {
+    hints.push(`run /login ${config.providerId}`);
+  }
   if (config.missingConfiguration.includes("API key") && config.envKeyNames.length > 0) {
     hints.push(`set ${config.envKeyNames.join(" or ")}`);
   }

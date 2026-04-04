@@ -5,15 +5,100 @@ import {
   providerSupportsManualCredentialEntry,
 } from "../providers/catalog.js";
 import { resolveProviderConfig } from "../providers/config.js";
-import { getStoredProviderCredential, type Settings } from "../runtime/config.js";
+import {
+  getStoredProviderCredential,
+  getStoredProviderOAuthSession,
+  type Settings,
+} from "../runtime/config.js";
 
 export interface ProviderAuthFollowUp {
   providerId: string;
   notice: string;
 }
 
-function hasConfiguredEnvSignal(envKeys: string[]): boolean {
-  return envKeys.some((key) => Boolean(process.env[key]?.trim()));
+export interface ProviderAuthStatus {
+  providerId: string;
+  isConfigured: boolean;
+  source: "settings" | "env" | "default" | "none";
+  credential?: string;
+  envKey?: string;
+}
+
+function getConfiguredEnvSignal(
+  envKeys: string[],
+): { key: string; value: string } | null {
+  for (const key of envKeys) {
+    const value = process.env[key]?.trim();
+    if (value) {
+      return { key, value };
+    }
+  }
+
+  return null;
+}
+
+export function getProviderAuthStatus(
+  settings: Partial<Settings>,
+  providerId: string,
+): ProviderAuthStatus {
+  const normalizedProviderId = normalizeProviderId(providerId);
+  const definition = getBuiltinProviderDefinition(normalizedProviderId);
+
+  if (!definition) {
+    return {
+      providerId: normalizedProviderId,
+      isConfigured: false,
+      source: "none",
+    };
+  }
+
+  const storedCredential = getStoredProviderCredential(settings, normalizedProviderId)?.trim();
+  if (storedCredential) {
+    return {
+      providerId: normalizedProviderId,
+      isConfigured: true,
+      source: "settings",
+      credential: storedCredential,
+    };
+  }
+
+  const storedOauth = getStoredProviderOAuthSession(settings, normalizedProviderId);
+  const storedOauthToken = storedOauth?.accessToken?.trim() || storedOauth?.refreshToken?.trim();
+  if (storedOauthToken) {
+    return {
+      providerId: normalizedProviderId,
+      isConfigured: true,
+      source: "settings",
+      credential: storedOauthToken,
+    };
+  }
+
+  const envSignal = getConfiguredEnvSignal(definition.envKeys);
+  if (envSignal) {
+    return {
+      providerId: normalizedProviderId,
+      isConfigured: true,
+      source: "env",
+      credential: envSignal.value,
+      envKey: envSignal.key,
+    };
+  }
+
+  const defaultCredential = definition.defaultApiKey?.trim();
+  if (defaultCredential) {
+    return {
+      providerId: normalizedProviderId,
+      isConfigured: true,
+      source: "default",
+      credential: defaultCredential,
+    };
+  }
+
+  return {
+    providerId: normalizedProviderId,
+    isConfigured: false,
+    source: "none",
+  };
 }
 
 export function getProviderSelectionAuthFollowUp(
@@ -27,17 +112,12 @@ export function getProviderSelectionAuthFollowUp(
     return null;
   }
 
+  const authStatus = getProviderAuthStatus(settings, normalizedProviderId);
   const resolved = resolveProviderConfig({
     ...settings,
     provider: normalizedProviderId,
   });
-  const hasStoredCredential = Boolean(
-    getStoredProviderCredential(settings, normalizedProviderId),
-  );
-  const hasEnvCredential = hasConfiguredEnvSignal(definition.envKeys);
-  const hasConfiguredCredential = hasStoredCredential
-    || hasEnvCredential
-    || Boolean(definition.defaultApiKey?.trim());
+  const hasConfiguredCredential = authStatus.isConfigured;
 
   if (definition.authKind === "local-url") {
     if (resolved.runtimeReady) {
@@ -75,7 +155,7 @@ export function getProviderSelectionAuthFollowUp(
   if (definition.authKind === "oauth" && !hasConfiguredCredential) {
     return {
       providerId: normalizedProviderId,
-      notice: `${definition.label} is not configured yet. Start its OAuth login flow here before using this provider.`,
+      notice: `${definition.label} is not configured yet. Run /login ${normalizedProviderId} from the main prompt to start its OAuth login flow.`,
     };
   }
 

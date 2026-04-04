@@ -322,15 +322,96 @@ describe("Command Registry", () => {
     expect(saved.providerAuth?.openrouter?.credential).toBe("sk-or-v1-test-key");
   });
 
-  test("/login refuses oauth-only providers instead of storing a fake API key", async () => {
+  test("/login github-copilot persists an OAuth session in ~/.pebble settings", async () => {
+    const previousFetch = globalThis.fetch;
+    const previousStdoutWrite = process.stdout.write;
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-copilot-login-");
+    const writes: string[] = [];
+    let fetchCall = 0;
+
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8"));
+      return true;
+    }) as typeof process.stdout.write;
+
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      fetchCall += 1;
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+
+      if (fetchCall === 1) {
+        expect(url).toBe("https://github.com/login/device/code");
+        return new Response(JSON.stringify({
+          device_code: "device-code",
+          user_code: "ABCD-EFGH",
+          verification_uri: "https://github.com/login/device",
+          expires_in: 900,
+          interval: 0,
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      expect(url).toBe("https://github.com/login/oauth/access_token");
+      return new Response(JSON.stringify({
+        access_token: "ghu_copilot_login_token",
+        token_type: "bearer",
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const result = await registry.execute("login", "github-copilot", createCommandContext({
+      cwd: tempDir,
+      config: { provider: "github-copilot" },
+    }));
+
+    globalThis.fetch = previousFetch;
+    process.stdout.write = previousStdoutWrite;
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Saved OAuth session for github-copilot");
+    expect(writes.join(" ")).toContain("GitHub Copilot device login");
+    expect(writes.join(" ")).toContain("ABCD-EFGH");
+
+    const settingsPath = getSettingsPath(tempDir);
+    const saved = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
+      providerAuth?: Record<string, {
+        credential?: string;
+        oauth?: { accessToken?: string; tokenType?: string };
+      }>;
+      provider?: string;
+      model?: string;
+      baseUrl?: string;
+    };
+
+    expect(saved.provider).toBe("github-copilot");
+    expect(saved.providerAuth?.["github-copilot"]?.oauth?.accessToken).toBe("ghu_copilot_login_token");
+    expect(saved.providerAuth?.["github-copilot"]?.oauth?.tokenType).toBe("github-device");
+
+    const loaded = loadSettingsForCwd(tempDir);
+    expect(loaded.provider).toBe("github-copilot");
+    expect(loaded.model).toBe("github-copilot/gpt-4o");
+    expect(loaded.baseUrl).toBe("https://api.individual.githubcopilot.com");
+  });
+
+  test("/login refuses unsupported oauth providers instead of storing a fake API key", async () => {
     const registry = new CommandRegistry();
     registerBuiltinCommands(registry);
 
     const tempDir = createTempProjectDir("pebble-command-oauth-login-");
 
-    const result = await registry.execute("login", "github-copilot fake-token", createCommandContext({
+    const result = await registry.execute("login", "openai-codex fake-token", createCommandContext({
       cwd: tempDir,
-      config: { provider: "github-copilot" },
+      config: { provider: "openai-codex" },
     }));
 
     expect(result.success).toBe(true);

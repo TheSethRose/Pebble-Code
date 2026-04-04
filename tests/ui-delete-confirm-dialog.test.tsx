@@ -36,7 +36,6 @@ function mountDialog(props: {
   const stdout = new TestOutput();
   const stderr = new TestOutput();
   let buffer = "";
-  const originalStdoutWrite = process.stdout.write.bind(process.stdout) as typeof process.stdout.write;
 
   const append = (chunk: string | Buffer) => {
     buffer += chunk.toString();
@@ -44,7 +43,6 @@ function mountDialog(props: {
 
   stdout.on("data", append);
   stderr.on("data", append);
-  process.stdout.write = ((..._args: Parameters<typeof process.stdout.write>) => true) as typeof process.stdout.write;
 
   const instance = render(
     <TerminalMouseProvider>
@@ -77,7 +75,6 @@ function mountDialog(props: {
       stdin.end();
       stdout.end();
       stderr.end();
-      process.stdout.write = originalStdoutWrite;
     },
   };
 }
@@ -171,7 +168,7 @@ describe("DeleteConfirmDialog mouse interaction", () => {
     });
 
     try {
-      await flushInteractiveUi();
+      await waitFor(() => dialog.output().includes("Delete session?"));
       await clickUntilTriggered(dialog.stdin, () => deleted === 1, {
         left: 10,
         right: 30,
@@ -199,7 +196,7 @@ describe("DeleteConfirmDialog mouse interaction", () => {
     });
 
     try {
-      await flushInteractiveUi();
+      await waitFor(() => dialog.output().includes("Delete session?"));
       await clickUntilTriggeredReverse(dialog.stdin, () => canceled === 1, {
         left: 29,
         right: 52,

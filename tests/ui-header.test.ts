@@ -12,7 +12,7 @@ describe("WelcomeHeader helpers", () => {
   });
 
   test("truncates long paths through the middle", () => {
-    expect(truncateMiddle("/Users/sethrose/Developer/Pebble-Code", 18)).toBe("/Users/se…ble-Code");
+    expect(truncateMiddle("/tmp/example-project", 18)).toBe("/tmp/exam…-project");
   });
 
   test("leaves short strings unchanged", () => {

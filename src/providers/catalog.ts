@@ -4,6 +4,10 @@ import {
   OPENROUTER_PROVIDER_ID,
   OPENROUTER_PROVIDER_LABEL,
 } from "../constants/openrouter.js";
+import {
+  buildCopilotRequestHeaders,
+  DEFAULT_COPILOT_API_BASE_URL,
+} from "../constants/githubCopilot.js";
 
 export type ProviderTransport = "openai-compatible" | "unimplemented";
 export type ProviderAuthKind =
@@ -164,7 +168,9 @@ export function getProviderAuthDescription(
 
   switch (definition.authKind) {
     case "oauth":
-      return `${definition.label} uses browser/device OAuth. Pebble catalogs that flow, but direct OAuth login is not implemented yet.`;
+      return definition.implemented
+        ? `${definition.label} uses browser/device OAuth. Run /login ${definition.id} to start the sign-in flow.`
+        : `${definition.label} uses browser/device OAuth. Pebble catalogs that flow, but direct OAuth login is not implemented yet.`;
     case "cloud-credentials":
       return `${definition.label} uses cloud credentials or IAM identity instead of a single API key.`;
     case "gateway":
@@ -404,11 +410,22 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     exampleModels: ["custom/model"],
     help: "Set a custom base URL plus model metadata to route Pebble through another OpenAI-compatible endpoint.",
   }),
-  catalogOnly("github-copilot", "GitHub Copilot", {
-    envKeys: ["GITHUB_COPILOT_TOKEN", "COPILOT_TOKEN"],
+  openAiCompatible("github-copilot", "GitHub Copilot", {
+    envKeys: [
+      "COPILOT_GITHUB_TOKEN",
+      "GH_TOKEN",
+      "GITHUB_TOKEN",
+      "GITHUB_COPILOT_TOKEN",
+      "COPILOT_TOKEN",
+    ],
     aliases: ["copilot"],
     authKind: "oauth",
-    help: "Pebble has cataloged GitHub Copilot, but the built-in runtime still needs device-flow OAuth and token exchange support.",
+    defaultModel: "github-copilot/gpt-4o",
+    defaultBaseUrl: DEFAULT_COPILOT_API_BASE_URL,
+    requiresApiKey: false,
+    exampleModels: ["github-copilot/gpt-4o", "github-copilot/gpt-5.2-codex"],
+    requestHeaders: buildCopilotRequestHeaders(),
+    help: "Pebble supports GitHub.com device-flow login plus Copilot token exchange. Live smoke tests are still pending, and GitHub Enterprise / proxy bridge modes remain follow-up work.",
   }),
   catalogOnly("openai-codex", "OpenAI Codex / ChatGPT OAuth", {
     envKeys: ["OPENAI_CODEX_TOKEN", "CHATGPT_TOKEN"],

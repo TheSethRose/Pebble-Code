@@ -5,6 +5,7 @@ import type { CommandContext } from "../commands/types.js";
 import {
   getProjectSettingsPath,
   getStoredProviderCredential,
+  getStoredProviderOAuthSession,
   loadSettingsForCwd,
   saveSettingsForCwd,
   getSettingsPath,
@@ -32,7 +33,9 @@ import {
 } from "../constants/openrouter.js";
 import {
   getProviderSelectionAuthFollowUp,
+  getProviderAuthStatus,
   type ProviderAuthFollowUp,
+  type ProviderAuthStatus,
 } from "./settingsFlow.js";
 
 export type TabId = "config" | "provider" | "model" | "api-key";
@@ -84,6 +87,202 @@ function buildBuiltinProviderOptions(): Array<{ label: string; value: string }> 
   }));
 }
 
+interface AuthProviderOption {
+  label: string;
+  value: string;
+  isAuthenticated: boolean;
+}
+
+function renderHighlightedLabel(
+  label: string,
+  query: string,
+  isFocused: boolean,
+): React.ReactNode {
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) {
+    return <Text color={isFocused ? "blue" : undefined}>{label}</Text>;
+  }
+
+  const lowerLabel = label.toLowerCase();
+  const lowerQuery = trimmedQuery.toLowerCase();
+  const matchIndex = lowerLabel.indexOf(lowerQuery);
+
+  if (matchIndex < 0) {
+    return <Text color={isFocused ? "blue" : undefined}>{label}</Text>;
+  }
+
+  const before = label.slice(0, matchIndex);
+  const match = label.slice(matchIndex, matchIndex + trimmedQuery.length);
+  const after = label.slice(matchIndex + trimmedQuery.length);
+
+  return (
+    <>
+      <Text color={isFocused ? "blue" : undefined}>{before}</Text>
+      <Text color="cyan" bold>{match}</Text>
+      <Text color={isFocused ? "blue" : undefined}>{after}</Text>
+    </>
+  );
+}
+
+function AuthProviderList({
+  options,
+  selectedValue,
+  onSelect,
+  highlightText,
+  visibleOptionCount = 8,
+}: {
+  options: AuthProviderOption[];
+  selectedValue: string;
+  onSelect: (value: string) => void;
+  highlightText?: string;
+  visibleOptionCount?: number;
+}) {
+  const [activeIndex, setActiveIndex] = useState(() => {
+    const selectedIndex = options.findIndex((option) => option.value === selectedValue);
+    return selectedIndex >= 0 ? selectedIndex : 0;
+  });
+
+  useEffect(() => {
+    const selectedIndex = options.findIndex((option) => option.value === selectedValue);
+    if (selectedIndex >= 0) {
+      setActiveIndex(selectedIndex);
+      return;
+    }
+
+    setActiveIndex((current) => {
+      if (options.length === 0) {
+        return 0;
+      }
+
+      return Math.min(current, options.length - 1);
+    });
+  }, [options, selectedValue]);
+
+  useInput(
+    (_char, key) => {
+      if (options.length === 0) {
+        return;
+      }
+
+      if (key.upArrow) {
+        setActiveIndex((current) => (current - 1 + options.length) % options.length);
+        return;
+      }
+
+      if (key.downArrow) {
+        setActiveIndex((current) => (current + 1) % options.length);
+        return;
+      }
+
+      if (key.return) {
+        onSelect(options[activeIndex]!.value);
+      }
+    },
+    { isActive: options.length > 0 },
+  );
+
+  if (options.length === 0) {
+    return <Text dimColor>No providers match that filter.</Text>;
+  }
+
+  const windowStart = Math.max(
+    0,
+    Math.min(
+      activeIndex - Math.floor(visibleOptionCount / 2),
+      Math.max(0, options.length - visibleOptionCount),
+    ),
+  );
+  const visibleOptions = options.slice(windowStart, windowStart + visibleOptionCount);
+
+  return (
+    <Box flexDirection="column">
+      {visibleOptions.map((option, offset) => {
+        const optionIndex = windowStart + offset;
+        const isFocused = optionIndex === activeIndex;
+
+        return (
+          <Box key={option.value} flexDirection="row">
+            <Text color={isFocused ? "blue" : undefined}>{isFocused ? "› " : "  "}</Text>
+            {renderHighlightedLabel(option.label, highlightText ?? "", isFocused)}
+            {option.isAuthenticated && <Text color="green"> ✓</Text>}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
+function formatProviderAuthStatus(status: ProviderAuthStatus): string {
+  if (!status.isConfigured || !status.credential) {
+    return "not configured";
+  }
+
+  switch (status.source) {
+    case "settings":
+      return `stored in Pebble settings (${maskSecret(status.credential)})`;
+    case "env":
+      return `configured via ${status.envKey ?? "environment"} (${maskSecret(status.credential)})`;
+    case "default":
+      return `configured via built-in default (${maskSecret(status.credential)})`;
+    case "none":
+    default:
+      return "not configured";
+  }
+}
+
+function getProviderAuthActionHint(params: {
+  providerId: string;
+  manualEntrySupported: boolean;
+  implemented: boolean;
+  authStatus: ProviderAuthStatus;
+}): string {
+  if (params.manualEntrySupported) {
+    return "Enter to save · ← change provider · Shift+Tab / Tab to switch sections";
+  }
+
+  if (params.implemented) {
+    return params.authStatus.isConfigured
+      ? `OAuth session saved · re-run /login ${params.providerId} from the main prompt to refresh · ← change provider · Shift+Tab / Tab to switch sections`
+      : `Close settings, then run /login ${params.providerId} from the main prompt · ← change provider · Shift+Tab / Tab to switch sections`;
+  }
+
+  return "← change provider · Shift+Tab / Tab to switch sections";
+}
+
+function renderProviderAuthHelp(params: {
+  providerId: string;
+  providerLabel: string;
+  manualEntrySupported: boolean;
+  implemented: boolean;
+  authStatus: ProviderAuthStatus;
+}): React.ReactNode {
+  if (params.manualEntrySupported) {
+    return null;
+  }
+
+  if (params.implemented) {
+    return (
+      <Box marginTop={1} flexDirection="column">
+        <Text color="yellow">
+          {params.authStatus.isConfigured
+            ? `${params.providerLabel} already has a saved OAuth session.`
+            : `Login for ${params.providerLabel} happens from the main prompt, not inside this Auth tab.`}
+        </Text>
+        <Text color="cyan">Run: /login {params.providerId}</Text>
+        <Text dimColor>
+          Pebble will show a browser/device URL and code, then store the resulting OAuth session in ~/.pebble/settings.json.
+        </Text>
+      </Box>
+    );
+  }
+
+  return (
+    <Box marginTop={1}>
+      <Text color="yellow">Use the provider-specific OAuth / IAM / browser flow for this provider; Pebble is only cataloging that auth path for now.</Text>
+    </Box>
+  );
+}
+
 function uniqueModels(models: ProviderModel[]): ProviderModel[] {
   const seen = new Set<string>();
   return models.filter((model) => {
@@ -105,7 +304,10 @@ interface SettingsProps {
 
 function ensureProviderDefaults(settings: Settings): Settings {
   const withDefaults = applyProviderDefaults(settings);
-  const activeCredential = getStoredProviderCredential(withDefaults, withDefaults.provider);
+  const oauthSession = getStoredProviderOAuthSession(withDefaults, withDefaults.provider);
+  const activeCredential = getStoredProviderCredential(withDefaults, withDefaults.provider)
+    ?? oauthSession?.accessToken?.trim()
+    ?? oauthSession?.refreshToken?.trim();
   if (withDefaults.provider === OPENROUTER_PROVIDER_ID) {
     return {
       ...withDefaults,
@@ -722,7 +924,12 @@ function ApiKeyTab({
     setPhase(initialPhase);
   }, [initialPhase]);
 
-  const providerOptions = useMemo(() => buildBuiltinProviderOptions(), []);
+  const providerOptions = useMemo<AuthProviderOption[]>(() => {
+    return buildBuiltinProviderOptions().map((option) => ({
+      ...option,
+      isAuthenticated: getProviderAuthStatus(settings, option.value).isConfigured,
+    }));
+  }, [settings]);
   const filteredProviderOptions = useMemo(() => {
     if (!filterQuery.trim()) {
       return providerOptions;
@@ -736,7 +943,7 @@ function ApiKeyTab({
     ...settings,
     provider: selectedProviderId,
   });
-  const storedCredential = getStoredProviderCredential(settings, selectedProviderId);
+  const authStatus = getProviderAuthStatus(settings, selectedProviderId);
   const manualEntrySupported = providerSupportsManualCredentialEntry(selectedDefinition);
 
   const handleSubmit = useCallback(
@@ -805,12 +1012,10 @@ function ApiKeyTab({
               <Text dimColor>█</Text>
             </Box>
             <Box marginTop={1}>
-              <Select
-                key={filterQuery}
+              <AuthProviderList
                 options={filteredProviderOptions}
-                visibleOptionCount={8}
-                defaultValue={selectedProviderId}
-                onChange={handleProviderSelect}
+                selectedValue={selectedProviderId}
+                onSelect={handleProviderSelect}
                 highlightText={filterQuery || undefined}
               />
             </Box>
@@ -826,11 +1031,7 @@ function ApiKeyTab({
             <Text>Auth mode: {getProviderAuthDescription(selectedDefinition)}</Text>
             <Text>
               Status:{" "}
-              {storedCredential
-                ? `stored in Pebble settings (${maskSecret(storedCredential)})`
-                : resolved.apiKeyConfigured
-                  ? `configured via ${resolved.apiKeySource} (${maskSecret(resolved.apiKey)})`
-                  : "not configured"}
+              {formatProviderAuthStatus(authStatus)}
             </Text>
             <Text>Env vars: {resolved.envKeyNames.join(", ")}</Text>
             {!resolved.implemented && (
@@ -848,9 +1049,13 @@ function ApiKeyTab({
                 />
               </Box>
             ) : (
-              <Box marginTop={1}>
-                <Text color="yellow">Use the provider-specific OAuth / IAM / browser flow for this provider; Pebble is only cataloging that auth path for now.</Text>
-              </Box>
+              renderProviderAuthHelp({
+                providerId: selectedProviderId,
+                providerLabel: selectedDefinition?.label ?? resolved.providerLabel,
+                manualEntrySupported,
+                implemented: resolved.implemented,
+                authStatus,
+              })
             )}
           </>
         )}
@@ -866,9 +1071,12 @@ function ApiKeyTab({
         <Text dimColor>
           {phase === "provider"
             ? "Type to filter · ↑↓ navigate · Enter select provider · Shift+Tab / Tab to switch sections"
-            : manualEntrySupported
-              ? "Enter to save · ← change provider · Shift+Tab / Tab to switch sections"
-              : "← change provider · Shift+Tab / Tab to switch sections"}
+            : getProviderAuthActionHint({
+              providerId: selectedProviderId,
+              manualEntrySupported,
+              implemented: resolved.implemented,
+              authStatus,
+            })}
         </Text>
       </Box>
     </Box>

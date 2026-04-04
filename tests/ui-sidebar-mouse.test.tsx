@@ -42,7 +42,6 @@ function mountSidebar(
   const stdout = new TestOutput();
   const stderr = new TestOutput();
   let buffer = "";
-  const originalStdoutWrite = process.stdout.write.bind(process.stdout) as typeof process.stdout.write;
 
   const append = (chunk: string | Buffer) => {
     buffer += chunk.toString();
@@ -50,7 +49,6 @@ function mountSidebar(
 
   stdout.on("data", append);
   stderr.on("data", append);
-  process.stdout.write = ((..._args: Parameters<typeof process.stdout.write>) => true) as typeof process.stdout.write;
 
   const instance = render(
     <TerminalMouseProvider>
@@ -86,7 +84,6 @@ function mountSidebar(
       stdin.end();
       stdout.end();
       stderr.end();
-      process.stdout.write = originalStdoutWrite;
     },
   };
 }

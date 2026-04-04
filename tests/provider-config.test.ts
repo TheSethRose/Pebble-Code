@@ -77,6 +77,31 @@ describe("provider config resolution", () => {
     expect(resolved.runtimeReady).toBe(true);
   });
 
+  test("resolves GitHub Copilot when an OAuth session is stored", () => {
+    const resolved = resolveProviderConfig({
+      provider: "github-copilot",
+      providerAuth: {
+        "github-copilot": {
+          oauth: {
+            accessToken: "ghu_copilot_device_token",
+            tokenType: "github-device",
+          },
+        },
+      },
+    });
+
+    expect(resolved.providerId).toBe("github-copilot");
+    expect(resolved.providerLabel).toBe("GitHub Copilot");
+    expect(resolved.model).toBe("github-copilot/gpt-4o");
+    expect(resolved.baseUrl).toBe("https://api.individual.githubcopilot.com");
+    expect(resolved.apiKey).toBe("ghu_copilot_device_token");
+    expect(resolved.apiKeySource).toBe("settings");
+    expect(resolved.authKind).toBe("oauth");
+    expect(resolved.implemented).toBe(true);
+    expect(resolved.runtimeReady).toBe(true);
+    expect(resolved.requestHeaders["Editor-Version"]).toBeDefined();
+  });
+
   const promotedProviders = [
     {
       provider: "huggingface",

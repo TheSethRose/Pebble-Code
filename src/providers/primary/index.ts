@@ -12,7 +12,11 @@ import {
   resolveProviderConfig,
   type ResolvedProviderConfig,
 } from "../config.js";
-import type { Settings } from "../../runtime/config.js";
+import {
+  getStoredProviderOAuthSession,
+  type Settings,
+} from "../../runtime/config.js";
+import { resolveGitHubCopilotRuntimeAuth } from "../githubCopilot.js";
 
 /**
  * Primary provider adapter.
@@ -23,20 +27,16 @@ export class PrimaryProvider implements Provider {
   readonly name: string;
   readonly model: string;
   private client: OpenAI | null = null;
+  private clientExpiresAt: number | null = null;
   private readonly config: ResolvedProviderConfig;
+  private readonly settings: Partial<Settings>;
 
-  constructor(config: ResolvedProviderConfig) {
+  constructor(config: ResolvedProviderConfig, settings: Partial<Settings> = {}) {
     this.config = config;
+    this.settings = settings;
     this.id = config.providerId;
     this.name = config.providerLabel;
     this.model = config.model;
-    if (config.transport === "openai-compatible" && config.runtimeReady) {
-      this.client = new OpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl,
-        defaultHeaders: config.requestHeaders,
-      });
-    }
   }
 
   getCapabilities(): ProviderCapabilities {
@@ -55,7 +55,8 @@ export class PrimaryProvider implements Provider {
     messages: Message[],
     options?: ProviderOptions,
   ): Promise<ProviderResponse> {
-    if (!this.client) {
+    const client = await this.ensureClient();
+    if (!client) {
       return {
         text: getProviderNotConfiguredMessage(this.config),
         toolCalls: [],
@@ -81,7 +82,7 @@ export class PrimaryProvider implements Provider {
         },
       }));
 
-      const response = await this.client.chat.completions.create({
+      const response = await client.chat.completions.create({
         model: this.model,
         messages: openaiMessages as any,
         max_tokens: options?.maxTokens,
@@ -134,7 +135,8 @@ export class PrimaryProvider implements Provider {
     messages: Message[],
     options?: ProviderOptions,
   ): AsyncIterable<StreamChunk> {
-    if (!this.client) {
+    const client = await this.ensureClient();
+    if (!client) {
       yield {
         textDelta: getProviderNotConfiguredMessage(this.config),
         done: true,
@@ -150,7 +152,7 @@ export class PrimaryProvider implements Provider {
         ...(m.toolName ? { name: m.toolName } : {}),
       }));
 
-      const stream = await this.client.chat.completions.create({
+      const stream = await client.chat.completions.create({
         model: this.model,
         messages: openaiMessages as any,
         max_tokens: options?.maxTokens,
@@ -253,7 +255,55 @@ export class PrimaryProvider implements Provider {
   }
 
   isConfigured(): boolean {
-    return this.client !== null;
+    return this.config.runtimeReady;
+  }
+
+  private async ensureClient(): Promise<OpenAI | null> {
+    if (this.config.transport !== "openai-compatible" || !this.config.runtimeReady) {
+      return null;
+    }
+
+    const now = Date.now();
+    if (this.client && (!this.clientExpiresAt || this.clientExpiresAt - now > 5 * 60_000)) {
+      return this.client;
+    }
+
+    const prepared = await this.prepareClientConfig();
+    this.client = new OpenAI({
+      apiKey: prepared.apiKey,
+      baseURL: prepared.baseURL,
+      defaultHeaders: prepared.defaultHeaders,
+    });
+    this.clientExpiresAt = prepared.expiresAt ?? null;
+    return this.client;
+  }
+
+  private async prepareClientConfig(): Promise<{
+    apiKey: string;
+    baseURL: string;
+    defaultHeaders: Record<string, string>;
+    expiresAt?: number;
+  }> {
+    if (this.config.providerId === "github-copilot") {
+      const oauthSession = getStoredProviderOAuthSession(this.settings, this.config.providerId);
+      const githubToken = this.config.apiKey.trim()
+        || oauthSession?.accessToken?.trim()
+        || oauthSession?.refreshToken?.trim()
+        || "";
+      const resolved = await resolveGitHubCopilotRuntimeAuth({ githubToken });
+      return {
+        apiKey: resolved.apiKey,
+        baseURL: resolved.baseUrl,
+        defaultHeaders: { ...this.config.requestHeaders },
+        expiresAt: resolved.expiresAt,
+      };
+    }
+
+    return {
+      apiKey: this.config.apiKey,
+      baseURL: this.config.baseUrl,
+      defaultHeaders: { ...this.config.requestHeaders },
+    };
   }
 }
 
@@ -270,6 +320,7 @@ export function createPrimaryProvider(options: {
       provider: options.provider,
       model: options.model,
     }),
+    options.settings,
   );
 }
 

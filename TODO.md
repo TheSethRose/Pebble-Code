@@ -240,7 +240,7 @@ Checked items below mean Pebble now has real config/runtime wiring for that prov
 
 #### OAuth, device-flow, and browser-login providers
 
-- [ ] implement GitHub Copilot OAuth/device flow
+- [x] implement GitHub Copilot OAuth/device flow
 - [ ] implement OpenAI Codex / ChatGPT OAuth
 - [ ] implement Gemini CLI PKCE OAuth
 - [ ] implement Chutes OAuth

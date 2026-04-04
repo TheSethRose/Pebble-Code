@@ -22,14 +22,17 @@ import {
 } from "../persistence/memory.js";
 import { createProjectSessionStore } from "../persistence/runtimeSessions.js";
 import {
+  getStoredProviderOAuthSession,
   getStoredProviderCredential,
   getSettingsPath,
   loadSettingsForCwd,
   saveSettingsForCwd,
   setStoredProviderCredential,
+  setStoredProviderOAuthSession,
   type Settings,
 } from "../runtime/config.js";
 import { findProjectRoot } from "../runtime/trust.js";
+import { runGitHubCopilotDeviceLogin } from "../providers/githubCopilot.js";
 
 /**
  * Register all built-in commands.
@@ -195,7 +198,7 @@ function createLoginCommand(): Command {
     type: "local",
     usage: "/login [provider] <credential>",
     modes: ["interactive"],
-    execute: (args, ctx): CommandResult => {
+    execute: async (args, ctx): Promise<CommandResult> => {
       const trimmed = args.trim();
       if (!trimmed) {
         return {
@@ -207,8 +210,17 @@ function createLoginCommand(): Command {
 
       const tokens = trimmed.split(/\s+/);
       const currentProvider = getCurrentProviderId(ctx);
-      const explicitProvider = tokens.length > 1 ? normalizeProviderId(tokens[0]) : currentProvider;
-      const apiKey = tokens.length > 1 ? tokens.slice(1).join(" ").trim() : tokens[0] ?? "";
+      const providerOnlyInvocation = tokens.length === 1 && isSupportedProvider(tokens[0]);
+      const explicitProvider = providerOnlyInvocation
+        ? normalizeProviderId(tokens[0])
+        : tokens.length > 1
+          ? normalizeProviderId(tokens[0])
+          : currentProvider;
+      const apiKey = providerOnlyInvocation
+        ? ""
+        : tokens.length > 1
+          ? tokens.slice(1).join(" ").trim()
+          : tokens[0] ?? "";
 
       if (!isSupportedProvider(explicitProvider)) {
         return {
@@ -225,10 +237,46 @@ function createLoginCommand(): Command {
         };
       }
 
+      if (definition.authKind === "oauth" && explicitProvider === "github-copilot" && (!apiKey || providerOnlyInvocation)) {
+        const currentSettings = loadProjectSettings(ctx);
+        const switchingProvider = explicitProvider !== normalizeProviderId(currentSettings.provider);
+        const writeLine = (line: string) => {
+          try {
+            process.stdout.write(`${line}\n`);
+          } catch {
+            // Best-effort informational output only.
+          }
+        };
+
+        const oauth = await runGitHubCopilotDeviceLogin({ writeLine });
+        const nextSettings = ensureProviderDefaults(
+          setStoredProviderOAuthSession(
+            {
+              ...currentSettings,
+              provider: explicitProvider,
+              model: switchingProvider ? undefined : currentSettings.model,
+              baseUrl: switchingProvider ? undefined : currentSettings.baseUrl,
+            },
+            explicitProvider,
+            {
+              accessToken: oauth.githubToken,
+              tokenType: "github-device",
+            },
+          ),
+        );
+        const settingsPath = saveProjectSettings(ctx, nextSettings);
+        return createConfigUpdatedResult(
+          `Saved OAuth session for ${nextSettings.provider} to ${settingsPath}. GitHub Copilot runtime wiring is enabled, but live credential smoke tests are still pending.`,
+          settingsPath,
+        );
+      }
+
       if (!providerSupportsManualCredentialEntry(definition)) {
+        const existingOauth = getStoredProviderOAuthSession(loadProjectSettings(ctx), explicitProvider);
+        const configuredHint = existingOauth ? " An OAuth session is already saved for this provider." : "";
         return {
           success: true,
-          output: `${definition.label} cannot be configured with a pasted ${getProviderCredentialLabel(definition)} in Pebble yet. ${getProviderAuthDescription(definition)}`,
+          output: `${definition.label} cannot be configured with a pasted ${getProviderCredentialLabel(definition)} in Pebble.${configuredHint} ${getProviderAuthDescription(definition)}`,
         };
       }
 

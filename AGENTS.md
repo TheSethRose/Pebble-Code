@@ -3,7 +3,7 @@
 
 A terminal-native AI coding agent that ships as both a `pebble` CLI (`src/entrypoints/cli.tsx`) and an embeddable headless SDK (`src/entrypoints/sdk.ts`). Architecture: entrypoints → runtime → engine → tools/providers, with session persistence and an Ink/React terminal UI.
 
-See [private/ARCHITECTURE.md](private/ARCHITECTURE.md) for system design and [private/CODEBASE_TREE.md](private/CODEBASE_TREE.md) for the full file map.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design and [docs/CODEBASE_TREE.md](docs/CODEBASE_TREE.md) for the full tracked file map.
 
 ## Bun Tooling
 
