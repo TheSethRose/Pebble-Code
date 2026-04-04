@@ -6,6 +6,16 @@ import { MessageItem } from "./MessageItem.js";
 
 interface TranscriptViewProps {
   messages: DisplayMessage[];
+  /**
+   * Number of grouped message items to shift the visible window upward from
+   * the bottom.  0 (default) = follow the tail (latest messages shown).
+   */
+  scrollOffset?: number;
+  /**
+   * Maximum number of grouped items to show at once.  Defaults to
+   * VISIBLE_MESSAGE_COUNT.  Derived from available terminal rows in App.
+   */
+  maxMessages?: number;
 }
 
 /**
@@ -13,23 +23,41 @@ interface TranscriptViewProps {
  *
  * Groups tool_call → tool_result pairs, collapses consecutive progress
  * messages, and renders a blinking cursor on the active streaming token.
- * The VISIBLE_MESSAGE_COUNT window keeps memory bounded.
+ * The window is bounded by maxMessages and can be shifted by scrollOffset
+ * so the user can page through history without leaving the TUI.
  */
-export function TranscriptView({ messages }: TranscriptViewProps) {
+export function TranscriptView({
+  messages,
+  scrollOffset = 0,
+  maxMessages = VISIBLE_MESSAGE_COUNT,
+}: TranscriptViewProps) {
   const grouped = groupMessages(messages);
-  const overflow = grouped.length > VISIBLE_MESSAGE_COUNT;
-  const visible = overflow ? grouped.slice(-VISIBLE_MESSAGE_COUNT) : grouped;
+  const total = grouped.length;
+
+  // Clamp scroll so we never go past the first message.
+  const clamped = Math.min(scrollOffset, Math.max(0, total - maxMessages));
+
+  const end = Math.max(0, total - clamped);
+  const start = Math.max(0, end - maxMessages);
+  const visible = grouped.slice(start, end);
+
+  const hiddenAbove = start;              // items before the window
+  const hiddenBelow = total - end;        // items after the window (> 0 when scrolled up)
+  const isScrolledUp = hiddenBelow > 0;
 
   return (
     <Box flexDirection="column">
-      {overflow && (
+      {/* ── Scroll / overflow indicators ────────────────────────────── */}
+      {hiddenAbove > 0 && (
         <Box marginBottom={1}>
           <Text color="gray">
-            · {messages.length - VISIBLE_MESSAGE_COUNT} earlier messages hidden · /resume to revisit
+            · {hiddenAbove} earlier message{hiddenAbove !== 1 ? "s" : ""} above
+            {isScrolledUp ? " · PgUp to scroll · PgDn to return" : " · /resume to revisit"}
           </Text>
         </Box>
       )}
 
+      {/* ── Visible message window ──────────────────────────────────── */}
       {visible.map((group, i) => {
         if (group.type === "tool-group") {
           return (
@@ -42,11 +70,20 @@ export function TranscriptView({ messages }: TranscriptViewProps) {
         }
         return (
           <MessageItem
-            key={`${group.message.role}-${i + (messages.length - visible.length)}`}
+            key={`${group.message.role}-${start + i}`}
             message={group.message}
           />
         );
       })}
+
+      {/* ── "Newer messages below" indicator when scrolled up ────────── */}
+      {isScrolledUp && (
+        <Box marginTop={1}>
+          <Text color="gray">
+            · {hiddenBelow} newer message{hiddenBelow !== 1 ? "s" : ""} below · PgDn to scroll down
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }

@@ -102,6 +102,7 @@ export function App({ context }: { context: CommandContext }) {
   const [inputHistory, setInputHistory] = React.useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = React.useState(-1);
   const [showKeybindings, setShowKeybindings] = React.useState(false);
+  const [transcriptScrollOffset, setTranscriptScrollOffset] = React.useState(0);
   const [deleteConfirm, setDeleteConfirm] = React.useState<{
     sessionId: string;
     title: string;
@@ -113,6 +114,27 @@ export function App({ context }: { context: CommandContext }) {
   const hookSessionIdRef = React.useRef<string | null>(null);
   const ctrlCTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionStore = context.sessionStore ?? null;
+
+  // ------------------------------------------------------------------
+  // Unified input helpers
+  // ------------------------------------------------------------------
+  const setInputText = React.useCallback(
+    (value: string, updateQuery = false) => {
+      setInputValue(value);
+      setInputDefaultValue(value);
+      if (updateQuery) setSuggestionQuery(value);
+      setInputKey((k) => k + 1);
+    },
+    [],
+  );
+
+  const clearInput = React.useCallback(() => {
+    setInputValue("");
+    setInputDefaultValue("");
+    setSuggestionQuery("");
+    setSuggestionIndex(0);
+    setInputKey((k) => k + 1);
+  }, []);
 
   // ------------------------------------------------------------------
   // Session list for sidebar
@@ -456,12 +478,7 @@ export function App({ context }: { context: CommandContext }) {
           setSuggestionIndex((i) => {
             const next = Math.max(0, i - 1);
             const selected = suggestions[next];
-            if (selected) {
-              const filled = `/${selected.name}`;
-              setInputDefaultValue(filled);
-              setInputValue(filled);
-              setInputKey((k) => k + 1);
-            }
+            if (selected) setInputText(`/${selected.name}`);
             return next;
           });
           return;
@@ -470,25 +487,14 @@ export function App({ context }: { context: CommandContext }) {
           setSuggestionIndex((i) => {
             const next = Math.min(suggestions.length - 1, i + 1);
             const selected = suggestions[next];
-            if (selected) {
-              const filled = `/${selected.name}`;
-              setInputDefaultValue(filled);
-              setInputValue(filled);
-              setInputKey((k) => k + 1);
-            }
+            if (selected) setInputText(`/${selected.name}`);
             return next;
           });
           return;
         }
         if (key.tab) {
           const selected = suggestions[suggestionIndex];
-          if (selected) {
-            const completed = `/${selected.name} `;
-            setInputDefaultValue(completed);
-            setInputValue(completed);
-            setSuggestionQuery(completed);
-            setInputKey((k) => k + 1);
-          }
+          if (selected) setInputText(`/${selected.name} `, true);
           return;
         }
       }
@@ -498,10 +504,7 @@ export function App({ context }: { context: CommandContext }) {
         if (key.upArrow) {
           setHistoryIndex((prev) => {
             const next = Math.min(prev + 1, inputHistory.length - 1);
-            const value = inputHistory[next] ?? "";
-            setInputDefaultValue(value);
-            setInputValue(value);
-            setInputKey((k) => k + 1);
+            setInputText(inputHistory[next] ?? "");
             return next;
           });
           return;
@@ -510,27 +513,29 @@ export function App({ context }: { context: CommandContext }) {
           setHistoryIndex((prev) => {
             const next = prev - 1;
             if (next < 0) {
-              setInputDefaultValue("");
-              setInputValue("");
-              setInputKey((k) => k + 1);
+              setInputText("");
               return -1;
             }
-            const value = inputHistory[next] ?? "";
-            setInputDefaultValue(value);
-            setInputValue(value);
-            setInputKey((k) => k + 1);
+            setInputText(inputHistory[next] ?? "");
             return next;
           });
           return;
         }
       }
 
+      // --- Transcript scroll: Page Up / Page Down ---
+      if (key.pageUp) {
+        setTranscriptScrollOffset((prev) => prev + scrollStep);
+        return;
+      }
+      if (key.pageDown) {
+        setTranscriptScrollOffset((prev) => Math.max(0, prev - scrollStep));
+        return;
+      }
+
       if (key.ctrl && _input === "c") {
         if (inputValue.length > 0) {
-          setInputValue("");
-          setInputDefaultValue("");
-          setSuggestionQuery("");
-          setInputKey((k) => k + 1);
+          clearInput();
           return;
         }
         if (ctrlCOnce) {
@@ -550,14 +555,27 @@ export function App({ context }: { context: CommandContext }) {
   // ------------------------------------------------------------------
   const handleSubmit = React.useCallback(
     async (input: string) => {
-      const trimmed = input.trim();
+      let trimmed = input.trim();
       if (!trimmed) return;
 
+      // If suggestions are visible and the user pressed Enter on a partial,
+      // expand to the currently-selected suggestion instead of submitting the prefix.
+      if (
+        suggestions.length > 0 &&
+        trimmed.startsWith("/") &&
+        !trimmed.includes(" ")
+      ) {
+        const selected = suggestions[Math.min(suggestionIndex, suggestions.length - 1)];
+        if (selected) {
+          trimmed = `/${selected.name}`;
+        }
+      }
+
+      // Scroll back to bottom so the user sees new responses.
+      setTranscriptScrollOffset(0);
+
       // Clear the input field immediately on every submission
-      setInputValue("");
-      setInputDefaultValue("");
-      setSuggestionIndex(0);
-      setInputKey((k) => k + 1);
+      clearInput();
 
       // Push to input history (most recent first) and reset cursor
       setInputHistory((prev) => [trimmed, ...prev.slice(0, 99)]);
@@ -804,6 +822,16 @@ export function App({ context }: { context: CommandContext }) {
   const isFullscreen = runtimeConfig.fullscreenRenderer !== false;
   const { columns, rows } = useTerminalDimensions();
 
+  // Rows consumed by the fixed header + input bar + outer padding.
+  // Header: 14 rows (logo 6 + margins + metadata + hint)
+  // Input bar: 4 rows (rule + prompt + status + margin)
+  // Outer Box padding: 2 rows
+  const FIXED_UI_ROWS = 20;
+  const transcriptRows = Math.max(4, rows - FIXED_UI_ROWS);
+  // Rough estimate: each grouped message item occupies ~3 terminal lines.
+  const visibleMsgCount = Math.max(4, Math.floor(transcriptRows / 3));
+  const scrollStep = Math.max(3, Math.floor(visibleMsgCount / 3));
+
   // --- Modals rendered as full-screen replacements (Ink has no z-index) ---
   if (deleteConfirm) {
     return (
@@ -922,6 +950,8 @@ export function App({ context }: { context: CommandContext }) {
           {state.messages.length > 0 && (
             <TranscriptView
               messages={state.messages}
+              scrollOffset={transcriptScrollOffset}
+              maxMessages={visibleMsgCount}
             />
           )}
 
