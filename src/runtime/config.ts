@@ -20,6 +20,7 @@ export interface Settings {
   maxTurns?: number;
   telemetryEnabled: boolean;
   compactThreshold?: number;
+  fullscreenRenderer?: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -28,6 +29,7 @@ const DEFAULT_SETTINGS: Settings = {
   model: OPENROUTER_DEFAULT_MODEL,
   telemetryEnabled: false,
   maxTurns: 50,
+  fullscreenRenderer: true,
 };
 
 /**

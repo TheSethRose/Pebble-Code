@@ -68,10 +68,10 @@ function TabBar({
           <Box key={tab.id} marginRight={i < tabs.length - 1 ? 1 : 0}>
             <Text
               bold={isActive}
-              color={isActive ? "cyan" : "gray"}
+              color={isActive ? "black" : "gray"}
               inverse={isActive}
             >
-              {tab.label}
+              {` ${tab.label} `}
             </Text>
           </Box>
         );
@@ -92,7 +92,7 @@ function ConfigTab({
   const resolved = resolveProviderConfig(settings);
   return (
     <Box flexDirection="column">
-      <Text bold color="cyan">Configuration</Text>
+      <Text bold color="cyan">Status</Text>
       <Box flexDirection="column" marginTop={1}>
         <Text>Working directory: {cwd}</Text>
         <Text>Settings file: {settingsPath}</Text>
@@ -100,6 +100,7 @@ function ConfigTab({
         <Text>Max turns: {settings.maxTurns ?? 50}</Text>
         <Text>Telemetry: {settings.telemetryEnabled ? "enabled" : "disabled"}</Text>
         <Text>Compact threshold: {settings.compactThreshold ?? "not set"}</Text>
+        <Text>Fullscreen renderer: {settings.fullscreenRenderer === false ? "disabled" : "enabled"}</Text>
         <Text>Provider: {resolved.providerLabel} ({resolved.providerId})</Text>
         <Text>Model: {resolved.model}</Text>
         <Text>
@@ -110,7 +111,7 @@ function ConfigTab({
         </Text>
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>Tab to navigate · Esc to close</Text>
+        <Text dimColor>Shift+Tab / Tab to switch sections · Esc to close</Text>
       </Box>
     </Box>
   );
@@ -163,7 +164,7 @@ function ProviderTab({
         )}
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>Enter to set · Tab to navigate · Esc to close</Text>
+        <Text dimColor>Enter to save · Shift+Tab / Tab to switch sections</Text>
       </Box>
     </Box>
   );
@@ -214,7 +215,7 @@ function ModelTab({
         )}
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>Enter to set · Tab to navigate · Esc to close</Text>
+        <Text dimColor>Enter to save · Shift+Tab / Tab to switch sections</Text>
       </Box>
     </Box>
   );
@@ -274,7 +275,7 @@ function ApiKeyTab({
         )}
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>Enter to save · Tab to navigate · Esc to close</Text>
+        <Text dimColor>Enter to save · Shift+Tab / Tab to switch sections</Text>
       </Box>
     </Box>
   );
@@ -328,14 +329,14 @@ export function Settings({
   return (
     <Box
       flexDirection="column"
-      paddingX={1}
-      paddingY={0}
+      paddingX={2}
+      paddingY={1}
       borderStyle="round"
       borderColor="cyan"
     >
-      <Box justifyContent="space-between" marginBottom={1}>
+      <Box flexDirection="column" marginBottom={1}>
         <Text bold color="cyan">Settings</Text>
-        <Text dimColor>Esc to close</Text>
+        <Text dimColor>{settingsPath}</Text>
       </Box>
 
       <TabBar tabs={TABS} activeTab={activeTab} />
@@ -345,8 +346,8 @@ export function Settings({
         borderStyle="single"
         borderColor="gray"
         paddingX={1}
-        paddingY={0}
-        minHeight={8}
+        paddingY={1}
+        minHeight={10}
       >
         {activeTab === "config" && (
           <ConfigTab
@@ -364,6 +365,11 @@ export function Settings({
         {activeTab === "api-key" && (
           <ApiKeyTab settings={settings} onSave={handleSave} />
         )}
+      </Box>
+
+      <Box justifyContent="space-between" marginTop={1}>
+        <Text dimColor>Esc to close</Text>
+        <Text dimColor>Reference-style tabbed panel</Text>
       </Box>
     </Box>
   );

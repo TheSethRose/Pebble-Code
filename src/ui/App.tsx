@@ -1,48 +1,37 @@
-import React from "react";
-import { render, Text, Box } from "ink";
-import { TextInput } from "@inkjs/ui";
-import { CommandRegistry } from "../commands/registry";
-import { registerBuiltinCommands } from "../commands/builtins";
-import type { CommandContext } from "../commands/types";
-import { QueryEngine } from "../engine/QueryEngine";
-import { createPrimaryProvider } from "../providers/primary";
-import { resolveProviderConfig } from "../providers/config";
-import { createMvpTools } from "../tools/orchestration";
-import { PermissionManager } from "../runtime/permissionManager";
-import { getSettingsPath, loadSettingsForCwd } from "../runtime/config";
-import { Settings } from "./Settings.js";
-import type { StreamEvent } from "../engine/types";
-import { createOrResumeSession, engineMessageToTranscriptMessage, transcriptToConversation, transcriptToDisplayMessages } from "../persistence/runtimeSessions";
-import type { SessionStore } from "../persistence/sessionStore";
+import React, { useEffect, useState } from "react";
+import { render, Box, Text, useStdout } from "ink";
+import { CommandRegistry } from "../commands/registry.js";
+import { registerBuiltinCommands } from "../commands/builtins.js";
+import type { CommandContext } from "../commands/types.js";
+import { QueryEngine } from "../engine/QueryEngine.js";
+import { createPrimaryProvider } from "../providers/primary/index.js";
+import { resolveProviderConfig } from "../providers/config.js";
+import { createMvpTools } from "../tools/orchestration.js";
+import { PermissionManager } from "../runtime/permissionManager.js";
+import { getSettingsPath, loadSettingsForCwd } from "../runtime/config.js";
+import type { Message, StreamEvent } from "../engine/types.js";
+import {
+  createOrResumeSession,
+  engineMessageToTranscriptMessage,
+  transcriptToConversation,
+  transcriptToDisplayMessages,
+} from "../persistence/runtimeSessions.js";
+import type { AppState, DisplayMessage } from "./types.js";
+import { getPebbleMood } from "./mascotMood.js";
+import { PromptInput } from "./components/PromptInput.js";
+import { WelcomeHeader } from "./components/WelcomeHeader.js";
+import { TranscriptView } from "./components/TranscriptView.js";
 
-interface DisplayMessage {
-  role: string;
-  content: string;
-}
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-interface RecentSessionSummary {
-  id: string;
-  updatedAt: string;
-  status: string;
-  messageCount: number;
-}
-
-interface AppState {
-  messages: DisplayMessage[];
-  isProcessing: boolean;
-  exitCode: number | null;
-  error: string | null;
-  statusText: string;
-  activeSessionId: string | null;
-  recentSessions: RecentSessionSummary[];
-}
-
-const VISIBLE_MESSAGE_COUNT = 12;
-
-function loadCommandConfig(cwd: string, currentConfig: Record<string, unknown>): Record<string, unknown> {
+function loadCommandConfig(
+  cwd: string,
+  currentConfig: Record<string, unknown>,
+): Record<string, unknown> {
   const settings = loadSettingsForCwd(cwd);
   const resolved = resolveProviderConfig(settings);
-
   return {
     ...currentConfig,
     provider: resolved.providerId,
@@ -51,254 +40,46 @@ function loadCommandConfig(cwd: string, currentConfig: Record<string, unknown>):
     baseUrl: resolved.baseUrl,
     apiKeyConfigured: resolved.apiKeyConfigured,
     apiKeySource: resolved.apiKeySource,
+    fullscreenRenderer: settings.fullscreenRenderer,
     settingsPath: getSettingsPath(cwd),
   };
 }
 
+/**
+ * Redact sensitive arguments before echoing a command into the transcript.
+ */
 function redactCommandEcho(name: string, args: string): string {
   const trimmed = args.trim();
-  if (!trimmed) {
-    return `/${name}`;
-  }
-
+  if (!trimmed) return `/${name}`;
   if (name === "login") {
     const tokens = trimmed.split(/\s+/);
-    return tokens.length > 1
-      ? `/${name} ${tokens[0]} [redacted]`
-      : `/${name} [redacted]`;
+    return tokens.length > 1 ? `/${name} ${tokens[0]} [redacted]` : `/${name} [redacted]`;
   }
-
-  if (name === "config" && /^api-key\b/i.test(trimmed)) {
-    return `/${name} api-key [redacted]`;
-  }
-
+  if (name === "config" && /^api-key\b/i.test(trimmed)) return `/${name} api-key [redacted]`;
   return `/${name} ${trimmed}`;
 }
 
-function truncateSessionId(id: string): string {
-  return id.length > 18 ? `${id.slice(0, 18)}…` : id;
-}
+const INITIAL_STATE: AppState = {
+  messages: [],
+  isProcessing: false,
+  statusText: "",
+  error: null,
+  activeSessionId: null,
+};
 
-function formatSessionTime(updatedAt: string): string {
-  const date = new Date(updatedAt);
-  if (Number.isNaN(date.getTime())) {
-    return updatedAt;
-  }
-
-  return date.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function getRoleMeta(role: string): { label: string; color: string; borderColor: string } {
-  switch (role) {
-    case "user":
-      return { label: "You", color: "blue", borderColor: "blue" };
-    case "assistant":
-      return { label: "Pebble", color: "green", borderColor: "green" };
-    case "command":
-      return { label: "Slash command", color: "cyan", borderColor: "cyan" };
-    case "output":
-      return { label: "Local output", color: "white", borderColor: "gray" };
-    case "tool":
-      return { label: "Tool activity", color: "yellow", borderColor: "yellow" };
-    case "tool_result":
-      return { label: "Tool result", color: "green", borderColor: "green" };
-    case "streaming":
-      return { label: "Streaming", color: "green", borderColor: "green" };
-    default:
-      return { label: "Message", color: "white", borderColor: "gray" };
-  }
-}
-
-function listRecentSessions(sessionStore?: SessionStore): RecentSessionSummary[] {
-  return (sessionStore?.listSessions() ?? []).slice(0, 5);
-}
-
-function StatusPill({ label, value, color = "gray" }: { label: string; value: string; color?: string }) {
-  return (
-    <Box marginRight={2}>
-      <Text color="gray">{label}: </Text>
-      <Text color={color}>{value}</Text>
-    </Box>
-  );
-}
-
-function HeaderSurface({
-  cwd,
-  trustLevel,
-  config,
-  activeSessionId,
-  recentSessions,
-  isProcessing,
-  statusText,
-}: {
-  cwd: string;
-  trustLevel?: string;
-  config: Record<string, unknown>;
-  activeSessionId: string | null;
-  recentSessions: RecentSessionSummary[];
-  isProcessing: boolean;
-  statusText: string;
-}) {
-  return (
-    <Box flexDirection="column" marginBottom={1}>
-      <Box borderStyle="round" borderColor="cyan" paddingX={1} paddingY={0} flexDirection="column">
-        <Box justifyContent="space-between">
-          <Text bold color="cyan">Pebble Code</Text>
-          <Text color={isProcessing ? "yellow" : "green"}>{isProcessing ? "Working" : "Ready"}</Text>
-        </Box>
-        <Text color="gray">{cwd}</Text>
-        <Box marginTop={1} flexWrap="wrap">
-          <StatusPill label="Trust" value={trustLevel ?? "unknown"} color={trustLevel === "trusted" ? "green" : "yellow"} />
-          <StatusPill label="Permissions" value={String(config.permissionMode ?? "unknown")} color="yellow" />
-          <StatusPill label="Provider" value={String(config.providerLabel ?? config.provider ?? "default")} color="cyan" />
-          <StatusPill label="Model" value={String(config.model ?? "default")} color="magenta" />
-          <StatusPill label="Session" value={activeSessionId ? truncateSessionId(activeSessionId) : "new"} color="blue" />
-        </Box>
-        <Box marginTop={1}>
-          <Text color="gray">Status: </Text>
-          <Text>{statusText}</Text>
-        </Box>
-      </Box>
-
-      <Box borderStyle="round" borderColor="gray" paddingX={1} paddingY={0} flexDirection="column" marginTop={1}>
-        <Text bold>Recent sessions</Text>
-        {recentSessions.length === 0 ? (
-          <Text color="gray">No saved sessions yet — your next prompt will create one.</Text>
-        ) : (
-          <>
-            {recentSessions.map((session) => (
-              <Box key={session.id} justifyContent="space-between">
-                <Text color={session.id === activeSessionId ? "green" : "white"}>
-                  {session.id === activeSessionId ? "●" : "○"} {truncateSessionId(session.id)}
-                </Text>
-                <Text color="gray">
-                  {session.messageCount} msgs • {session.status} • {formatSessionTime(session.updatedAt)}
-                </Text>
-              </Box>
-            ))}
-            <Text color="gray">Resume any session with /resume &lt;session-id&gt;.</Text>
-          </>
-        )}
-      </Box>
-    </Box>
-  );
-}
-
-function EmptyState() {
-  return (
-    <Box borderStyle="round" borderColor="gray" paddingX={1} paddingY={0} flexDirection="column" marginBottom={1}>
-      <Text bold>Start here</Text>
-      <Text color="gray">Ask Pebble to inspect, edit, review, or explain code. The current session will be saved automatically.</Text>
-      <Box marginTop={1} flexDirection="column">
-        <Text color="blue">• “inspect src/runtime/main.ts and summarize the boot flow”</Text>
-        <Text color="blue">• “review my unstaged changes”</Text>
-        <Text color="blue">• “find where session persistence is wired”</Text>
-      </Box>
-    </Box>
-  );
-}
-
-function TranscriptMessageCard({ message }: { message: DisplayMessage }) {
-  const meta = getRoleMeta(message.role);
-
-  return (
-    <Box borderStyle="round" borderColor={meta.borderColor} paddingX={1} paddingY={0} flexDirection="column" marginBottom={1}>
-      <Text bold color={meta.color}>{meta.label}</Text>
-      <Text>{message.content || "(empty)"}</Text>
-    </Box>
-  );
-}
-
-function TranscriptSurface({
-  messages,
-  isProcessing,
-}: {
-  messages: DisplayMessage[];
-  isProcessing: boolean;
-}) {
-  const visibleMessages = messages.slice(-VISIBLE_MESSAGE_COUNT);
-
-  return (
-    <Box flexDirection="column" marginBottom={1}>
-      {messages.length === 0 ? (
-        <EmptyState />
-      ) : (
-        <>
-          {messages.length > VISIBLE_MESSAGE_COUNT && (
-            <Box marginBottom={1}>
-              <Text color="gray">Showing the latest {VISIBLE_MESSAGE_COUNT} of {messages.length} messages.</Text>
-            </Box>
-          )}
-          {visibleMessages.map((message, index) => (
-            <TranscriptMessageCard key={`${message.role}-${index}-${message.content.slice(0, 20)}`} message={message} />
-          ))}
-        </>
-      )}
-      {isProcessing && (
-        <Box borderStyle="round" borderColor="yellow" paddingX={1} paddingY={0}>
-          <Text color="yellow">Pebble is thinking… tool activity and results will appear here.</Text>
-        </Box>
-      )}
-    </Box>
-  );
-}
-
-function PromptComposer({
-  isProcessing,
-  onSubmit,
-  statusText,
-}: {
-  isProcessing: boolean;
-  onSubmit: (value: string) => Promise<void>;
-  statusText: string;
-}) {
-  return (
-    <Box borderStyle="round" borderColor={isProcessing ? "yellow" : "cyan"} paddingX={1} paddingY={0} flexDirection="column">
-      <Box justifyContent="space-between">
-        <Text bold>{isProcessing ? "Processing request" : "Prompt composer"}</Text>
-        <Text color="gray">/help • /resume • /review • /memory</Text>
-      </Box>
-      <Box marginTop={1}>
-        <Text color={isProcessing ? "yellow" : "cyan"} bold>{"> "}</Text>
-        <TextInput
-          key={isProcessing ? "busy" : "idle"}
-          onSubmit={onSubmit}
-          placeholder={isProcessing ? "Pebble is still working…" : "Type a prompt or slash command"}
-        />
-      </Box>
-      <Box marginTop={1}>
-        <Text color="gray">{statusText}</Text>
-      </Box>
-      <Box marginTop={1}>
-        <Text color="gray">/help • /login • /config • /resume • /review • /memory</Text>
-      </Box>
-    </Box>
-  );
-}
+// ---------------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------------
 
 export function App({ context }: { context: CommandContext }) {
   const [runtimeConfig, setRuntimeConfig] = React.useState<Record<string, unknown>>(() =>
     loadCommandConfig(context.cwd, context.config),
   );
-  const [showSettings, setShowSettings] = React.useState(false);
-  const [state, setState] = React.useState<AppState>({
-    messages: [],
-    isProcessing: false,
-    exitCode: null,
-    error: null,
-    statusText: "Ready for a prompt. Use /help for commands.",
-    activeSessionId: context.sessionId ?? null,
-    recentSessions: listRecentSessions(context.sessionStore),
-  });
+  const [state, setState] = React.useState<AppState>(INITIAL_STATE);
 
   const engineRef = React.useRef<QueryEngine | null>(null);
-  const sessionIdRef = React.useRef<string | null>(context.sessionId ?? null);
-  const sessionStore = React.useMemo(() => context.sessionStore, [context.sessionStore]);
+  const sessionIdRef = React.useRef<string | null>(null);
+  const sessionStore = context.sessionStore ?? null;
 
   const registry = React.useMemo(() => {
     const reg = new CommandRegistry();
@@ -306,7 +87,9 @@ export function App({ context }: { context: CommandContext }) {
     return reg;
   }, []);
 
-  // Initialize engine on mount
+  // ------------------------------------------------------------------
+  // Engine initialisation
+  // ------------------------------------------------------------------
   React.useEffect(() => {
     const settings = loadSettingsForCwd(context.cwd);
     const provider = createPrimaryProvider({
@@ -315,10 +98,9 @@ export function App({ context }: { context: CommandContext }) {
       model: typeof runtimeConfig.model === "string" ? runtimeConfig.model : undefined,
     });
     const tools = createMvpTools();
-    const permissionManager = context.permissionManager ?? new PermissionManager({
-      mode: "always-ask",
-      projectRoot: context.cwd,
-    });
+    const permissionManager =
+      context.permissionManager ??
+      new PermissionManager({ mode: "always-ask", projectRoot: context.cwd });
 
     engineRef.current = new QueryEngine({
       provider,
@@ -328,156 +110,115 @@ export function App({ context }: { context: CommandContext }) {
       cwd: context.cwd,
       onEvent: (event: StreamEvent) => {
         const data = event.data as Record<string, unknown> | undefined;
+
         if (event.type === "text_delta" && (data?.text || data?.delta)) {
           const delta = String(data?.text ?? data?.delta ?? "");
           setState((prev) => {
-            const messages = [...prev.messages];
-            const lastMsg = messages[messages.length - 1];
-            if (lastMsg?.role === "streaming") {
-              messages[messages.length - 1] = {
-                role: "streaming",
-                content: lastMsg.content + delta,
-              };
+            const msgs = [...prev.messages];
+            const last = msgs[msgs.length - 1];
+            if (last?.role === "streaming") {
+              msgs[msgs.length - 1] = { role: "streaming", content: last.content + delta };
             } else {
-              messages.push({ role: "streaming", content: delta });
+              msgs.push({ role: "streaming", content: delta });
             }
-            return { ...prev, messages, statusText: "Streaming response…" };
+            return { ...prev, messages: msgs };
           });
         }
-        if (event.type === "progress") {
-          const turn = typeof data?.turn === "number" ? data.turn : undefined;
-          const maxTurns = typeof data?.maxTurns === "number" ? data.maxTurns : undefined;
-          setState((prev) => ({
-            ...prev,
-            statusText: turn && maxTurns ? `Running turn ${turn} of ${maxTurns}` : "Working through the request…",
-          }));
-        }
+
         if (event.type === "tool_call" && data?.tool) {
           setState((prev) => ({
             ...prev,
-            statusText: `Running tool: ${String(data.tool)}`,
-            messages: [
-              ...prev.messages,
-              { role: "tool", content: `🔧 Calling ${data.tool}...` },
-            ],
+            statusText: `Running: ${String(data.tool)}`,
+            messages: [...prev.messages, { role: "tool", content: String(data.tool) }],
           }));
         }
+
         if (event.type === "tool_result" && data?.tool) {
           setState((prev) => ({
             ...prev,
-            statusText: `Tool finished: ${String(data.tool)}`,
-            messages: [
-              ...prev.messages,
-              { role: "tool_result", content: `✅ ${data.tool} completed` },
-            ],
+            statusText: "",
+            messages: [...prev.messages, { role: "tool_result", content: `${String(data.tool)} done` }],
           }));
         }
-        if (event.type === "permission_denied" && data?.tool) {
-          setState((prev) => ({
-            ...prev,
-            error: `Permission denied for ${String(data.tool)}`,
-            statusText: `Permission denied for ${String(data.tool)}`,
-          }));
-        }
+
         if (event.type === "done") {
-          setState((prev) => ({
-            ...prev,
-            statusText: "Ready for the next prompt.",
-          }));
+          setState((prev) => ({ ...prev, statusText: "" }));
         }
       },
     });
   }, [context.cwd, context.permissionManager, runtimeConfig.model, runtimeConfig.provider]);
 
+  // ------------------------------------------------------------------
+  // Session resume — only when launched with --resume/--continue
+  // (context.sessionId set by CLI). Fresh launches start with no session.
+  // ------------------------------------------------------------------
   React.useEffect(() => {
-    if (!sessionStore) {
-      return;
-    }
+    if (!context.sessionId || !sessionStore) return;
 
-    const activeSession = createOrResumeSession(sessionStore, context.sessionId ?? undefined);
-    sessionIdRef.current = activeSession.id;
-    setState((prev) => ({
-      ...prev,
-      messages: transcriptToDisplayMessages(activeSession),
-      activeSessionId: activeSession.id,
-      recentSessions: listRecentSessions(sessionStore),
-      statusText: activeSession.messages.length > 0
-        ? `Loaded session ${truncateSessionId(activeSession.id)} with ${activeSession.messages.length} messages.`
-        : "Ready for a prompt. Use /help for commands.",
-    }));
-  }, [context.sessionId, sessionStore]);
-
-  const refreshSessionChrome = React.useCallback((activeSessionId?: string | null) => {
-    setState((prev) => ({
-      ...prev,
-      activeSessionId: activeSessionId ?? prev.activeSessionId,
-      recentSessions: listRecentSessions(sessionStore),
-    }));
-  }, [sessionStore]);
-
-  const buildCommandContext = React.useCallback((): CommandContext => ({
-    ...context,
-    config: runtimeConfig,
-    sessionStore,
-    sessionId: sessionIdRef.current,
-  }), [context, runtimeConfig, sessionStore]);
-
-  const loadSession = React.useCallback((sessionId?: string | null) => {
-    if (!sessionStore) {
-      return null;
-    }
-
-    const transcript = sessionId
-      ? sessionStore.loadTranscript(sessionId)
-      : sessionStore.getLatestSession();
-
-    if (!transcript) {
-      return null;
-    }
+    const transcript = sessionStore.loadTranscript(context.sessionId);
+    if (!transcript) return;
 
     sessionIdRef.current = transcript.id;
     setState((prev) => ({
       ...prev,
-      messages: transcriptToDisplayMessages(transcript),
-      error: null,
+      messages: transcriptToDisplayMessages(transcript) as DisplayMessage[],
       activeSessionId: transcript.id,
-      recentSessions: listRecentSessions(sessionStore),
-      statusText: `Resumed session ${truncateSessionId(transcript.id)}.`,
     }));
-    return transcript;
-  }, [sessionStore]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once on mount — intentionally not re-running on id change
 
+  // ------------------------------------------------------------------
+  // Command / prompt handler
+  // ------------------------------------------------------------------
   const handleSubmit = React.useCallback(
     async (input: string) => {
       const trimmed = input.trim();
       if (!trimmed) return;
 
-      // Check if it's a command
-      const commandContext = buildCommandContext();
+      const commandContext: CommandContext = {
+        ...context,
+        config: runtimeConfig,
+        sessionStore: sessionStore ?? undefined,
+        sessionId: sessionIdRef.current,
+      };
 
+      // ---- Slash commands ----------------------------------------
       if (registry.isCommand(trimmed, commandContext)) {
         const parsed = registry.parseCommand(trimmed);
-        if (parsed) {
-          const result = await registry.execute(
-            parsed.name,
-            parsed.args,
-            commandContext,
-          );
+        if (!parsed) return;
 
-          if (result.data?.action === "resume-session") {
-            loadSession(typeof result.data.sessionId === "string" ? result.data.sessionId : null);
+        const result = await registry.execute(parsed.name, parsed.args, commandContext);
+
+        // /clear — wipe conversation, reset session
+        if (result.data?.action === "clear") {
+          sessionIdRef.current = null;
+          setState({ ...INITIAL_STATE });
+          return;
+        }
+
+        // /resume — load a saved session on demand
+        if (result.data?.action === "resume-session" && sessionStore) {
+          const sid = typeof result.data.sessionId === "string" ? result.data.sessionId : null;
+          const transcript = sid
+            ? sessionStore.loadTranscript(sid)
+            : sessionStore.getLatestSession();
+          if (transcript) {
+            sessionIdRef.current = transcript.id;
+            setState((prev) => ({
+              ...prev,
+              messages: transcriptToDisplayMessages(transcript) as DisplayMessage[],
+              activeSessionId: transcript.id,
+            }));
           }
+        }
 
-          if (result.data?.action === "config-updated") {
-            setRuntimeConfig(loadCommandConfig(context.cwd, runtimeConfig));
-          }
+        // /config changes — reload config
+        if (result.data?.action === "config-updated") {
+          setRuntimeConfig(loadCommandConfig(context.cwd, runtimeConfig));
+        }
 
-          // If the command is /config, show the settings UI instead of text output
-          if (parsed.name === "config") {
-            setShowSettings(true);
-            return;
-          }
-
+        // Echo command + output into transcript (skip empty output like /clear)
+        if (result.output) {
           setState((prev) => ({
             ...prev,
             messages: [
@@ -485,183 +226,215 @@ export function App({ context }: { context: CommandContext }) {
               { role: "command", content: redactCommandEcho(parsed.name, parsed.args) },
               { role: "output", content: result.output },
             ],
-            exitCode: result.exit ? 0 : prev.exitCode,
-            statusText: result.output || `Executed /${parsed.name}`,
           }));
-          if (result.exit) {
-            if (sessionStore && sessionIdRef.current) {
-              sessionStore.updateStatus(sessionIdRef.current, "completed");
-            }
-            process.exit(0);
-          }
         }
+
+        if (result.exit) {
+          if (sessionStore && sessionIdRef.current) {
+            sessionStore.updateStatus(sessionIdRef.current, "completed");
+          }
+          process.exit(0);
+        }
+
         return;
       }
 
-      // Regular prompt - send to engine
+      // ---- Regular prompt ----------------------------------------
       if (!engineRef.current) {
         setState((prev) => ({
           ...prev,
           messages: [
             ...prev.messages,
             { role: "user", content: trimmed },
-            { role: "assistant", content: "Engine not initialized. Restart Pebble and try again." },
+            { role: "assistant", content: "Engine not initialized." },
           ],
           error: "Engine not initialized.",
         }));
         return;
       }
 
-      if (!sessionStore) {
-        setState((prev) => ({
-          ...prev,
-          error: "Session store not initialized",
-        }));
-        return;
+      // Lazily create a session on the first real prompt
+      if (!sessionIdRef.current && sessionStore) {
+        const session = createOrResumeSession(sessionStore);
+        sessionIdRef.current = session.id;
+        setState((prev) => ({ ...prev, activeSessionId: session.id }));
       }
 
-      const activeSession = createOrResumeSession(sessionStore, sessionIdRef.current ?? undefined);
-      sessionIdRef.current = activeSession.id;
-      refreshSessionChrome(activeSession.id);
+      // Persist user message
+      if (sessionStore && sessionIdRef.current) {
+        sessionStore.appendMessage(sessionIdRef.current, {
+          role: "user",
+          content: trimmed,
+          timestamp: new Date().toISOString(),
+        });
+      }
 
-      sessionStore.appendMessage(activeSession.id, {
-        role: "user",
-        content: trimmed,
-        timestamp: new Date().toISOString(),
-      });
-
-      const transcript = sessionStore.loadTranscript(activeSession.id) ?? activeSession;
-      const conversation = transcriptToConversation(
-        transcript,
-        typeof context.config.compactThreshold === "number"
-          ? context.config.compactThreshold
-          : Number(context.config.compactThreshold ?? 0) || undefined,
-      );
+      // Build conversation history from the stored transcript.
+      // Cast to Message[] — transcriptToConversation only ever produces valid roles.
+      let conversation: Message[];
+      if (sessionStore && sessionIdRef.current) {
+        const transcript = sessionStore.loadTranscript(sessionIdRef.current);
+        conversation = (transcript ? transcriptToConversation(transcript) : [{ role: "user", content: trimmed }]) as Message[];
+      } else {
+        conversation = [{ role: "user", content: trimmed }] as Message[];
+      }
 
       setState((prev) => ({
         ...prev,
         isProcessing: true,
         messages: [...prev.messages, { role: "user", content: trimmed }],
         error: null,
-        activeSessionId: activeSession.id,
-        recentSessions: listRecentSessions(sessionStore),
-        statusText: "Dispatching prompt to the query engine…",
+        statusText: "Thinking…",
       }));
 
       try {
         const result = await engineRef.current.process(conversation);
 
-        const newMessages = result.messages.slice(conversation.length);
-        for (const message of newMessages) {
-          const transcriptMessage = engineMessageToTranscriptMessage(message);
-          if (transcriptMessage) {
-            sessionStore.appendMessage(activeSession.id, transcriptMessage);
+        // Persist assistant messages
+        if (sessionStore && sessionIdRef.current) {
+          for (const msg of result.messages.slice(conversation.length)) {
+            const tm = engineMessageToTranscriptMessage(msg);
+            if (tm) sessionStore.appendMessage(sessionIdRef.current, tm);
           }
+          sessionStore.updateStatus(
+            sessionIdRef.current,
+            result.success ? "completed" : result.state === "interrupted" ? "interrupted" : "error",
+          );
         }
 
-        sessionStore.updateStatus(
-          activeSession.id,
-          result.success ? "completed" : result.state === "interrupted" ? "interrupted" : "error",
-        );
+        // Rebuild display from persisted transcript so it stays in sync.
+        // transcriptToDisplayMessages returns {role: string}[] which satisfies DisplayMessage.
+        let displayMessages: DisplayMessage[];
+        if (sessionStore && sessionIdRef.current) {
+          const refreshed = sessionStore.loadTranscript(sessionIdRef.current);
+          displayMessages = (refreshed
+            ? transcriptToDisplayMessages(refreshed).filter((m) => m.role !== "streaming")
+            : state.messages.filter((m) => m.role !== "streaming")) as DisplayMessage[];
+        } else {
+          displayMessages = state.messages.filter((m) => m.role !== "streaming");
+        }
 
-        const refreshedTranscript = sessionStore.loadTranscript(activeSession.id) ?? activeSession;
-
-        setState((prev) => {
-          const filtered = transcriptToDisplayMessages(refreshedTranscript).filter((m) => m.role !== "streaming");
-
-          if (result.state === "error") {
-            return {
-              ...prev,
-              isProcessing: false,
-              messages: filtered,
-              error: result.error ?? null,
-              statusText: result.error ?? "The last request failed.",
-            };
-          }
-
-          return {
-            ...prev,
-            isProcessing: false,
-            messages: filtered,
-            activeSessionId: activeSession.id,
-            recentSessions: listRecentSessions(sessionStore),
-            statusText: "Ready for the next prompt.",
-          };
-        });
-      } catch (error) {
-        sessionStore.updateStatus(activeSession.id, "error");
         setState((prev) => ({
           ...prev,
           isProcessing: false,
-          messages: [
-            ...prev.messages,
-            { role: "assistant", content: `Error: ${error instanceof Error ? error.message : String(error)}` },
-          ],
-          error: error instanceof Error ? error.message : String(error),
-          statusText: error instanceof Error ? error.message : String(error),
+          messages: displayMessages,
+          error: result.state === "error" ? (result.error ?? null) : null,
+          statusText: "",
+        }));
+      } catch (err) {
+        if (sessionStore && sessionIdRef.current) {
+          sessionStore.updateStatus(sessionIdRef.current, "error");
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        setState((prev) => ({
+          ...prev,
+          isProcessing: false,
+          messages: [...prev.messages, { role: "assistant", content: `Error: ${msg}` }],
+          error: msg,
+          statusText: "",
         }));
       }
     },
-    [registry, context, buildCommandContext, loadSession, refreshSessionChrome, sessionStore],
+    // state.messages intentionally omitted — we only need it for the fallback
+    // non-persisted path. Including it would cause stale-closure issues.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [registry, context, runtimeConfig, sessionStore],
   );
 
-  return (
-    <Box flexDirection="column" padding={1}>
-      {showSettings ? (
-        <Settings
-          context={buildCommandContext()}
-          onClose={() => {
-            setShowSettings(false);
-            setRuntimeConfig(loadCommandConfig(context.cwd, runtimeConfig));
-          }}
-          defaultTab="config"
-        />
-      ) : (
-        <>
-          <HeaderSurface
-            cwd={context.cwd}
-            trustLevel={context.trustLevel}
-            config={runtimeConfig}
-            activeSessionId={state.activeSessionId}
-            recentSessions={state.recentSessions}
-            isProcessing={state.isProcessing}
-            statusText={state.statusText}
-          />
+  const model = String(runtimeConfig.model ?? "default");
+  const providerLabel = typeof runtimeConfig.providerLabel === "string"
+    ? runtimeConfig.providerLabel
+    : undefined;
+  const isFullscreen = runtimeConfig.fullscreenRenderer !== false;
+  const { columns, rows } = useTerminalDimensions();
+  const mascotMood = getPebbleMood(state);
 
-          {state.error && (
+  return (
+    <Box
+      flexDirection="column"
+      padding={1}
+      width={isFullscreen ? columns : undefined}
+      height={isFullscreen ? rows : undefined}
+    >
+        <Box
+          flexDirection="column"
+          flexGrow={1}
+          justifyContent="flex-start"
+        >
+          {state.messages.length === 0 && (
+            <WelcomeHeader
+              cwd={context.cwd}
+              model={model}
+              providerLabel={providerLabel}
+              sessionId={state.activeSessionId}
+              mascotMood={mascotMood}
+              width={columns}
+            />
+          )}
+
+          {state.error && !state.isProcessing && (
             <Box marginBottom={1}>
-              <Box borderStyle="round" borderColor="yellow" paddingX={1} paddingY={0}>
-                <Text color="yellow">⚠ {state.error}</Text>
-              </Box>
+              <Text color="yellow">⚠ {state.error}</Text>
             </Box>
           )}
 
-          <TranscriptSurface messages={state.messages} isProcessing={state.isProcessing} />
+          {state.messages.length > 0 && (
+            <TranscriptView
+              messages={state.messages}
+              isProcessing={state.isProcessing}
+              statusText={state.statusText}
+            />
+          )}
+        </Box>
 
-          <PromptComposer
-            isProcessing={state.isProcessing}
-            onSubmit={handleSubmit}
-            statusText={state.statusText}
-          />
-        </>
-      )}
+        <PromptInput
+          isProcessing={state.isProcessing}
+          onSubmit={handleSubmit}
+          statusText={state.statusText}
+          model={model}
+          sessionId={state.activeSessionId}
+          width={columns}
+        />
     </Box>
   );
 }
 
-export function startREPL(context: CommandContext): Promise<number> {
-  return new Promise((resolve) => {
-    const { unmount } = render(
-      <App context={context} />,
-      {
-        exitOnCtrlC: false,
-      }
-    );
+// ---------------------------------------------------------------------------
+// REPL entry point
+// ---------------------------------------------------------------------------
 
-    // Handle cleanup
-    process.on("SIGINT", () => {
+export function startREPL(context: CommandContext): Promise<number> {
+  return new Promise(() => {
+    const { unmount } = render(<App context={context} />, { exitOnCtrlC: false });
+    process.once("SIGINT", () => {
       unmount();
-      resolve(0);
+      process.exit(130);
     });
   });
+}
+
+function useTerminalDimensions() {
+  const { stdout } = useStdout();
+  const [dimensions, setDimensions] = useState(() => ({
+    columns: stdout.columns ?? process.stdout.columns ?? 80,
+    rows: stdout.rows ?? process.stdout.rows ?? 24,
+  }));
+
+  useEffect(() => {
+    const handleResize = () => {
+      setDimensions({
+        columns: stdout.columns ?? process.stdout.columns ?? 80,
+        rows: stdout.rows ?? process.stdout.rows ?? 24,
+      });
+    };
+
+    handleResize();
+    stdout.on("resize", handleResize);
+
+    return () => {
+      stdout.off("resize", handleResize);
+    };
+  }, [stdout]);
+
+  return dimensions;
 }

@@ -6,6 +6,7 @@
       "name": "pebble-code",
       "dependencies": {
         "@inkjs/ui": "^2.0.0",
+        "@zenobius/ink-mouse": "^1.0.3",
         "ink": "^6.8.0",
         "openai": "^6.33.0",
         "react": "^19.2.4",
@@ -34,6 +35,8 @@
     "@types/prop-types": ["@types/prop-types@15.7.15", "", {}, "sha512-F6bEyamV9jKGAFBEmlQnesRPGOQqS2+Uwi0Em15xenOxHaf2hv6L8YCVn3rPdPJOiJfPiCnLIRyvwVaqMY3MIw=="],
 
     "@types/react": ["@types/react@18.3.28", "", { "dependencies": { "@types/prop-types": "*", "csstype": "^3.2.2" } }, "sha512-z9VXpC7MWrhfWipitjNdgCauoMLRdIILQsAEV+ZesIzBq/oUlxk0m3ApZuMFCXdnS4U7KrI+l3WRUEGQ8K1QKw=="],
+
+    "@zenobius/ink-mouse": ["@zenobius/ink-mouse@1.0.3", "", { "peerDependencies": { "ink": "^5.0.1", "react": "^18.2.0" } }, "sha512-2rEsLgIniTWf0+mXXuRnMEGQ/Tcg/mScbCfZeFUNCDA+hb9hev/bzZM66mq+PoSFd243146RISLagO2NJaTXuQ=="],
 
     "ansi-escapes": ["ansi-escapes@7.3.0", "", { "dependencies": { "environment": "^1.0.0" } }, "sha512-BvU8nYgGQBxcmMuEeUEmNTvrMVjJNSH7RgW24vXexN4Ven6qCvy4TntnvlnwnMLTVlcRQQdbRY8NKnaIoeWDNg=="],
 
