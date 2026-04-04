@@ -11,7 +11,7 @@ import { PermissionManager } from "../runtime/permissionManager.js";
 import { getSettingsPath, loadSettingsForCwd } from "../runtime/config.js";
 import type { Message, StreamEvent } from "../engine/types.js";
 import {
-  createOrResumeSession,
+  compactSessionIfNeeded,
   engineMessageToTranscriptMessage,
   transcriptToConversation,
   transcriptToDisplayMessages,
@@ -19,8 +19,11 @@ import {
 import type { AppState, DisplayMessage } from "./types.js";
 import { getPebbleMood } from "./mascotMood.js";
 import { PromptInput } from "./components/PromptInput.js";
+import type { CommandSuggestion } from "./components/PromptInput.js";
 import { WelcomeHeader } from "./components/WelcomeHeader.js";
 import { TranscriptView } from "./components/TranscriptView.js";
+import { SessionSidebar, deriveSessionTitle } from "./components/SessionSidebar.js";
+import type { SessionSummary } from "./components/SessionSidebar.js";
 import { Settings } from "./Settings.js";
 import type { TabId } from "./Settings.js";
 
@@ -36,12 +39,14 @@ function loadCommandConfig(
   const resolved = resolveProviderConfig(settings);
   return {
     ...currentConfig,
+    permissionMode: settings.permissionMode,
     provider: resolved.providerId,
     providerLabel: resolved.providerLabel,
     model: resolved.model,
     baseUrl: resolved.baseUrl,
     apiKeyConfigured: resolved.apiKeyConfigured,
     apiKeySource: resolved.apiKeySource,
+    compactThreshold: settings.compactThreshold,
     fullscreenRenderer: settings.fullscreenRenderer,
     settingsPath: getSettingsPath(cwd),
   };
@@ -82,12 +87,66 @@ export function App({ context }: { context: CommandContext }) {
   const [settingsTab, setSettingsTab] = React.useState<TabId>("config");
   const [inputValue, setInputValue] = React.useState("");
   const [inputKey, setInputKey] = React.useState(0);
+  const [inputDefaultValue, setInputDefaultValue] = React.useState("");
   const [ctrlCOnce, setCtrlCOnce] = React.useState(false);
+  const [suggestionIndex, setSuggestionIndex] = React.useState(0);
+  const [sidebarSessions, setSidebarSessions] = React.useState<SessionSummary[]>([]);
 
   const engineRef = React.useRef<QueryEngine | null>(null);
   const sessionIdRef = React.useRef<string | null>(null);
   const ctrlCTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionStore = context.sessionStore ?? null;
+
+  // ------------------------------------------------------------------
+  // Session list for sidebar
+  // ------------------------------------------------------------------
+  const refreshSessions = React.useCallback(() => {
+    if (!sessionStore) return;
+    const list = sessionStore.listSessions();
+    const summaries: SessionSummary[] = list.map((s) => {
+      const transcript = sessionStore.loadTranscript(s.id);
+      return {
+        id: s.id,
+        title: transcript ? deriveSessionTitle(transcript.messages) : "New chat",
+        updatedAt: s.updatedAt,
+        status: s.status,
+        messageCount: s.messageCount,
+      };
+    });
+    setSidebarSessions(summaries);
+  }, [sessionStore]);
+
+  // Refresh session list on mount and whenever the active session changes.
+  React.useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions, state.activeSessionId]);
+
+  const handleSessionSelect = React.useCallback(
+    (selectedId: string | null) => {
+      if (selectedId === null) {
+        // New chat — clear state, let next prompt create a session
+        sessionIdRef.current = null;
+        setState({ ...INITIAL_STATE });
+        refreshSessions();
+        return;
+      }
+      if (selectedId === sessionIdRef.current) return;
+      if (!sessionStore) return;
+
+      const transcript = sessionStore.loadTranscript(selectedId);
+      if (!transcript) return;
+
+      sessionIdRef.current = transcript.id;
+      setState((prev) => ({
+        ...prev,
+        messages: transcriptToDisplayMessages(transcript) as DisplayMessage[],
+        activeSessionId: transcript.id,
+        error: null,
+        statusText: "",
+      }));
+    },
+    [sessionStore, refreshSessions],
+  );
 
   const registry = React.useMemo(() => {
     const reg = new CommandRegistry();
@@ -95,6 +154,26 @@ export function App({ context }: { context: CommandContext }) {
     reg.registerMany(context.extensionCommands ?? []);
     return reg;
   }, [context.extensionCommands]);
+
+  // Slash-command suggestions: shown when input starts with / and has no space yet.
+  const suggestions = React.useMemo((): CommandSuggestion[] => {
+    if (!inputValue.startsWith("/") || inputValue.includes(" ")) return [];
+    const query = inputValue.slice(1).toLowerCase();
+    const listCtx = { cwd: context.cwd, headless: false, config: runtimeConfig };
+    return registry
+      .list(listCtx)
+      .filter(
+        (c) =>
+          c.name.startsWith(query) ||
+          (c.aliases ?? []).some((a) => a.startsWith(query)),
+      )
+      .map((c) => ({ name: c.name, description: c.description }));
+  }, [inputValue, registry, context.cwd, runtimeConfig]);
+
+  // Reset selection to top whenever the suggestion list changes.
+  React.useEffect(() => {
+    setSuggestionIndex(0);
+  }, [suggestions.length, inputValue]);  // inputValue keeps it fresh on each keystroke
 
   // ------------------------------------------------------------------
   // Engine initialisation
@@ -164,7 +243,11 @@ export function App({ context }: { context: CommandContext }) {
   React.useEffect(() => {
     if (!context.sessionId || !sessionStore) return;
 
-    const transcript = sessionStore.loadTranscript(context.sessionId);
+    const transcript = compactSessionIfNeeded(
+      sessionStore,
+      context.sessionId,
+      getCompactThreshold(runtimeConfig.compactThreshold),
+    ) ?? sessionStore.loadTranscript(context.sessionId);
     if (!transcript) return;
 
     sessionIdRef.current = transcript.id;
@@ -177,13 +260,36 @@ export function App({ context }: { context: CommandContext }) {
   }, []); // run once on mount — intentionally not re-running on id change
 
   // ------------------------------------------------------------------
-  // Ctrl+C: first press clears input; second press exits
+  // Keyboard: Ctrl+C exit, and suggestion navigation (↑ ↓ Tab)
   // ------------------------------------------------------------------
   useInput(
     (_input, key) => {
+      // Suggestion navigation — only when the popup is visible
+      if (suggestions.length > 0) {
+        if (key.upArrow) {
+          setSuggestionIndex((i) => Math.max(0, i - 1));
+          return;
+        }
+        if (key.downArrow) {
+          setSuggestionIndex((i) => Math.min(suggestions.length - 1, i + 1));
+          return;
+        }
+        if (key.tab) {
+          const selected = suggestions[suggestionIndex];
+          if (selected) {
+            const completed = `/${selected.name} `;
+            setInputDefaultValue(completed);
+            setInputValue(completed);
+            setInputKey((k) => k + 1);
+          }
+          return;
+        }
+      }
+
       if (key.ctrl && _input === "c") {
         if (inputValue.length > 0) {
           setInputValue("");
+          setInputDefaultValue("");
           setInputKey((k) => k + 1);
           return;
         }
@@ -300,9 +406,10 @@ export function App({ context }: { context: CommandContext }) {
         return;
       }
 
-      // Lazily create a session on the first real prompt
+      // Lazily create a fresh session on the first real prompt.
+      // Never auto-resume the latest session — that requires an explicit /resume.
       if (!sessionIdRef.current && sessionStore) {
-        const session = createOrResumeSession(sessionStore);
+        const session = sessionStore.createSession();
         sessionIdRef.current = session.id;
         setState((prev) => ({ ...prev, activeSessionId: session.id }));
       }
@@ -314,6 +421,11 @@ export function App({ context }: { context: CommandContext }) {
           content: trimmed,
           timestamp: new Date().toISOString(),
         });
+        compactSessionIfNeeded(
+          sessionStore,
+          sessionIdRef.current,
+          getCompactThreshold(runtimeConfig.compactThreshold),
+        );
       }
 
       // Build conversation history from the stored transcript.
@@ -321,7 +433,14 @@ export function App({ context }: { context: CommandContext }) {
       let conversation: Message[];
       if (sessionStore && sessionIdRef.current) {
         const transcript = sessionStore.loadTranscript(sessionIdRef.current);
-        conversation = (transcript ? transcriptToConversation(transcript) : [{ role: "user", content: trimmed }]) as Message[];
+        conversation = (
+          transcript
+            ? transcriptToConversation(
+                transcript,
+                getCompactThreshold(runtimeConfig.compactThreshold),
+              )
+            : [{ role: "user", content: trimmed }]
+        ) as Message[];
       } else {
         conversation = [{ role: "user", content: trimmed }] as Message[];
       }
@@ -343,6 +462,11 @@ export function App({ context }: { context: CommandContext }) {
             const tm = engineMessageToTranscriptMessage(msg);
             if (tm) sessionStore.appendMessage(sessionIdRef.current, tm);
           }
+          compactSessionIfNeeded(
+            sessionStore,
+            sessionIdRef.current,
+            getCompactThreshold(runtimeConfig.compactThreshold),
+          );
           sessionStore.updateStatus(
             sessionIdRef.current,
             result.success ? "completed" : result.state === "interrupted" ? "interrupted" : "error",
@@ -368,6 +492,7 @@ export function App({ context }: { context: CommandContext }) {
           error: result.state === "error" ? (result.error ?? null) : null,
           statusText: "",
         }));
+        refreshSessions();
       } catch (err) {
         if (sessionStore && sessionIdRef.current) {
           sessionStore.updateStatus(sessionIdRef.current, "error");
@@ -380,12 +505,13 @@ export function App({ context }: { context: CommandContext }) {
           error: msg,
           statusText: "",
         }));
+        refreshSessions();
       }
     },
     // state.messages intentionally omitted — we only need it for the fallback
     // non-persisted path. Including it would cause stale-closure issues.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [registry, context, runtimeConfig, sessionStore],
+    [registry, context, runtimeConfig, sessionStore, refreshSessions],
   );
 
   const model = String(runtimeConfig.model ?? "default");
@@ -410,28 +536,31 @@ export function App({ context }: { context: CommandContext }) {
     );
   }
 
+  const sidebarWidth = 26;
+  const mainWidth = isFullscreen ? columns - sidebarWidth : undefined;
+
   return (
     <Box
-      flexDirection="column"
+      flexDirection="row"
       padding={1}
       width={isFullscreen ? columns : undefined}
       height={isFullscreen ? rows : undefined}
     >
+      {/* Main content */}
+      <Box flexDirection="column" flexGrow={1} width={mainWidth}>
         <Box
           flexDirection="column"
           flexGrow={1}
           justifyContent="flex-start"
         >
-          {state.messages.length === 0 && (
-            <WelcomeHeader
-              cwd={context.cwd}
-              model={model}
-              providerLabel={providerLabel}
-              sessionId={state.activeSessionId}
-              mascotMood={mascotMood}
-              width={columns}
-            />
-          )}
+          <WelcomeHeader
+            cwd={context.cwd}
+            model={model}
+            providerLabel={providerLabel}
+            sessionId={state.activeSessionId}
+            mascotMood={mascotMood}
+            width={mainWidth ?? columns}
+          />
 
           {state.error && !state.isProcessing && (
             <Box marginBottom={1}>
@@ -442,8 +571,6 @@ export function App({ context }: { context: CommandContext }) {
           {state.messages.length > 0 && (
             <TranscriptView
               messages={state.messages}
-              isProcessing={state.isProcessing}
-              statusText={state.statusText}
             />
           )}
         </Box>
@@ -453,12 +580,24 @@ export function App({ context }: { context: CommandContext }) {
           onSubmit={handleSubmit}
           onChange={setInputValue}
           inputKey={inputKey}
+          defaultValue={inputDefaultValue}
           exitWarning={ctrlCOnce}
           statusText={state.statusText}
           model={model}
           sessionId={state.activeSessionId}
-          width={columns}
+          width={mainWidth ?? columns}
+          suggestions={suggestions}
+          selectedSuggestionIndex={Math.min(suggestionIndex, Math.max(0, suggestions.length - 1))}
         />
+      </Box>
+
+      {/* Session sidebar */}
+      <SessionSidebar
+        sessions={sidebarSessions}
+        activeSessionId={state.activeSessionId}
+        onSelect={handleSessionSelect}
+        width={sidebarWidth}
+      />
     </Box>
   );
 }
@@ -501,4 +640,19 @@ function useTerminalDimensions() {
   }, [stdout]);
 
   return dimensions;
+}
+
+function getCompactThreshold(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return undefined;
 }
