@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, expect, test } from "bun:test";
-import { TranscriptView, getTranscriptLineCount } from "../src/ui/components/TranscriptView";
+import { TranscriptView, getTranscriptLineCount, getTranscriptMetrics } from "../src/ui/components/TranscriptView";
 import { MessageItem } from "../src/ui/components/MessageItem";
 import { summariseArgs } from "../src/ui/components/PermissionPrompt";
 import type { DisplayMessage } from "../src/ui/types";
@@ -19,7 +19,7 @@ describe("TranscriptView", () => {
     expect(flat).not.toContain("Running:");
   });
 
-  test("shows an overflow notice alongside the visible message window", () => {
+  test("shows only the visible transcript window when the transcript overflows", () => {
     const messages = Array.from({ length: 25 }, (_, index) =>
       createMessage(index % 2 === 0 ? "assistant" : "user", `message ${String(index + 1).padStart(2, "0")}`),
     );
@@ -27,12 +27,28 @@ describe("TranscriptView", () => {
     const element = TranscriptView({ messages });
     const flat = flattenText(element);
 
-    expect(flat).toContain("earlier history above");
-    expect(flat).toContain("scroll to browse");
     expect(flat).toContain("message 25");
     expect(flat).not.toContain("message 01");
-    expect(flat).not.toContain("PgDn");
-    expect(flat).not.toContain("PgUp");
+    expect(flat).not.toContain("earlier history above");
+    expect(flat).not.toContain("newer history below");
+  });
+
+  test("can render the Pebble banner inside the scrollable transcript", () => {
+    const element = TranscriptView({
+      messages: [],
+      width: 80,
+      banner: {
+        cwd: "/Users/sethrose/Developer/Pebble-Code",
+        model: "qwen/qwen3.6-plus:free",
+        providerLabel: "OpenRouter",
+        sessionId: null,
+      },
+    });
+    const flat = flattenText(element);
+
+    expect(flat).toContain("██████╗");
+    expect(flat).toContain("qwen/qwen3.6-plus:free · OpenRouter • new session");
+    expect(flat).toContain("Type a prompt to start · /help shows commands");
   });
 
   test("trims older tall messages when maxRows is constrained", () => {
@@ -45,10 +61,22 @@ describe("TranscriptView", () => {
     const element = TranscriptView({ messages, maxRows: 6, width: 60 });
     const flat = flattenText(element);
 
-    expect(flat).not.toContain("tool 1");
+    expect(flat).not.toContain("tool 5");
     expect(flat).toContain("show me the tree");
     expect(flat).toContain("Here is the tree");
-    expect(flat).toContain("earlier history above");
+    expect(flat).not.toContain("earlier history above");
+  });
+
+  test("clamps scroll offset to the highest meaningful row instead of overscrolling into whitespace", () => {
+    const messages = Array.from({ length: 6 }, (_, index) => createMessage("assistant", `message ${index + 1}`));
+    const metrics = getTranscriptMetrics(messages, { width: 40, maxRows: 6 });
+    const element = TranscriptView({ messages, maxRows: 6, width: 40, scrollOffset: 999 });
+    const flat = flattenText(element);
+
+    expect(metrics.maxScrollOffset).toBeGreaterThanOrEqual(0);
+    expect(metrics.maxScrollOffset).toBeLessThan(metrics.totalRows);
+    expect(flat).toContain("message 1");
+    expect(flat).not.toContain("message 6");
   });
 
   test("groups tool_call + tool_result into a single tool group", () => {
@@ -76,6 +104,40 @@ describe("TranscriptView", () => {
     expect(getTranscriptLineCount(messages, 80)).toBe(3);
     expect(flat).toContain("Turn 3/50");
     expect(flat).not.toContain("Turn 1/50");
+  });
+
+  test("shows tool output while processing, then collapses it after completion", () => {
+    const messages = [
+      createMessage("tool_result", "Bash done", {
+        toolName: "Bash",
+        toolOutput: "line 1\nline 2",
+        summary: "2 lines returned",
+      }),
+    ];
+
+    const liveFlat = flattenText(TranscriptView({ messages, isProcessing: true, width: 80 }));
+    const completeFlat = flattenText(TranscriptView({ messages, isProcessing: false, width: 80 }));
+
+    expect(liveFlat).toContain("line 1");
+    expect(completeFlat).toContain("Bash done");
+    expect(completeFlat).not.toContain("line 1");
+    expect(completeFlat).not.toContain("2 lines returned");
+  });
+
+  test("formats markdown headings and bold text instead of showing raw markers", () => {
+    const element = TranscriptView({
+      messages: [createMessage("assistant", "### Title\nParagraph with **bold** text")],
+      width: 80,
+    });
+    const flat = normalizeWhitespace(flattenText(element));
+    const segments = collectTextSegments(element);
+
+    expect(flat).toContain("Title");
+    expect(flat).toContain("Paragraph with bold text");
+    expect(flat).not.toContain("###");
+    expect(flat).not.toContain("**");
+    expect(segments.some((segment) => segment.text.includes("Title") && segment.bold)).toBe(true);
+    expect(segments.some((segment) => segment.text === "bold" && segment.bold)).toBe(true);
   });
 });
 
@@ -235,4 +297,36 @@ function flattenText(element: React.ReactElement): string {
   }
   walk(element);
   return parts.join(" ");
+}
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function collectTextSegments(element: React.ReactElement): Array<{ text: string; bold?: boolean; italic?: boolean }> {
+  const segments: Array<{ text: string; bold?: boolean; italic?: boolean }> = [];
+
+  function walk(node: unknown, inherited: { bold?: boolean; italic?: boolean } = {}) {
+    if (typeof node === "string") {
+      segments.push({ text: node, ...inherited });
+      return;
+    }
+
+    if (!React.isValidElement(node)) {
+      return;
+    }
+
+    const props = node.props as Record<string, unknown>;
+    const nextInherited = {
+      bold: typeof props.bold === "boolean" ? props.bold : inherited.bold,
+      italic: typeof props.italic === "boolean" ? props.italic : inherited.italic,
+    };
+
+    if (typeof props.children !== "undefined") {
+      React.Children.forEach(props.children as React.ReactNode, (child) => walk(child, nextInherited));
+    }
+  }
+
+  walk(element);
+  return segments;
 }

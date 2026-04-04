@@ -24,11 +24,10 @@ import type { AppState, DisplayMessage, PendingPermission, PermissionChoice } fr
 
 import { PromptInput } from "./components/PromptInput.js";
 import type { CommandSuggestion } from "./components/PromptInput.js";
-import { WelcomeHeader } from "./components/WelcomeHeader.js";
-import { TranscriptView, getTranscriptLineCount } from "./components/TranscriptView.js";
+import { TranscriptView, getTranscriptMetrics } from "./components/TranscriptView.js";
 import { MouseScrollableRegion } from "./components/MouseScrollableRegion.js";
 import { TerminalMouseProvider } from "./components/TerminalMouseProvider.js";
-import { SessionSidebar, deriveSessionTitle } from "./components/SessionSidebar.js";
+import { SessionSidebar, buildVerticalDivider, deriveSessionTitle } from "./components/SessionSidebar.js";
 import type { SessionSummary } from "./components/SessionSidebar.js";
 import { KeybindingsPopup } from "./components/KeybindingsPopup.js";
 import { PermissionPrompt } from "./components/PermissionPrompt.js";
@@ -654,7 +653,7 @@ export function App({ context }: { context: CommandContext }) {
 
       // --- Transcript scroll: Page Up / Page Down ---
       if (key.pageUp) {
-        setTranscriptScrollOffset((prev) => prev + scrollStep);
+        setTranscriptScrollOffset((prev) => Math.min(maxTranscriptScrollOffset, prev + scrollStep));
         return;
       }
       if (key.pageDown) {
@@ -972,20 +971,40 @@ export function App({ context }: { context: CommandContext }) {
   const isFullscreen = runtimeConfig.fullscreenRenderer !== false;
   const { columns, rows } = useTerminalDimensions();
 
-  // Rows consumed by the fixed header + input bar + outer padding.
-  // Header: 14 rows (logo 6 + margins + metadata + hint)
-  // Input bar: 4 rows (rule + prompt + status + margin)
+  // Rows consumed by the fixed input bar + outer padding.
+  // Input bar: ~4 rows (rule + prompt + status + margin)
   // Outer Box padding: 2 rows
-  const FIXED_UI_ROWS = 20;
+  const FIXED_UI_ROWS = 6;
+  const HORIZONTAL_FRAME_WIDTH = 2;
+  const SIDEBAR_DIVIDER_WIDTH = sidebarVisible ? 1 : 0;
+  const MAIN_RIGHT_GAP = sidebarVisible ? 1 : 0;
   const transcriptRows = Math.max(4, rows - FIXED_UI_ROWS);
   const sidebarWidth = 26;
   const effectiveSidebarWidth = sidebarVisible ? sidebarWidth : 0;
-  const mainWidth = isFullscreen ? columns - effectiveSidebarWidth : undefined;
-  const transcriptWidth = Math.max(20, mainWidth ?? columns);
-  const transcriptLineCount = React.useMemo(
-    () => getTranscriptLineCount(state.messages, transcriptWidth),
-    [state.messages, transcriptWidth],
+  const availableWidth = isFullscreen ? Math.max(20, columns - HORIZONTAL_FRAME_WIDTH) : undefined;
+  const mainWidth = isFullscreen
+    ? Math.max(20, (availableWidth ?? columns) - effectiveSidebarWidth - SIDEBAR_DIVIDER_WIDTH - MAIN_RIGHT_GAP)
+    : undefined;
+  const transcriptWidth = Math.max(20, mainWidth ?? availableWidth ?? columns);
+  const sidebarHeight = isFullscreen ? Math.max(1, rows - 2) : undefined;
+  const visibleMsgCount = Math.max(4, Math.floor(transcriptRows / 3));
+  const transcriptMetrics = React.useMemo(
+    () => getTranscriptMetrics(state.messages, {
+      width: transcriptWidth,
+      maxRows: transcriptRows,
+      maxMessages: visibleMsgCount,
+      isProcessing: state.isProcessing,
+      banner: {
+        cwd: context.cwd,
+        model,
+        providerLabel,
+        sessionId: state.activeSessionId,
+      },
+    }),
+    [context.cwd, model, providerLabel, state.activeSessionId, state.isProcessing, state.messages, transcriptRows, transcriptWidth, visibleMsgCount],
   );
+  const transcriptLineCount = transcriptMetrics.totalRows;
+  const maxTranscriptScrollOffset = transcriptMetrics.maxScrollOffset;
 
   React.useEffect(() => {
     const previousLineCount = previousTranscriptLineCountRef.current;
@@ -997,20 +1016,19 @@ export function App({ context }: { context: CommandContext }) {
 
     const delta = transcriptLineCount - previousLineCount;
     setTranscriptScrollOffset((current) => {
-      const maxOffset = Math.max(0, transcriptLineCount - 1);
+      const maxOffset = maxTranscriptScrollOffset;
       if (delta > 0 && current > 0) {
         return Math.min(maxOffset, current + delta);
       }
       return Math.min(current, maxOffset);
     });
-  }, [transcriptLineCount]);
+  }, [maxTranscriptScrollOffset, transcriptLineCount]);
 
-  const visibleMsgCount = Math.max(4, Math.floor(transcriptRows / 3));
   const scrollStep = Math.max(3, Math.floor(transcriptRows / 2));
   const mouseScrollStep = 2;
   const handleTranscriptWheelUp = React.useCallback(() => {
-    setTranscriptScrollOffset((prev) => prev + mouseScrollStep);
-  }, []);
+    setTranscriptScrollOffset((prev) => Math.min(maxTranscriptScrollOffset, prev + mouseScrollStep));
+  }, [maxTranscriptScrollOffset]);
   const handleTranscriptWheelDown = React.useCallback(() => {
     setTranscriptScrollOffset((prev) => Math.max(0, prev - mouseScrollStep));
   }, []);
@@ -1106,34 +1124,33 @@ export function App({ context }: { context: CommandContext }) {
       height={isFullscreen ? rows : undefined}
     >
       {/* Main content */}
-      <Box flexDirection="column" flexGrow={1} width={mainWidth}>
+      <Box flexDirection="column" flexGrow={1} width={mainWidth} marginRight={sidebarVisible ? 1 : 0}>
         <Box
           flexDirection="column"
           flexGrow={1}
           justifyContent="flex-start"
         >
-          <WelcomeHeader
-            cwd={context.cwd}
-            model={model}
-            providerLabel={providerLabel}
-            sessionId={state.activeSessionId}
-            width={mainWidth ?? columns}
-          />
-
           {state.error && !state.isProcessing && (
             <Box marginBottom={1}>
               <Text color="yellow">⚠ {state.error}</Text>
             </Box>
           )}
 
-          {state.messages.length > 0 && (isFullscreen ? (
+          {(state.messages.length > 0 || isFullscreen) && (isFullscreen ? (
             <MouseScrollableRegion
               onWheelUp={handleTranscriptWheelUp}
               onWheelDown={handleTranscriptWheelDown}
             >
               <TranscriptView
                 messages={state.messages}
+                banner={{
+                  cwd: context.cwd,
+                  model,
+                  providerLabel,
+                  sessionId: state.activeSessionId,
+                }}
                 scrollOffset={transcriptScrollOffset}
+                isProcessing={state.isProcessing}
                 maxMessages={visibleMsgCount}
                 maxRows={transcriptRows}
                 width={transcriptWidth}
@@ -1142,7 +1159,14 @@ export function App({ context }: { context: CommandContext }) {
           ) : (
             <TranscriptView
               messages={state.messages}
+              banner={{
+                cwd: context.cwd,
+                model,
+                providerLabel,
+                sessionId: state.activeSessionId,
+              }}
               scrollOffset={transcriptScrollOffset}
+              isProcessing={state.isProcessing}
               maxMessages={visibleMsgCount}
               maxRows={transcriptRows}
               width={transcriptWidth}
@@ -1152,14 +1176,14 @@ export function App({ context }: { context: CommandContext }) {
           {state.pendingPermission && (
             <PermissionPrompt
               pending={state.pendingPermission}
-              width={mainWidth ?? columns}
+              width={mainWidth ?? availableWidth ?? columns}
             />
           )}
 
           {state.pendingQuestion && (
             <QuestionPrompt
               pending={state.pendingQuestion}
-              width={mainWidth ?? columns}
+              width={mainWidth ?? availableWidth ?? columns}
             />
           )}
         </Box>
@@ -1178,7 +1202,7 @@ export function App({ context }: { context: CommandContext }) {
           statusText={state.statusText}
           model={model}
           sessionId={state.activeSessionId}
-          width={mainWidth ?? columns}
+          width={mainWidth ?? availableWidth ?? columns}
           suggestions={suggestions}
           selectedSuggestionIndex={Math.min(suggestionIndex, Math.max(0, suggestions.length - 1))}
         />
@@ -1186,14 +1210,21 @@ export function App({ context }: { context: CommandContext }) {
 
       {/* Session sidebar */}
       {sidebarVisible && (
-        <SessionSidebar
-          sessions={sidebarSessions}
-          activeSessionId={state.activeSessionId}
-          onSelect={handleSessionSelect}
-          selectedIndex={sidebarIndex}
-          isFocused={focusArea === "sidebar"}
-          width={sidebarWidth}
-        />
+        <Box flexDirection="row" height={sidebarHeight}>
+          {sidebarHeight ? (
+            <Text color={focusArea === "sidebar" ? "green" : "gray"}>{buildVerticalDivider(sidebarHeight)}</Text>
+          ) : (
+            <Text color={focusArea === "sidebar" ? "green" : "gray"}>│</Text>
+          )}
+          <SessionSidebar
+            sessions={sidebarSessions}
+            activeSessionId={state.activeSessionId}
+            onSelect={handleSessionSelect}
+            selectedIndex={sidebarIndex}
+            isFocused={focusArea === "sidebar"}
+            width={sidebarWidth}
+          />
+        </Box>
       )}
     </Box>
   );

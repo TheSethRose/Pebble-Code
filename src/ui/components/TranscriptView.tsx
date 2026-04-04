@@ -2,11 +2,21 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { DisplayMessage } from "../types.js";
 import { VISIBLE_MESSAGE_COUNT } from "../types.js";
+import { PEBBLE_ASCII_LOGO_LINES, truncateMiddle } from "./WelcomeHeader.js";
 
 interface TranscriptViewProps {
   messages: DisplayMessage[];
+  /** Optional Pebble banner shown at the top of the scrollable transcript. */
+  banner?: {
+    cwd: string;
+    model: string;
+    providerLabel?: string;
+    sessionId: string | null;
+  };
   /** Number of transcript rows shifted upward from the live tail. */
   scrollOffset?: number;
+  /** Whether the current assistant turn is still actively streaming/running tools. */
+  isProcessing?: boolean;
   /** Fallback row budget when maxRows is not provided. */
   maxMessages?: number;
   /** Exact transcript row budget available in the layout. */
@@ -15,19 +25,34 @@ interface TranscriptViewProps {
   width?: number;
 }
 
-interface TranscriptRow {
-  key: string;
+interface TranscriptSpan {
   text: string;
   color?: string;
   dimColor?: boolean;
   bold?: boolean;
+  italic?: boolean;
+}
+
+interface TranscriptRow {
+  key: string;
+  segments: TranscriptSpan[];
 }
 
 type GroupedItem =
   | { type: "single"; key: string; message: DisplayMessage }
   | { type: "tool-group"; key: string; call: DisplayMessage; result?: DisplayMessage };
 
-const INDICATOR_ROW_BUDGET = 2;
+interface TranscriptMetrics {
+  totalRows: number;
+  contentBudget: number;
+  maxScrollOffset: number;
+}
+
+type RowStyle = Omit<TranscriptSpan, "text">;
+
+interface StyledLine {
+  spans: TranscriptSpan[];
+}
 
 /**
  * Deterministic line-virtualized transcript viewport.
@@ -38,62 +63,130 @@ const INDICATOR_ROW_BUDGET = 2;
  */
 export function TranscriptView({
   messages,
+  banner,
   scrollOffset = 0,
+  isProcessing = false,
   maxMessages = VISIBLE_MESSAGE_COUNT,
   maxRows,
   width = 80,
 }: TranscriptViewProps) {
-  const rows = buildTranscriptRows(messages, width);
-  const totalRows = rows.length;
-  const contentBudget = Math.max(1, (maxRows ?? maxMessages) - INDICATOR_ROW_BUDGET);
-  const clampedOffset = Math.min(scrollOffset, Math.max(0, totalRows - 1));
+  const rows = buildTranscriptRows(messages, width, isProcessing, banner);
+  const { totalRows, contentBudget, maxScrollOffset } = buildTranscriptMetrics(rows.length, maxRows, maxMessages);
+  const clampedOffset = Math.min(scrollOffset, maxScrollOffset);
   const end = Math.max(0, totalRows - clampedOffset);
   const start = Math.max(0, end - contentBudget);
   const visibleRows = rows.slice(start, end);
-  const hiddenAbove = start;
-  const hiddenBelow = totalRows - end;
 
   return (
     <Box flexDirection="column">
-      {hiddenAbove > 0 && (
-        <Text color="gray">· earlier history above · scroll to browse · End to jump live</Text>
-      )}
-
       {visibleRows.map((row) => (
-        <Text key={row.key} color={row.color} dimColor={row.dimColor} bold={row.bold}>
-          {row.text}
+        <Text key={row.key}>
+          {row.segments.map((segment, segmentIndex) => (
+            <Text
+              key={`${row.key}:${segmentIndex}`}
+              color={segment.color}
+              dimColor={segment.dimColor}
+              bold={segment.bold}
+              italic={segment.italic}
+            >
+              {segment.text}
+            </Text>
+          ))}
         </Text>
       ))}
-
-      {hiddenBelow > 0 && (
-        <Text color="gray">· newer history below · scroll down to continue</Text>
-      )}
     </Box>
   );
 }
 
 export function getTranscriptLineCount(messages: DisplayMessage[], width = 80): number {
-  return buildTranscriptRows(messages, width).length;
+  return buildTranscriptRows(messages, width, false).length;
 }
 
-function buildTranscriptRows(messages: DisplayMessage[], width: number): TranscriptRow[] {
+export function getTranscriptMetrics(
+  messages: DisplayMessage[],
+  {
+    width = 80,
+    maxRows,
+    maxMessages = VISIBLE_MESSAGE_COUNT,
+    isProcessing = false,
+    banner,
+  }: {
+    width?: number;
+    maxRows?: number;
+    maxMessages?: number;
+    isProcessing?: boolean;
+    banner?: TranscriptViewProps["banner"];
+  } = {},
+): TranscriptMetrics {
+  const rows = buildTranscriptRows(messages, width, isProcessing, banner);
+  return buildTranscriptMetrics(rows.length, maxRows, maxMessages);
+}
+
+function buildTranscriptMetrics(totalRows: number, maxRows?: number, maxMessages = VISIBLE_MESSAGE_COUNT): TranscriptMetrics {
+  const contentBudget = Math.max(1, maxRows ?? maxMessages);
+  return {
+    totalRows,
+    contentBudget,
+    maxScrollOffset: Math.max(0, totalRows - contentBudget),
+  };
+}
+
+function buildTranscriptRows(
+  messages: DisplayMessage[],
+  width: number,
+  isProcessing: boolean,
+  banner?: TranscriptViewProps["banner"],
+): TranscriptRow[] {
   const grouped = groupMessages(messages);
   const rows: TranscriptRow[] = [];
 
+  if (banner) {
+    rows.push(...buildBannerRows(banner, width));
+  }
+
   grouped.forEach((group, index) => {
-    if (index > 0) {
-      rows.push({ key: `gap:${group.key}`, text: "" });
+    if (rows.length > 0) {
+      rows.push({ key: `gap:${group.key}`, segments: [createSpan("")] });
     }
 
     if (group.type === "tool-group") {
       rows.push(...messageToRows(group.call, width, `${group.key}:call`));
       if (group.result) {
-        rows.push(...messageToRows(group.result, width, `${group.key}:result`));
+        rows.push(...messageToRows(group.result, width, `${group.key}:result`, {
+          collapseDetails: !isProcessing && !group.result.meta?.isError,
+        }));
       }
       return;
     }
 
-    rows.push(...messageToRows(group.message, width, group.key));
+    rows.push(...messageToRows(group.message, width, group.key, {
+      collapseDetails: group.message.role === "tool_result" && !isProcessing && !group.message.meta?.isError,
+    }));
+  });
+
+  return rows;
+}
+
+function buildBannerRows(
+  banner: NonNullable<TranscriptViewProps["banner"]>,
+  width: number,
+): TranscriptRow[] {
+  const sessionLabel = banner.sessionId ? `session ${banner.sessionId.slice(0, 8)}` : "new session";
+  const modelLine = banner.providerLabel ? `${banner.model} · ${banner.providerLabel}` : banner.model;
+  const metadataLine = `${modelLine} • ${sessionLabel}`;
+  const cwdLine = truncateMiddle(banner.cwd, Math.max(28, width - 4));
+  const rows: TranscriptRow[] = PEBBLE_ASCII_LOGO_LINES.map((line, index) => ({
+    key: `banner:logo:${index}`,
+    segments: [createSpan(line, { color: "green", bold: true })],
+  }));
+
+  rows.push({ key: "banner:gap:0", segments: [createSpan("")] });
+  rows.push({ key: "banner:meta", segments: [createSpan(metadataLine, { dimColor: true })] });
+  rows.push({ key: "banner:cwd", segments: [createSpan(cwdLine, { dimColor: true })] });
+  rows.push({ key: "banner:gap:1", segments: [createSpan("")] });
+  rows.push({
+    key: "banner:hint",
+    segments: [createSpan("Type a prompt to start · /help shows commands", { dimColor: true })],
   });
 
   return rows;
@@ -144,22 +237,31 @@ function groupMessages(messages: DisplayMessage[]): GroupedItem[] {
   return items;
 }
 
-function messageToRows(message: DisplayMessage, width: number, keyBase: string): TranscriptRow[] {
+function messageToRows(
+  message: DisplayMessage,
+  width: number,
+  keyBase: string,
+  options: { collapseDetails?: boolean } = {},
+): TranscriptRow[] {
   const meta = message.meta;
   const rows: TranscriptRow[] = [];
+  const collapseDetails = options.collapseDetails === true;
 
   switch (message.role) {
     case "user":
-      pushWrappedRows(rows, keyBase, "> ", "  ", message.content || "(empty)", width, { color: "white" });
+      pushWrappedRows(rows, keyBase, "> ", "  ", message.content || "(empty)", width, { color: "white" }, { markdown: true });
       return rows;
 
     case "assistant":
-      pushWrappedRows(rows, keyBase, "● ", "  ", message.content || "(empty)", width, { color: "white" });
+      pushWrappedRows(rows, keyBase, "● ", "  ", message.content || "(empty)", width, { color: "white" }, { markdown: true });
       return rows;
 
     case "streaming":
-      rows.push({ key: `${keyBase}:thinking`, text: "∴ Thinking…", color: "gray", dimColor: true });
-      pushWrappedRows(rows, `${keyBase}:body`, "  ", "  ", appendCursor(message.content), width, { color: "white" });
+      rows.push({
+        key: `${keyBase}:thinking`,
+        segments: [createSpan("∴ Thinking…", { color: "gray", dimColor: true, italic: true })],
+      });
+      pushWrappedRows(rows, `${keyBase}:body`, "  ", "  ", appendCursor(message.content), width, { color: "white" }, { markdown: true });
       return rows;
 
     case "command":
@@ -200,7 +302,7 @@ function messageToRows(message: DisplayMessage, width: number, keyBase: string):
         { color: isError ? "red" : "green" },
       );
 
-      if (meta?.toolOutput) {
+      if (!collapseDetails && meta?.toolOutput) {
         pushWrappedRows(
           rows,
           `${keyBase}:output`,
@@ -212,7 +314,7 @@ function messageToRows(message: DisplayMessage, width: number, keyBase: string):
         );
       }
 
-      if (meta?.summary && meta.summary !== meta.toolOutput) {
+      if (!collapseDetails && meta?.summary && meta.summary !== meta.toolOutput) {
         pushWrappedRows(rows, `${keyBase}:summary`, "  ", "  ", meta.summary, width, { color: "gray", dimColor: true });
       }
 
@@ -221,7 +323,7 @@ function messageToRows(message: DisplayMessage, width: number, keyBase: string):
       }
 
       const extraMeta = compactParts([meta?.toolCallId, meta?.requestedToolName, meta?.qualifiedToolName]);
-      if (extraMeta) {
+      if (!collapseDetails && extraMeta) {
         pushWrappedRows(rows, `${keyBase}:meta`, "  ", "  ", extraMeta, width, { color: "gray", dimColor: true });
       }
 
@@ -231,14 +333,12 @@ function messageToRows(message: DisplayMessage, width: number, keyBase: string):
     case "progress":
       rows.push({
         key: keyBase,
-        text: `↻ ${meta?.turnNumber != null ? `[turn ${meta.turnNumber}] ` : ""}${message.content}`,
-        color: "cyan",
-        dimColor: true,
+        segments: [createSpan(`↻ ${meta?.turnNumber != null ? `[turn ${meta.turnNumber}] ` : ""}${message.content}`, { color: "cyan", dimColor: true })],
       });
       return rows;
 
     case "error":
-      pushWrappedRows(rows, keyBase, "✗ ", "  ", message.content || "Error", width, { color: "red", bold: true });
+      pushWrappedRows(rows, keyBase, "✗ ", "  ", message.content || "Error", width, { color: "red", bold: true }, { markdown: true });
       return rows;
 
     default:
@@ -254,46 +354,252 @@ function pushWrappedRows(
   continuationPrefix: string,
   text: string,
   width: number,
-  style: Pick<TranscriptRow, "color" | "dimColor" | "bold">,
+  style: RowStyle,
+  options: { markdown?: boolean } = {},
 ): void {
   const prefixWidth = stringWidth(prefix);
   const continuationWidth = stringWidth(continuationPrefix);
   const firstLineWidth = Math.max(8, width - prefixWidth - 2);
   const nextLineWidth = Math.max(8, width - continuationWidth - 2);
-  const sourceLines = text.length === 0 ? [""] : text.split("\n");
+  const sourceLines = options.markdown ? renderMarkdownLines(text, style) : renderPlainLines(text, style);
 
   sourceLines.forEach((sourceLine, lineIndex) => {
-    const wrapped = wrapLine(sourceLine, lineIndex === 0 ? firstLineWidth : nextLineWidth);
+    const wrapped = wrapStyledLine(sourceLine.spans, lineIndex === 0 ? firstLineWidth : nextLineWidth);
     wrapped.forEach((segment, segmentIndex) => {
       const isFirstRenderedLine = lineIndex === 0 && segmentIndex === 0;
       rows.push({
         key: `${keyBase}:${lineIndex}:${segmentIndex}`,
-        text: `${isFirstRenderedLine ? prefix : continuationPrefix}${segment}`,
-        ...style,
+        segments: [createSpan(isFirstRenderedLine ? prefix : continuationPrefix, style), ...segment],
       });
     });
   });
 }
 
-function wrapLine(text: string, width: number): string[] {
-  if (text.length === 0) {
-    return [""];
-  }
+function renderPlainLines(text: string, style: RowStyle): StyledLine[] {
+  const sourceLines = text.length === 0 ? [""] : text.split("\n");
+  return sourceLines.map((line) => ({ spans: [createSpan(line, style)] }));
+}
 
-  const result: string[] = [];
-  let remaining = text;
+function renderMarkdownLines(text: string, style: RowStyle): StyledLine[] {
+  const sourceLines = text.length === 0 ? [""] : text.split("\n");
+  const rendered: StyledLine[] = [];
+  let inCodeBlock = false;
 
-  while (remaining.length > width) {
-    let breakIndex = remaining.lastIndexOf(" ", width);
-    if (breakIndex <= 0 || breakIndex < Math.floor(width * 0.5)) {
-      breakIndex = width;
+  for (const sourceLine of sourceLines) {
+    if (/^\s*```/.test(sourceLine)) {
+      inCodeBlock = !inCodeBlock;
+      continue;
     }
-    result.push(remaining.slice(0, breakIndex));
-    remaining = remaining.slice(breakIndex).trimStart();
+
+    if (inCodeBlock) {
+      rendered.push({ spans: [createSpan(sourceLine, { ...style, color: style.color ?? "cyan" })] });
+      continue;
+    }
+
+    const headingMatch = sourceLine.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      rendered.push({ spans: parseInlineMarkdown(headingMatch[2] ?? "", { ...style, bold: true }) });
+      continue;
+    }
+
+    const bulletMatch = sourceLine.match(/^(\s*)[-*+]\s+(.*)$/);
+    if (bulletMatch) {
+      rendered.push({
+        spans: [
+          createSpan(`${bulletMatch[1] ?? ""}• `, style),
+          ...parseInlineMarkdown(bulletMatch[2] ?? "", style),
+        ],
+      });
+      continue;
+    }
+
+    const orderedMatch = sourceLine.match(/^(\s*)(\d+)\.\s+(.*)$/);
+    if (orderedMatch) {
+      rendered.push({
+        spans: [
+          createSpan(`${orderedMatch[1] ?? ""}${orderedMatch[2] ?? "1"}. `, style),
+          ...parseInlineMarkdown(orderedMatch[3] ?? "", style),
+        ],
+      });
+      continue;
+    }
+
+    rendered.push({ spans: parseInlineMarkdown(sourceLine, style) });
   }
 
-  result.push(remaining);
-  return result;
+  return rendered.length > 0 ? rendered : [{ spans: [createSpan("", style)] }];
+}
+
+function parseInlineMarkdown(text: string, style: RowStyle): TranscriptSpan[] {
+  if (text.length === 0) {
+    return [createSpan("", style)];
+  }
+
+  const result: TranscriptSpan[] = [];
+  const pattern = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*\n]+\*|_[^_\n]+_)/g;
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    if (index > lastIndex) {
+      result.push(createSpan(text.slice(lastIndex, index), style));
+    }
+
+    const token = match[0] ?? "";
+    if (token.startsWith("**") || token.startsWith("__")) {
+      result.push(createSpan(token.slice(2, -2), { ...style, bold: true }));
+    } else if (token.startsWith("`")) {
+      result.push(createSpan(token.slice(1, -1), { ...style, color: style.color ?? "cyan", bold: true }));
+    } else {
+      result.push(createSpan(token.slice(1, -1), { ...style, italic: true }));
+    }
+    lastIndex = index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    result.push(createSpan(text.slice(lastIndex), style));
+  }
+
+  return result.length > 0 ? mergeAdjacentSpans(result) : [createSpan("", style)];
+}
+
+function wrapStyledLine(spans: TranscriptSpan[], width: number): TranscriptSpan[][] {
+  if (spans.length === 0 || spans.every((span) => span.text.length === 0)) {
+    return [[createSpan("")]];
+  }
+
+  const lines: TranscriptSpan[][] = [];
+  let currentLine: TranscriptSpan[] = [];
+  let currentWidth = 0;
+
+  const pushLine = () => {
+    lines.push(trimTrailingWhitespace(currentLine));
+    currentLine = [];
+    currentWidth = 0;
+  };
+
+  for (const span of spans) {
+    for (const token of tokenizeSpan(span)) {
+      if (token.text.length === 0) {
+        continue;
+      }
+
+      if (/^\s+$/.test(token.text)) {
+        if (currentWidth === 0) {
+          continue;
+        }
+
+        const tokenWidth = stringWidth(token.text);
+        if (currentWidth + tokenWidth > width) {
+          pushLine();
+          continue;
+        }
+
+        currentLine = appendSpan(currentLine, token);
+        currentWidth += tokenWidth;
+        continue;
+      }
+
+      let remaining = token.text;
+      while (remaining.length > 0) {
+        const tokenWidth = stringWidth(remaining);
+        const remainingWidth = width - currentWidth;
+
+        if (tokenWidth <= remainingWidth) {
+          currentLine = appendSpan(currentLine, createSpan(remaining, token));
+          currentWidth += tokenWidth;
+          remaining = "";
+          continue;
+        }
+
+        if (currentWidth > 0) {
+          pushLine();
+          continue;
+        }
+
+        const [head, tail] = splitTextByWidth(remaining, width);
+        currentLine = appendSpan(currentLine, createSpan(head, token));
+        currentWidth += stringWidth(head);
+        pushLine();
+        remaining = tail;
+      }
+    }
+  }
+
+  if (currentLine.length > 0 || lines.length === 0) {
+    pushLine();
+  }
+
+  return lines;
+}
+
+function tokenizeSpan(span: TranscriptSpan): TranscriptSpan[] {
+  const parts = span.text.match(/\s+|\S+/g) ?? [""];
+  return parts.map((part) => createSpan(part, span));
+}
+
+function splitTextByWidth(text: string, width: number): [string, string] {
+  const chars = [...text];
+  return [chars.slice(0, width).join(""), chars.slice(width).join("")];
+}
+
+function trimTrailingWhitespace(spans: TranscriptSpan[]): TranscriptSpan[] {
+  const trimmed = [...spans];
+
+  while (trimmed.length > 0) {
+    const last = trimmed[trimmed.length - 1];
+    if (!last) {
+      break;
+    }
+
+    const nextText = last.text.replace(/\s+$/u, "");
+    if (nextText.length === last.text.length) {
+      break;
+    }
+
+    if (nextText.length === 0) {
+      trimmed.pop();
+      continue;
+    }
+
+    trimmed[trimmed.length - 1] = createSpan(nextText, last);
+    break;
+  }
+
+  return trimmed.length > 0 ? mergeAdjacentSpans(trimmed) : [createSpan("")];
+}
+
+function appendSpan(spans: TranscriptSpan[], span: TranscriptSpan): TranscriptSpan[] {
+  if (span.text.length === 0) {
+    return spans;
+  }
+
+  const last = spans[spans.length - 1];
+  if (
+    last
+    && last.color === span.color
+    && last.dimColor === span.dimColor
+    && last.bold === span.bold
+    && last.italic === span.italic
+  ) {
+    return [...spans.slice(0, -1), createSpan(last.text + span.text, span)];
+  }
+
+  return [...spans, span];
+}
+
+function mergeAdjacentSpans(spans: TranscriptSpan[]): TranscriptSpan[] {
+  return spans.reduce<TranscriptSpan[]>((acc, span) => appendSpan(acc, span), []);
+}
+
+function createSpan(text: string, style: RowStyle = {}): TranscriptSpan {
+  return {
+    text,
+    color: style.color,
+    dimColor: style.dimColor,
+    bold: style.bold,
+    italic: style.italic,
+  };
 }
 
 function stringWidth(value: string): number {
