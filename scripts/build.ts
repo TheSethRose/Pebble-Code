@@ -256,7 +256,7 @@ async function verifyBundledCli(): Promise<void> {
 // ─── Feature manifest generation ─────────────────────────────────────────────
 
 async function generateFeatureManifest() {
-  const manifestPath = join(ROOT, "private/FEATURES_RECREATED.md");
+  const manifestPath = join(ROOT, "docs/FEATURES_RECREATED.md");
 
   // Import feature flags dynamically
   const { FEATURE_FLAGS } = await import("../src/build/featureFlags.js");
@@ -284,7 +284,7 @@ async function generateFeatureManifest() {
   }
 
   writeFileSync(manifestPath, md);
-  console.log("   Generated private/FEATURES_RECREATED.md");
+  console.log("   Generated docs/FEATURES_RECREATED.md");
 }
 
 // ─── Run ─────────────────────────────────────────────────────────────────────

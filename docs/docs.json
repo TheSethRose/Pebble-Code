@@ -1,0 +1,84 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Pebble Code",
+  "description": "Terminal-native AI coding agent with an interactive REPL, headless execution, resumable sessions, provider switching, and local extension loading.",
+  "theme": "mint",
+  "colors": {
+    "primary": "#3B82F6",
+    "light": "#60A5FA",
+    "dark": "#2563EB"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/TheSethRose/Pebble-Code",
+        "icon": "github"
+      }
+    ]
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Get started",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "index",
+              "start/getting-started",
+              "start/docs-directory",
+              "start/hubs"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Use Pebble",
+        "groups": [
+          {
+            "group": "CLI",
+            "pages": [
+              "cli/index",
+              "cli/headless",
+              "cli/slash-commands"
+            ]
+          },
+          {
+            "group": "SDK and runtime",
+            "pages": [
+              "sdk/index",
+              "concepts/sessions",
+              "concepts/trust-and-permissions"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Configure",
+        "groups": [
+          {
+            "group": "Configuration",
+            "pages": [
+              "concepts/configuration",
+              "providers/index",
+              "concepts/extensions"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Help",
+        "groups": [
+          {
+            "group": "Help",
+            "pages": [
+              "help/index",
+              "help/troubleshooting"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

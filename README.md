@@ -202,7 +202,7 @@ src/
   tools/        # Tool contracts, registries, and built-in implementations
   ui/           # Ink app state, settings, and terminal components
 tests/          # Subsystem-oriented tests (build, runtime, tools, UI, entrypoints)
-docs/           # Tracked architecture, codebase, and workflow documentation
+docs/           # Mintlify-ready product documentation
 scripts/        # Build and automation helpers
 ```
 
@@ -216,12 +216,13 @@ scripts/        # Build and automation helpers
 
 ## Documentation Suite
 
-Pebble now includes a tracked documentation-suite spine for the non-ignored codebase so the repo stays easier to navigate and maintain over time.
+Pebble now includes a Mintlify-oriented product docs suite under `docs/`.
 
-- [`docs/DOCS_DIRECTORY.md`](docs/DOCS_DIRECTORY.md) — curated starting points for the most-used docs
-- [`docs/DOCS_HUB.md`](docs/DOCS_HUB.md) — exhaustive map of the tracked docs suite
-- [`docs/DOCS_MAINTENANCE.md`](docs/DOCS_MAINTENANCE.md) — canonical ownership and update triggers for codebase documentation
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/CODEBASE_TREE.md`](docs/CODEBASE_TREE.md), and [`docs/BUILD_AND_TEST.md`](docs/BUILD_AND_TEST.md) — the main implementation and workflow references
+- [`docs/index.md`](docs/index.md) — product landing page
+- [`docs/start/getting-started.md`](docs/start/getting-started.md) — first-run setup path
+- [`docs/start/docs-directory.md`](docs/start/docs-directory.md) — curated docs entry points
+- [`docs/start/hubs.md`](docs/start/hubs.md) — full docs map
+- [`docs/docs.json`](docs/docs.json) — Mintlify navigation and site config
 
 ### Extensibility
 
