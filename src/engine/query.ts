@@ -6,6 +6,7 @@
  */
 
 import type { Provider } from "../providers/types.js";
+import type { SessionStore } from "../persistence/sessionStore.js";
 import type { Tool } from "../tools/Tool.js";
 import type { Message, StreamEvent } from "./types.js";
 import { QueryEngine } from "./QueryEngine.js";
@@ -21,6 +22,9 @@ export interface QueryOptions {
   onEvent?: (event: StreamEvent) => void;
   permissionManager?: PermissionManager;
   cwd?: string;
+  sessionStore?: SessionStore;
+  getSessionId?: () => string | null;
+  extensionDirs?: string[];
   resolveQuestion?: (request: AskUserQuestionRequest) => Promise<string>;
 }
 
@@ -40,6 +44,9 @@ export async function query(
     onEvent: options.onEvent,
     permissionManager: options.permissionManager,
     cwd: options.cwd,
+    sessionStore: options.sessionStore,
+    getSessionId: options.getSessionId,
+    extensionDirs: options.extensionDirs,
     resolveQuestion: options.resolveQuestion,
   });
 
@@ -62,6 +69,9 @@ export async function *streamQuery(
     onEvent: options.onEvent,
     permissionManager: options.permissionManager,
     cwd: options.cwd,
+    sessionStore: options.sessionStore,
+    getSessionId: options.getSessionId,
+    extensionDirs: options.extensionDirs,
     resolveQuestion: options.resolveQuestion,
   });
 

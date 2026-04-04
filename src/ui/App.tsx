@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { MouseProvider } from "@zenobius/ink-mouse";
 import { render, Box, Text, useStdout, useInput } from "ink";
 import { CommandRegistry } from "../commands/registry.js";
 import { registerBuiltinCommands } from "../commands/builtins.js";
@@ -11,10 +12,12 @@ import { resolveProviderConfig } from "../providers/config.js";
 import { createMvpTools } from "../tools/orchestration.js";
 import { PermissionManager } from "../runtime/permissionManager.js";
 import { getSettingsPath, loadSettingsForCwd } from "../runtime/config.js";
+import { getDefaultExtensionDirs } from "../extensions/loaders.js";
 import type { Message, StreamEvent } from "../engine/types.js";
 import {
   compactSessionIfNeeded,
   engineMessageToTranscriptMessage,
+  failPendingApprovalsForResume,
   transcriptToConversation,
   transcriptToDisplayMessages,
 } from "../persistence/runtimeSessions.js";
@@ -23,7 +26,8 @@ import type { AppState, DisplayMessage, PendingPermission, PermissionChoice } fr
 import { PromptInput } from "./components/PromptInput.js";
 import type { CommandSuggestion } from "./components/PromptInput.js";
 import { WelcomeHeader } from "./components/WelcomeHeader.js";
-import { TranscriptView } from "./components/TranscriptView.js";
+import { TranscriptView, getTranscriptLineCount } from "./components/TranscriptView.js";
+import { MouseScrollableRegion } from "./components/MouseScrollableRegion.js";
 import { SessionSidebar, deriveSessionTitle } from "./components/SessionSidebar.js";
 import type { SessionSummary } from "./components/SessionSidebar.js";
 import { KeybindingsPopup } from "./components/KeybindingsPopup.js";
@@ -134,7 +138,22 @@ export function App({ context }: { context: CommandContext }) {
   const sessionIdRef = React.useRef<string | null>(null);
   const hookSessionIdRef = React.useRef<string | null>(null);
   const ctrlCTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previousTranscriptLineCountRef = React.useRef(0);
   const sessionStore = context.sessionStore ?? null;
+  const extensionDirs = context.extensionDirs ?? getDefaultExtensionDirs(context.cwd);
+
+  const reconcilePendingApprovals = React.useCallback((sessionId: string) => {
+    if (!sessionStore || !context.permissionManager) {
+      return;
+    }
+
+    failPendingApprovalsForResume(
+      sessionStore,
+      context.permissionManager,
+      sessionId,
+      "Pending approval expired when the session was resumed.",
+    );
+  }, [context.permissionManager, sessionStore]);
 
   const applyStreamEvent = React.useCallback((event: StreamEvent) => {
     const data = event.data as Record<string, unknown> | undefined;
@@ -164,7 +183,13 @@ export function App({ context }: { context: CommandContext }) {
           {
             role: "tool",
             content: toolName,
-            meta: { toolName, toolArgs: toToolArgs(data.input) },
+            meta: {
+              toolName,
+              toolArgs: toToolArgs(data.input),
+              toolCallId: typeof data.toolCallId === "string" ? data.toolCallId : undefined,
+              qualifiedToolName: typeof data.qualifiedToolName === "string" ? data.qualifiedToolName : undefined,
+              requestedToolName: typeof data.requestedToolName === "string" ? data.requestedToolName : undefined,
+            },
           },
         ],
       }));
@@ -188,6 +213,10 @@ export function App({ context }: { context: CommandContext }) {
               toolOutput: typeof data.output === "string" ? data.output : undefined,
               isError,
               errorMessage: typeof data.error === "string" ? data.error : undefined,
+              toolCallId: typeof data.toolCallId === "string" ? data.toolCallId : undefined,
+              qualifiedToolName: typeof data.qualifiedToolName === "string" ? data.qualifiedToolName : undefined,
+              requestedToolName: typeof data.requestedToolName === "string" ? data.requestedToolName : undefined,
+              summary: typeof data.summary === "string" ? data.summary : undefined,
               durationMs: typeof data.durationMs === "number" ? data.durationMs : undefined,
               truncated: data.truncated === true,
             },
@@ -214,6 +243,8 @@ export function App({ context }: { context: CommandContext }) {
               toolOutput: `Tool execution denied: ${reason}`,
               isError: true,
               errorMessage: reason,
+              toolCallId: typeof data.toolCallId === "string" ? data.toolCallId : undefined,
+              summary: typeof data.approvalMessage === "string" ? data.approvalMessage : undefined,
             },
           },
         ],
@@ -321,16 +352,19 @@ export function App({ context }: { context: CommandContext }) {
       const transcript = sessionStore.loadTranscript(selectedId);
       if (!transcript) return;
 
-      sessionIdRef.current = transcript.id;
+      reconcilePendingApprovals(transcript.id);
+      const refreshedTranscript = sessionStore.loadTranscript(transcript.id) ?? transcript;
+
+      sessionIdRef.current = refreshedTranscript.id;
       setState((prev) => ({
         ...prev,
-        messages: transcriptToDisplayMessages(transcript) as DisplayMessage[],
-        activeSessionId: transcript.id,
+        messages: transcriptToDisplayMessages(refreshedTranscript) as DisplayMessage[],
+        activeSessionId: refreshedTranscript.id,
         error: null,
         statusText: "",
       }));
     },
-    [sessionStore, refreshSessions],
+    [reconcilePendingApprovals, sessionStore, refreshSessions],
   );
 
   const handleDeleteSession = React.useCallback(
@@ -445,11 +479,14 @@ export function App({ context }: { context: CommandContext }) {
       maxTurns: 50,
       permissionManager,
       cwd: context.cwd,
+      sessionStore: sessionStore ?? undefined,
+      getSessionId: () => sessionIdRef.current,
+      extensionDirs,
       resolvePermission,
       resolveQuestion,
       onEvent: applyStreamEvent,
     });
-  }, [applyStreamEvent, context.cwd, context.extensionTools, context.permissionManager, runtimeConfig.model, runtimeConfig.provider]);
+  }, [applyStreamEvent, context.cwd, context.extensionTools, context.permissionManager, extensionDirs, runtimeConfig.model, runtimeConfig.provider, sessionStore]);
 
   React.useEffect(() => {
     return () => {
@@ -474,11 +511,14 @@ export function App({ context }: { context: CommandContext }) {
     ) ?? sessionStore.loadTranscript(context.sessionId);
     if (!transcript) return;
 
-    sessionIdRef.current = transcript.id;
+    reconcilePendingApprovals(transcript.id);
+    const refreshedTranscript = sessionStore.loadTranscript(transcript.id) ?? transcript;
+
+    sessionIdRef.current = refreshedTranscript.id;
     setState((prev) => ({
       ...prev,
-      messages: transcriptToDisplayMessages(transcript) as DisplayMessage[],
-      activeSessionId: transcript.id,
+      messages: transcriptToDisplayMessages(refreshedTranscript) as DisplayMessage[],
+      activeSessionId: refreshedTranscript.id,
     }));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // run once on mount — intentionally not re-running on id change
@@ -621,6 +661,10 @@ export function App({ context }: { context: CommandContext }) {
         setTranscriptScrollOffset((prev) => Math.max(0, prev - scrollStep));
         return;
       }
+      if (key.end) {
+        setTranscriptScrollOffset(0);
+        return;
+      }
 
       if (key.ctrl && _input === "c") {
         if (inputValue.length > 0) {
@@ -713,11 +757,13 @@ export function App({ context }: { context: CommandContext }) {
             ? sessionStore.loadTranscript(sid)
             : sessionStore.getLatestSession();
           if (transcript) {
-            sessionIdRef.current = transcript.id;
+            reconcilePendingApprovals(transcript.id);
+            const refreshedTranscript = sessionStore.loadTranscript(transcript.id) ?? transcript;
+            sessionIdRef.current = refreshedTranscript.id;
             setState((prev) => ({
               ...prev,
-              messages: transcriptToDisplayMessages(transcript) as DisplayMessage[],
-              activeSessionId: transcript.id,
+              messages: transcriptToDisplayMessages(refreshedTranscript) as DisplayMessage[],
+              activeSessionId: refreshedTranscript.id,
             }));
           }
         }
@@ -916,7 +962,7 @@ export function App({ context }: { context: CommandContext }) {
     // state.messages intentionally omitted — we only need it for the fallback
     // non-persisted path. Including it would cause stale-closure issues.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [registry, context, runtimeConfig, sessionStore, refreshSessions, suggestions, suggestionIndex],
+    [registry, context, runtimeConfig, sessionStore, refreshSessions, suggestions, suggestionIndex, reconcilePendingApprovals],
   );
 
   const model = String(runtimeConfig.model ?? "default");
@@ -932,9 +978,42 @@ export function App({ context }: { context: CommandContext }) {
   // Outer Box padding: 2 rows
   const FIXED_UI_ROWS = 20;
   const transcriptRows = Math.max(4, rows - FIXED_UI_ROWS);
-  // Rough estimate: each grouped message item occupies ~3 terminal lines.
+  const sidebarWidth = 26;
+  const effectiveSidebarWidth = sidebarVisible ? sidebarWidth : 0;
+  const mainWidth = isFullscreen ? columns - effectiveSidebarWidth : undefined;
+  const transcriptWidth = Math.max(20, mainWidth ?? columns);
+  const transcriptLineCount = React.useMemo(
+    () => getTranscriptLineCount(state.messages, transcriptWidth),
+    [state.messages, transcriptWidth],
+  );
+
+  React.useEffect(() => {
+    const previousLineCount = previousTranscriptLineCountRef.current;
+    previousTranscriptLineCountRef.current = transcriptLineCount;
+
+    if (previousLineCount === 0) {
+      return;
+    }
+
+    const delta = transcriptLineCount - previousLineCount;
+    setTranscriptScrollOffset((current) => {
+      const maxOffset = Math.max(0, transcriptLineCount - 1);
+      if (delta > 0 && current > 0) {
+        return Math.min(maxOffset, current + delta);
+      }
+      return Math.min(current, maxOffset);
+    });
+  }, [transcriptLineCount]);
+
   const visibleMsgCount = Math.max(4, Math.floor(transcriptRows / 3));
-  const scrollStep = Math.max(3, Math.floor(visibleMsgCount / 3));
+  const scrollStep = Math.max(3, Math.floor(transcriptRows / 2));
+  const mouseScrollStep = 2;
+  const handleTranscriptWheelUp = React.useCallback(() => {
+    setTranscriptScrollOffset((prev) => prev + mouseScrollStep);
+  }, []);
+  const handleTranscriptWheelDown = React.useCallback(() => {
+    setTranscriptScrollOffset((prev) => Math.max(0, prev - mouseScrollStep));
+  }, []);
 
   // --- Modals rendered as full-screen replacements (Ink has no z-index) ---
   if (deleteConfirm) {
@@ -1019,11 +1098,7 @@ export function App({ context }: { context: CommandContext }) {
     );
   }
 
-  const sidebarWidth = 26;
-  const effectiveSidebarWidth = sidebarVisible ? sidebarWidth : 0;
-  const mainWidth = isFullscreen ? columns - effectiveSidebarWidth : undefined;
-
-  return (
+  const appBody = (
     <Box
       flexDirection="row"
       padding={1}
@@ -1051,13 +1126,28 @@ export function App({ context }: { context: CommandContext }) {
             </Box>
           )}
 
-          {state.messages.length > 0 && (
+          {state.messages.length > 0 && (isFullscreen ? (
+            <MouseScrollableRegion
+              onWheelUp={handleTranscriptWheelUp}
+              onWheelDown={handleTranscriptWheelDown}
+            >
+              <TranscriptView
+                messages={state.messages}
+                scrollOffset={transcriptScrollOffset}
+                maxMessages={visibleMsgCount}
+                maxRows={transcriptRows}
+                width={transcriptWidth}
+              />
+            </MouseScrollableRegion>
+          ) : (
             <TranscriptView
               messages={state.messages}
               scrollOffset={transcriptScrollOffset}
               maxMessages={visibleMsgCount}
+              maxRows={transcriptRows}
+              width={transcriptWidth}
             />
-          )}
+          ))}
 
           {state.pendingPermission && (
             <PermissionPrompt
@@ -1107,6 +1197,8 @@ export function App({ context }: { context: CommandContext }) {
       )}
     </Box>
   );
+
+  return isFullscreen ? <MouseProvider>{appBody}</MouseProvider> : appBody;
 }
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,14 @@ export interface DisplayMeta {
   isError?: boolean;
   /** Optional machine-friendly error message/details */
   errorMessage?: string;
+  /** Tool call id for correlating request/result */
+  toolCallId?: string;
+  /** Canonical qualified name when available */
+  qualifiedToolName?: string;
+  /** Provider-requested tool name when an alias resolved to a canonical tool */
+  requestedToolName?: string;
+  /** Optional structured summary from the tool */
+  summary?: string;
   /** Turn number within the engine loop */
   turnNumber?: number;
   /** Execution duration in milliseconds */

@@ -138,9 +138,21 @@ export function MessageItem({ message }: MessageItemProps) {
             <Text color={outputColor} dimColor={!isError}>{formatBodyPreview(output)}</Text>
           </Box>
         )}
+        {meta?.summary && meta.summary !== output && (
+          <Box paddingLeft={2}>
+            <Text dimColor>{meta.summary}</Text>
+          </Box>
+        )}
         {meta?.errorMessage && meta.errorMessage !== output && (
           <Box paddingLeft={2}>
             <Text color="red">{meta.errorMessage}</Text>
+          </Box>
+        )}
+        {(meta?.requestedToolName || meta?.qualifiedToolName || meta?.toolCallId) && (
+          <Box paddingLeft={2}>
+            <Text dimColor>
+              {[meta.toolCallId, meta.requestedToolName, meta.qualifiedToolName].filter(Boolean).join(" · ")}
+            </Text>
           </Box>
         )}
       </Box>
@@ -216,12 +228,23 @@ function ToolCallMessage({ toolName, meta }: { toolName: string; meta?: DisplayM
   const spinner = useSpinner(true);
   const argSummary = meta?.toolArgs ? compactArgs(meta.toolArgs) : "";
   return (
-    <Box marginBottom={1} paddingLeft={2}>
-      <Box minWidth={2}>
-        <Text color="yellow">{spinner || "⧈"}</Text>
+    <Box marginBottom={1} paddingLeft={2} flexDirection="column">
+      <Box>
+        <Box minWidth={2}>
+          <Text color="yellow">{spinner || "⧈"}</Text>
+        </Box>
+        <Text color="yellow" bold>{toolName}</Text>
+        {argSummary ? <Text dimColor> {argSummary}</Text> : null}
       </Box>
-      <Text color="yellow" bold>{toolName}</Text>
-      {argSummary ? <Text dimColor> {argSummary}</Text> : null}
+      {(meta?.requestedToolName || meta?.qualifiedToolName) && (
+        <Box paddingLeft={2}>
+          <Text dimColor>
+            {meta.requestedToolName && meta.requestedToolName !== toolName
+              ? `requested as ${meta.requestedToolName}`
+              : meta.qualifiedToolName}
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }

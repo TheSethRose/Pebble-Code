@@ -35,6 +35,8 @@ export interface PermissionContext {
   toolArgs: Record<string, unknown>;
   riskLevel: "low" | "medium" | "high" | "critical";
   reason?: string;
+  sessionId?: string | null;
+  toolCallId?: string;
 }
 
 /**
@@ -69,3 +71,18 @@ export const PermissionDecisionSchema = z.object({
 });
 
 export type PersistedPermission = z.infer<typeof PermissionDecisionSchema>;
+
+export const PendingApprovalSchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  toolCallId: z.string().optional(),
+  toolName: z.string(),
+  toolArgs: z.record(z.string(), z.unknown()),
+  approvalMessage: z.string(),
+  createdAt: z.string(),
+  status: z.enum(["pending", "resolved", "failed"]),
+  resolvedAt: z.string().optional(),
+  resolution: z.string().optional(),
+});
+
+export type PersistedPendingApproval = z.infer<typeof PendingApprovalSchema>;

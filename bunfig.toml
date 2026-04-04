@@ -1,0 +1,2 @@
+[test]
+pathIgnorePatterns = ["docs/context/**", "dist-debug/**"]

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
   PermissionContext,
@@ -6,6 +6,7 @@ import type {
   PermissionResult,
   PermissionMode,
   PersistedPermission,
+  PersistedPendingApproval,
 } from "./permissions";
 
 /**
@@ -13,17 +14,23 @@ import type {
  */
 export class PermissionManager {
   private mode: PermissionMode;
-  private sessionAllows: Map<string, boolean> = new Map();
-  private persistedDecisions: Map<string, PersistedPermission> = new Map();
-  private permissionsFile: string;
+  private readonly projectRoot: string;
+  private readonly sessionAllows: Map<string, boolean> = new Map();
+  private readonly persistedDecisions: Map<string, PersistedPermission> = new Map();
+  private readonly pendingApprovals: Map<string, PersistedPendingApproval> = new Map();
+  private readonly permissionsFile: string;
+  private readonly pendingApprovalsFile: string;
 
   constructor(options: {
     mode?: PermissionMode;
     projectRoot: string;
   }) {
     this.mode = options.mode ?? "always-ask";
+    this.projectRoot = options.projectRoot;
     this.permissionsFile = join(options.projectRoot, ".pebble-permissions.jsonl");
+    this.pendingApprovalsFile = join(options.projectRoot, ".pebble", "pending-approvals.json");
     this.loadPersistedDecisions();
+    this.loadPendingApprovals();
   }
 
   /**
@@ -85,7 +92,7 @@ export class PermissionManager {
         toolName,
         decision: decision === "allow-always" ? "allow-always" : "deny-always",
         createdAt: new Date().toISOString(),
-        projectRoot: process.cwd(),
+        projectRoot: this.projectRoot,
       };
       this.persistedDecisions.set(toolName, entry);
       appendFileSync(
@@ -124,6 +131,70 @@ export class PermissionManager {
     return Array.from(this.persistedDecisions.values());
   }
 
+  createPendingApproval(request: {
+    sessionId?: string | null;
+    toolCallId?: string;
+    toolName: string;
+    toolArgs: Record<string, unknown>;
+    approvalMessage: string;
+  }): PersistedPendingApproval | null {
+    if (!request.sessionId) {
+      return null;
+    }
+
+    const pending: PersistedPendingApproval = {
+      id: `approval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      sessionId: request.sessionId,
+      toolCallId: request.toolCallId,
+      toolName: request.toolName,
+      toolArgs: request.toolArgs,
+      approvalMessage: request.approvalMessage,
+      createdAt: new Date().toISOString(),
+      status: "pending",
+    };
+
+    this.pendingApprovals.set(pending.id, pending);
+    this.savePendingApprovals();
+    return pending;
+  }
+
+  resolvePendingApproval(id: string, resolution: PermissionDecision | string): PersistedPendingApproval | null {
+    const pending = this.pendingApprovals.get(id);
+    if (!pending) {
+      return null;
+    }
+
+    pending.status = "resolved";
+    pending.resolution = resolution;
+    pending.resolvedAt = new Date().toISOString();
+    this.savePendingApprovals();
+    return pending;
+  }
+
+  failPendingApprovalsForSession(sessionId: string, reason: string): PersistedPendingApproval[] {
+    const failed = Array.from(this.pendingApprovals.values())
+      .filter((pending) => pending.sessionId === sessionId && pending.status === "pending")
+      .map((pending) => {
+        pending.status = "failed";
+        pending.resolution = reason;
+        pending.resolvedAt = new Date().toISOString();
+        return { ...pending };
+      });
+
+    if (failed.length > 0) {
+      this.savePendingApprovals();
+    }
+
+    return failed;
+  }
+
+  getPendingApprovals(sessionId?: string): PersistedPendingApproval[] {
+    return Array.from(this.pendingApprovals.values())
+      .filter((pending) => pending.status === "pending")
+      .filter((pending) => !sessionId || pending.sessionId === sessionId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
   /**
    * Reset all persisted decisions.
    */
@@ -131,6 +202,11 @@ export class PermissionManager {
     this.persistedDecisions.clear();
     if (existsSync(this.permissionsFile)) {
       writeFileSync(this.permissionsFile, "", "utf-8");
+    }
+
+    this.pendingApprovals.clear();
+    if (existsSync(this.pendingApprovalsFile)) {
+      writeFileSync(this.pendingApprovalsFile, "[]", "utf-8");
     }
   }
 
@@ -152,5 +228,36 @@ export class PermissionManager {
     } catch {
       // ignore read errors
     }
+  }
+
+  private loadPendingApprovals(): void {
+    if (!existsSync(this.pendingApprovalsFile)) {
+      return;
+    }
+
+    try {
+      const raw = readFileSync(this.pendingApprovalsFile, "utf-8");
+      const parsed = JSON.parse(raw) as PersistedPendingApproval[];
+      for (const entry of parsed) {
+        if (entry && typeof entry.id === "string") {
+          this.pendingApprovals.set(entry.id, entry);
+        }
+      }
+    } catch {
+      // ignore read errors
+    }
+  }
+
+  private savePendingApprovals(): void {
+    const dir = join(this.projectRoot, ".pebble");
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+
+    writeFileSync(
+      this.pendingApprovalsFile,
+      JSON.stringify(Array.from(this.pendingApprovals.values()), null, 2),
+      "utf-8",
+    );
   }
 }

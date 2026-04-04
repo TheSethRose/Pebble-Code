@@ -3,30 +3,30 @@
  */
 
 import type { Tool } from "./Tool.js";
-import { BashTool } from "./BashTool/index.js";
-import { FileReadTool } from "./FileReadTool/index.js";
-import { FileEditTool } from "./FileEditTool/index.js";
-import { FileWriteTool } from "./FileWriteTool/index.js";
-import { ApplyPatchTool } from "./ApplyPatchTool/index.js";
-import { GlobTool } from "./GlobTool/index.js";
-import { GrepTool } from "./GrepTool/index.js";
-import { AskUserQuestionTool } from "./AskUserQuestionTool/index.js";
-import { TodoTool } from "./TodoTool/index.js";
+import { IntegrationTool } from "./IntegrationTool/index.js";
+import { MemoryTool } from "./MemoryTool/index.js";
+import { NotebookTool } from "./NotebookTool/index.js";
+import { OrchestrateTool } from "./OrchestrateTool/index.js";
+import { ShellTool } from "./ShellTool/index.js";
+import { UserInteractionTool } from "./UserInteractionTool/index.js";
+import { WebTool } from "./WebTool/index.js";
+import { WorkspaceEditTool } from "./WorkspaceEditTool/index.js";
+import { WorkspaceReadTool } from "./WorkspaceReadTool/index.js";
 
 /**
- * Create the default set of MVP tools.
+ * Create the default consolidated capability-tool surface.
  */
 export function createMvpTools(extensionTools: Tool[] = []): Tool[] {
   const builtInTools = [
-    new BashTool(),
-    new FileReadTool(),
-    new FileEditTool(),
-    new FileWriteTool(),
-    new ApplyPatchTool(),
-    new GlobTool(),
-    new GrepTool(),
-    new AskUserQuestionTool(),
-    new TodoTool(),
+    new WorkspaceReadTool(),
+    new WorkspaceEditTool(),
+    new ShellTool(),
+    new UserInteractionTool(),
+    new MemoryTool(),
+    new WebTool(),
+    new NotebookTool(),
+    new OrchestrateTool(),
+    new IntegrationTool(),
   ];
 
   const mergedTools = new Map<string, Tool>();

@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, expect, test } from "bun:test";
-import { TranscriptView } from "../src/ui/components/TranscriptView";
+import { TranscriptView, getTranscriptLineCount } from "../src/ui/components/TranscriptView";
 import { MessageItem } from "../src/ui/components/MessageItem";
 import { summariseArgs } from "../src/ui/components/PermissionPrompt";
 import type { DisplayMessage } from "../src/ui/types";
@@ -12,24 +12,40 @@ function createMessage(role: DisplayMessage["role"], content = "test", meta?: Di
 
 describe("TranscriptView", () => {
   test("does not render a separate inline processing status row", () => {
-    const element = TranscriptView({
-      messages: [createMessage("tool", "Bash")],
-    });
+    const element = TranscriptView({ messages: [createMessage("tool", "Bash", { toolName: "Bash" })] });
+    const flat = flattenText(element);
 
-    const children = React.Children.toArray(element.props.children);
-
-    expect(children).toHaveLength(1);
+    expect(flat).toContain("Bash");
+    expect(flat).not.toContain("Running:");
   });
 
   test("shows an overflow notice alongside the visible message window", () => {
     const messages = Array.from({ length: 25 }, (_, index) =>
-      createMessage(index % 2 === 0 ? "assistant" : "user", `message ${index + 1}`),
+      createMessage(index % 2 === 0 ? "assistant" : "user", `message ${String(index + 1).padStart(2, "0")}`),
     );
 
     const element = TranscriptView({ messages });
-    const children = React.Children.toArray(element.props.children);
+    const flat = flattenText(element);
 
-    expect(children).toHaveLength(21);
+    expect(flat).toContain("earlier history above");
+    expect(flat).toContain("message 25");
+    expect(flat).not.toContain("message 01");
+  });
+
+  test("trims older tall messages when maxRows is constrained", () => {
+    const messages = [
+      createMessage("assistant", Array.from({ length: 12 }, (_, index) => `tool ${index + 1}`).join("\n")),
+      createMessage("user", "show me the tree"),
+      createMessage("assistant", "Here is the tree"),
+    ];
+
+    const element = TranscriptView({ messages, maxRows: 6, width: 60 });
+    const flat = flattenText(element);
+
+    expect(flat).not.toContain("tool 1");
+    expect(flat).toContain("show me the tree");
+    expect(flat).toContain("Here is the tree");
+    expect(flat).toContain("earlier history above");
   });
 
   test("groups tool_call + tool_result into a single tool group", () => {
@@ -40,11 +56,7 @@ describe("TranscriptView", () => {
       createMessage("assistant", "Here are the files."),
     ];
 
-    const element = TranscriptView({ messages });
-    const children = React.Children.toArray(element.props.children);
-
-    // user + tool-group + assistant = 3 elements
-    expect(children).toHaveLength(3);
+    expect(getTranscriptLineCount(messages, 80)).toBe(6);
   });
 
   test("collapses consecutive progress messages to the latest one", () => {
@@ -56,10 +68,11 @@ describe("TranscriptView", () => {
     ];
 
     const element = TranscriptView({ messages });
-    const children = React.Children.toArray(element.props.children);
+    const flat = flattenText(element);
 
-    // collapsed progress + assistant = 2 elements
-    expect(children).toHaveLength(2);
+    expect(getTranscriptLineCount(messages, 80)).toBe(3);
+    expect(flat).toContain("Turn 3/50");
+    expect(flat).not.toContain("Turn 1/50");
   });
 });
 

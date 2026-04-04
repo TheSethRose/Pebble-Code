@@ -32,6 +32,8 @@ export interface CommandContext {
   extensionCommands?: Command[];
   /** Loaded extension tool implementations */
   extensionTools?: Tool[];
+  /** Extension directories considered during runtime loading */
+  extensionDirs?: string[];
   /** Active hook registry populated from extensions */
   hookRegistry?: HookRegistry;
 }

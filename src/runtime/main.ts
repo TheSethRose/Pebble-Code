@@ -12,7 +12,14 @@ import { buildRuntimeConfig } from "./config.js";
 import { PermissionManager } from "./permissionManager.js";
 import { createHookRegistry, type HookRegistry } from "./hooks.js";
 import { loadRepositoryInstructions, formatInstructions } from "./instructions.js";
-import { createProjectSessionStore, createOrResumeSession, compactSessionIfNeeded, transcriptToConversation, engineMessageToTranscriptMessage } from "../persistence/runtimeSessions.js";
+import {
+  createProjectSessionStore,
+  createOrResumeSession,
+  compactSessionIfNeeded,
+  transcriptToConversation,
+  engineMessageToTranscriptMessage,
+  failPendingApprovalsForResume,
+} from "../persistence/runtimeSessions.js";
 import { getSettingsPath } from "./config.js";
 import { resolveProviderConfig } from "../providers/config.js";
 import { getDefaultExtensionDirs, loadExtensions, reportExtensionStatus } from "../extensions/loaders.js";
@@ -83,6 +90,7 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
 
   // Phase 5: Initialize extensions
   const extensionResults = await loadExtensions(getDefaultExtensionDirs(cwd));
+  const extensionDirs = getDefaultExtensionDirs(cwd);
   reportExtensionStatus(extensionResults);
   const loadedExtensions = extensionResults
     .filter((result): result is typeof result & { extension: Extension } => result.loaded && Boolean(result.extension))
@@ -96,7 +104,7 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
 
   // Phase 6: Start the appropriate mode
   if (options.headless) {
-    return runHeadless(options, config, permissionManager, instructions, extensionCommandNames, extensionTools, hookRegistry);
+    return runHeadless(options, config, permissionManager, instructions, extensionCommandNames, extensionTools, hookRegistry, extensionDirs);
   }
 
   return runInteractive(
@@ -108,6 +116,7 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
     extensionCommandNames,
     extensionTools,
     hookRegistry,
+    extensionDirs,
   );
 }
 
@@ -119,6 +128,7 @@ async function runHeadless(
   extensionCommandNames: string[],
   extensionTools: Tool[],
   hookRegistry: HookRegistry,
+  extensionDirs: string[],
 ): Promise<number> {
   if (!options.prompt) {
     console.error("Error: headless mode requires --prompt");
@@ -148,6 +158,7 @@ async function runHeadless(
   const tools = createMvpTools(extensionTools);
   const sessionStore = createProjectSessionStore(config.cwd);
   const session = createOrResumeSession(sessionStore, options.resume);
+  failPendingApprovalsForResume(sessionStore, permissionManager, session.id);
 
   const systemPrompt = instructions || undefined;
   const emitSdkEvent = (
@@ -198,6 +209,9 @@ async function runHeadless(
         signal: options.signal,
         permissionManager,
         cwd: config.cwd,
+        sessionStore,
+        getSessionId: () => session.id,
+        extensionDirs,
         onEvent: (event: StreamEvent) => emitHeadlessStreamEvent(event, emitSdkEvent),
       },
     );
@@ -283,6 +297,7 @@ async function runInteractive(
   extensionCommandNames: string[],
   extensionTools: Tool[],
   hookRegistry: HookRegistry,
+  extensionDirs: string[],
 ): Promise<number> {
   const resolvedProvider = resolveProviderConfig(config.settings, {
     provider: options.provider,
@@ -319,6 +334,7 @@ async function runInteractive(
     extensionCommandNames,
     extensionCommands,
     extensionTools,
+    extensionDirs,
     hookRegistry,
   };
 

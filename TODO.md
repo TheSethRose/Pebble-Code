@@ -52,7 +52,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - Unit tests pass
 - Core `QueryEngine` multi-turn tool loop exists
 - Primary provider makes real OpenAI-compatible API calls
-- Core tools exist: Bash, FileRead, FileEdit, FileWrite, ApplyPatch, Glob, Grep, AskUserQuestion, Todo
+- Core tools now default to a consolidated capability surface: WorkspaceRead, WorkspaceEdit, Shell, UserInteraction, Memory, Web, Notebook, Orchestrate, and Integration, with compatibility aliases for legacy tool names
 - Trust/config/instruction loading exists
 - Permission manager exists and is partly wired into engine execution
 - Session store and compaction helpers exist
@@ -224,25 +224,25 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] AskUserQuestion provides a full user-response loop rather than just returning prompt data
 - [x] Todo state persists across sessions/process restarts
 - [x] Todo tool is backed by a file-backed store under `.pebble/` rather than process-global memory only
-- [ ] tool surface is consolidated around a small number of capability tools instead of proliferating one-off tools for every niche workflow
-- [ ] risky tools share a reusable approval request/result model instead of custom per-tool prompt wiring
-- [ ] pending tool approvals persist with session IDs so interrupted runs can resume or fail them deterministically
-- [ ] tool approval UX is surfaced properly in the interactive UI
+- [x] tool surface is consolidated around a small number of capability tools instead of proliferating one-off tools for every niche workflow
+- [x] risky tools share a reusable approval request/result model instead of custom per-tool prompt wiring
+- [x] pending tool approvals persist with session IDs so interrupted runs can resume or fail them deterministically
+- [x] tool approval UX is surfaced properly in the interactive UI
 - [x] FileWrite tool is implemented (file creation, distinct from FileEdit)
 - [x] ApplyPatch tool is implemented (unified diff patch application)
-- [ ] tool registry supports richer metadata (capability categories, aliases, qualified source names, model-specific definitions, and compatibility mappings from legacy/reference tool names)
-- [ ] tool execution emits richer structured metadata (tool call IDs, durations, success/failure, resumable task references, and prompt/debug summaries) for UI, tracing, and headless reporting
-- [ ] `WorkspaceRead` tool is implemented as the consolidated read/inspect surface for directory listing, file reading, glob/grep/project-structure queries, diagnostics/git/test/LSP inspection, image/content summarisation, and dynamic tool discovery
-- [ ] `WorkspaceEdit` tool is implemented as the consolidated local mutation surface for create-directory, create-file, edit/replace, apply-patch, config mutation, brief/snip extraction, and other deterministic workspace edits
-- [ ] `Shell` tool is implemented as the consolidated execution surface for Bash/PowerShell commands, REPL-style inline evaluation, and controlled wait/poll behaviors
-- [ ] `UserInteraction` tool is implemented as the consolidated ask/approve surface for clarifying questions, confirmation prompts, and reusable permission request/result flows
-- [ ] `Memory` tool is implemented as the consolidated persistence surface for memories, todos/todo-write, lightweight session state, and related file-backed agent notes
-- [ ] `Web` tool is implemented as the consolidated remote-content surface for web fetch, web search, external repo/doc retrieval, batched URLs, ranked snippets, and domain controls
-- [ ] `Notebook` tool is implemented as the consolidated notebook workflow surface (`CreateNewJupyterNotebook`, `NotebookSummary`, `RunNotebookCell`, `ReadCellOutput`, `EditNotebook`)
-- [ ] `Orchestrate` tool is implemented as the consolidated coordination surface for agent/subagent spawning, search/execution wrappers, cross-agent messaging, tasks, cron, teams, workflows, verification, plan/worktree transitions, and remote triggers
-- [ ] `Integration` tool is implemented as the consolidated external-system surface for MCP auth/resources/tools, skills, Tungsten/live-monitoring hooks, and other pluggable runtime integrations
-- [ ] compatibility aliases exist so legacy/reference concepts still work through the consolidated set (for example: `ListDirectory` → `WorkspaceRead`, `WebFetch`/`WebSearch` → `Web`, `Agent`/`SearchSubagent`/`ExecutionSubagent` → `Orchestrate`)
-- [ ] low-level concrete tool implementations are hidden behind capability tools unless a separate permission boundary or execution model truly requires user-visible separation
+- [x] tool registry supports richer metadata (capability categories, aliases, qualified source names, model-specific definitions, and compatibility mappings from legacy/reference tool names)
+- [x] tool execution emits richer structured metadata (tool call IDs, durations, success/failure, resumable task references, and prompt/debug summaries) for UI, tracing, and headless reporting
+- [x] `WorkspaceRead` tool is implemented as the consolidated read/inspect surface for directory listing, file reading, glob/grep/project-structure queries, diagnostics/git/test/LSP inspection, image/content summarisation, and dynamic tool discovery
+- [x] `WorkspaceEdit` tool is implemented as the consolidated local mutation surface for create-directory, create-file, edit/replace, apply-patch, config mutation, brief/snip extraction, and other deterministic workspace edits
+- [x] `Shell` tool is implemented as the consolidated execution surface for Bash/PowerShell commands, REPL-style inline evaluation, and controlled wait/poll behaviors
+- [x] `UserInteraction` tool is implemented as the consolidated ask/approve surface for clarifying questions, confirmation prompts, and reusable permission request/result flows
+- [x] `Memory` tool is implemented as the consolidated persistence surface for memories, todos/todo-write, lightweight session state, and related file-backed agent notes
+- [x] `Web` tool is implemented as the consolidated remote-content surface for web fetch, web search, external repo/doc retrieval, batched URLs, ranked snippets, and domain controls
+- [x] `Notebook` tool is implemented as the consolidated notebook workflow surface (`CreateNewJupyterNotebook`, `NotebookSummary`, `RunNotebookCell`, `ReadCellOutput`, `EditNotebook`)
+- [x] `Orchestrate` tool is implemented as the consolidated coordination surface for agent/subagent spawning, search/execution wrappers, cross-agent messaging, tasks, cron, teams, workflows, verification, plan/worktree transitions, and remote triggers
+- [x] `Integration` tool is implemented as the consolidated external-system surface for MCP auth/resources/tools, skills, Tungsten/live-monitoring hooks, and other pluggable runtime integrations
+- [x] compatibility aliases exist so legacy/reference concepts still work through the consolidated set (for example: `ListDirectory` → `WorkspaceRead`, `WebFetch`/`WebSearch` → `Web`, `Agent`/`SearchSubagent`/`ExecutionSubagent` → `Orchestrate`)
+- [x] low-level concrete tool implementations are hidden behind capability tools unless a separate permission boundary or execution model truly requires user-visible separation
 
 ## UI
 

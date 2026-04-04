@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { Message } from "../engine/types.js";
+import type { PermissionManager } from "../runtime/permissionManager.js";
 import { findProjectRoot } from "../runtime/trust.js";
 import { compactTranscript, estimateTokens } from "./compaction.js";
 import { SessionStore, type SessionTranscript, type TranscriptMessage } from "./sessionStore.js";
@@ -23,6 +24,42 @@ export function createOrResumeSession(
   }
 
   return store.getLatestSession() ?? store.createSession();
+}
+
+export function failPendingApprovalsForResume(
+  store: SessionStore,
+  permissionManager: PermissionManager,
+  sessionId: string,
+  reason = "Pending approval expired when the session was resumed.",
+): TranscriptMessage[] {
+  const failed = permissionManager.failPendingApprovalsForSession(sessionId, reason);
+  const appended: TranscriptMessage[] = [];
+
+  for (const pending of failed) {
+    const message: TranscriptMessage = {
+      role: "tool",
+      content: `Tool execution denied: ${reason}`,
+      timestamp: new Date().toISOString(),
+      metadata: {
+        success: false,
+        error: reason,
+        input: pending.toolArgs,
+        toolCallId: pending.toolCallId,
+        approvalMessage: pending.approvalMessage,
+        canonicalToolName: pending.toolName,
+      },
+      toolCall: {
+        name: pending.toolName,
+        args: pending.toolArgs,
+        result: `Tool execution denied: ${reason}`,
+      },
+    };
+
+    store.appendMessage(sessionId, message);
+    appended.push(message);
+  }
+
+  return appended;
 }
 
 export function compactSessionIfNeeded(
@@ -120,6 +157,10 @@ export function transcriptToDisplayMessages(transcript: SessionTranscript): Disp
         toolOutput: message.content,
         isError,
         errorMessage: typeof metadata?.error === "string" ? metadata.error : undefined,
+        toolCallId: typeof metadata?.toolCallId === "string" ? metadata.toolCallId : undefined,
+        qualifiedToolName: typeof metadata?.qualifiedToolName === "string" ? metadata.qualifiedToolName : undefined,
+        requestedToolName: typeof metadata?.requestedToolName === "string" ? metadata.requestedToolName : undefined,
+        summary: typeof metadata?.summary === "string" ? metadata.summary : undefined,
         durationMs: typeof metadata?.durationMs === "number" ? metadata.durationMs : undefined,
         truncated: metadata?.truncated === true,
       },

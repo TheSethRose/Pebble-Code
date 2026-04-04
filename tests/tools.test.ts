@@ -1,15 +1,28 @@
 import { describe, expect, test, afterEach } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Message } from "../src/engine/types";
 import { QueryEngine } from "../src/engine/QueryEngine";
 import type { Provider, ProviderCapabilities, ProviderOptions, ProviderResponse, StreamChunk } from "../src/providers/types";
+import { failPendingApprovalsForResume, createProjectSessionStore } from "../src/persistence/runtimeSessions";
 import { getTodoStorePath } from "../src/persistence/todoStore";
+import { PermissionManager } from "../src/runtime/permissionManager";
 import { ApplyPatchTool } from "../src/tools/ApplyPatchTool";
 import { AskUserQuestionTool } from "../src/tools/AskUserQuestionTool";
 import { FileWriteTool } from "../src/tools/FileWriteTool";
+import { IntegrationTool } from "../src/tools/IntegrationTool";
+import { MemoryTool } from "../src/tools/MemoryTool";
+import { NotebookTool } from "../src/tools/NotebookTool";
+import { createMvpTools } from "../src/tools/orchestration";
+import { OrchestrateTool } from "../src/tools/OrchestrateTool";
+import { ToolRegistry } from "../src/tools/registry";
+import { ShellTool } from "../src/tools/ShellTool";
 import { TodoTool } from "../src/tools/TodoTool";
+import { UserInteractionTool } from "../src/tools/UserInteractionTool";
+import { WebTool } from "../src/tools/WebTool";
+import { WorkspaceEditTool } from "../src/tools/WorkspaceEditTool";
+import { WorkspaceReadTool } from "../src/tools/WorkspaceReadTool";
 
 const tempDirs: string[] = [];
 
@@ -242,6 +255,239 @@ describe("AskUserQuestion interactive loop", () => {
     expect(result.messages.at(-1)).toMatchObject({
       role: "assistant",
       content: "Deploying to staging.",
+    });
+  });
+});
+
+describe("capability tool registry and alias resolution", () => {
+  test("createMvpTools exposes the consolidated capability surface", () => {
+    const tools = createMvpTools();
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "WorkspaceRead",
+      "WorkspaceEdit",
+      "Shell",
+      "UserInteraction",
+      "Memory",
+      "Web",
+      "Notebook",
+      "Orchestrate",
+      "Integration",
+    ]);
+  });
+
+  test("ToolRegistry resolves legacy aliases to canonical capability tools", () => {
+    const registry = new ToolRegistry();
+    registry.registerMany(createMvpTools());
+
+    expect(registry.get("FileRead")?.name).toBe("WorkspaceRead");
+    expect(registry.get("ApplyPatch")?.name).toBe("WorkspaceEdit");
+    expect(registry.get("AskUserQuestion")?.name).toBe("UserInteraction");
+    expect(registry.get("WebFetch")?.name).toBe("Web");
+    expect(registry.get("ExecutionSubagent")?.name).toBe("Orchestrate");
+  });
+
+  test("QueryEngine can satisfy a legacy FileRead tool call through WorkspaceRead", async () => {
+    const projectDir = createTempProject("pebble-tools-workspace-read-");
+    writeFileSync(join(projectDir, "notes.txt"), "hello from alias\n", "utf-8");
+
+    const provider = new ScriptedProvider((messages, callNumber) => {
+      if (callNumber === 1) {
+        return {
+          text: "Reading the file.",
+          toolCalls: [{ id: "alias-read", name: "FileRead", input: { action: "read_file", file_path: "notes.txt" } }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 3, outputTokens: 3 },
+        };
+      }
+
+      expect(messages.at(-1)).toMatchObject({
+        role: "tool",
+        toolName: "WorkspaceRead",
+        content: "hello from alias\n",
+      });
+
+      return {
+        text: "Done reading.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 3, outputTokens: 2 },
+      };
+    });
+
+    const engine = new QueryEngine({
+      provider,
+      tools: [new WorkspaceReadTool()],
+      cwd: projectDir,
+    });
+
+    const result = await engine.process([{ role: "user", content: "read notes.txt" }]);
+    expect(result.success).toBe(true);
+    expect(result.messages.at(-2)).toMatchObject({
+      role: "tool",
+      toolName: "WorkspaceRead",
+      metadata: {
+        requestedToolName: "FileRead",
+      },
+    });
+  });
+});
+
+describe("capability tool implementations", () => {
+  test("MemoryTool can manage session memory and notes", async () => {
+    const projectDir = createTempProject("pebble-tools-memory-");
+    const sessionStore = createProjectSessionStore(projectDir);
+    const session = sessionStore.createSession("memory-session");
+    sessionStore.appendMessage(session.id, {
+      role: "user",
+      content: "Remember this context",
+      timestamp: new Date().toISOString(),
+    });
+
+    const tool = new MemoryTool();
+    const memoryResult = await tool.execute(
+      { action: "session_memory_show", refresh: true },
+      {
+        cwd: projectDir,
+        permissionMode: "always-ask",
+        runtime: { sessionId: session.id, sessionStore },
+      },
+    );
+    expect(memoryResult.success).toBe(true);
+    expect(memoryResult.output).toContain("Session memory: memory-session");
+
+    const noteResult = await tool.execute(
+      { action: "note_add", title: "Decision", content: "Use capability tools." },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+    expect(noteResult.success).toBe(true);
+
+    const listNotes = await tool.execute(
+      { action: "note_list" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+    expect(listNotes.output).toContain("Use capability tools.");
+  });
+
+  test("NotebookTool can create, edit, run, and read a notebook cell", async () => {
+    const projectDir = createTempProject("pebble-tools-notebook-");
+    const tool = new NotebookTool();
+
+    const createResult = await tool.execute(
+      { action: "create_notebook", file_path: "demo.ipynb", language: "javascript" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+    expect(createResult.success).toBe(true);
+
+    const editResult = await tool.execute(
+      {
+        action: "edit_cell",
+        file_path: "demo.ipynb",
+        edit_mode: "insert",
+        index: 0,
+        cell_type: "code",
+        source: 'console.log("hello notebook")\n',
+      },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+    expect(editResult.success).toBe(true);
+
+    const runResult = await tool.execute(
+      { action: "run_cell", file_path: "demo.ipynb", index: 0, language: "javascript" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+    expect(runResult.success).toBe(true);
+    expect(runResult.output).toContain("hello notebook");
+
+    const readOutput = await tool.execute(
+      { action: "read_output", file_path: "demo.ipynb", index: 0 },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+    expect(readOutput.output).toContain("hello notebook");
+  });
+
+  test("WebTool can fetch a data URL without network dependency", async () => {
+    const tool = new WebTool();
+    const result = await tool.execute(
+      { action: "fetch_url", url: "data:text/plain,Hello%20Pebble" },
+      { cwd: process.cwd(), permissionMode: "always-ask" },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Hello Pebble");
+  });
+
+  test("ShellTool can execute synchronous commands", async () => {
+    const projectDir = createTempProject("pebble-tools-shell-");
+    const tool = new ShellTool();
+    const result = await tool.execute(
+      { action: "exec", command: "printf 'hello shell'" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("hello shell");
+  });
+
+  test("IntegrationTool can discover local skills", async () => {
+    const projectDir = createTempProject("pebble-tools-integration-");
+    const skillDir = join(projectDir, "skills", "demo-skill");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "# Demo skill\n", "utf-8");
+
+    const tool = new IntegrationTool();
+    const result = await tool.execute(
+      { action: "list_skills", path: projectDir },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("SKILL.md");
+  });
+
+  test("OrchestrateTool can load planning file status", async () => {
+    const projectDir = createTempProject("pebble-tools-orchestrate-");
+    writeFileSync(join(projectDir, "task_plan.md"), "- [x] done\n", "utf-8");
+    writeFileSync(join(projectDir, "findings.md"), "finding\n", "utf-8");
+    writeFileSync(join(projectDir, "progress.md"), "progress\n", "utf-8");
+
+    const tool = new OrchestrateTool();
+    const result = await tool.execute(
+      { action: "plan_status" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("task_plan.md");
+    expect(result.output).toContain("- [x] done");
+  });
+});
+
+describe("persisted approvals", () => {
+  test("pending approvals are failed and appended to the transcript on resume", () => {
+    const projectDir = createTempProject("pebble-tools-approvals-");
+    const permissionManager = new PermissionManager({
+      mode: "always-ask",
+      projectRoot: projectDir,
+    });
+    const sessionStore = createProjectSessionStore(projectDir);
+    const session = sessionStore.createSession("approval-session");
+
+    permissionManager.createPendingApproval({
+      sessionId: session.id,
+      toolCallId: "call-1",
+      toolName: "WorkspaceEdit",
+      toolArgs: { file_path: "package.json" },
+      approvalMessage: "Allow editing package.json?",
+    });
+
+    const failed = failPendingApprovalsForResume(sessionStore, permissionManager, session.id);
+    expect(failed).toHaveLength(1);
+    expect(sessionStore.loadTranscript(session.id)?.messages.at(-1)).toMatchObject({
+      role: "tool",
+      content: "Tool execution denied: Pending approval expired when the session was resumed.",
+      toolCall: {
+        name: "WorkspaceEdit",
+      },
     });
   });
 });

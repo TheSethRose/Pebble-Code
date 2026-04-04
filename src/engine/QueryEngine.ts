@@ -5,10 +5,11 @@
  * streaming responses, and bounded recursion.
  */
 
-import type { Provider, StreamChunk, ProviderResponse, ProviderToolDefinition } from "../providers/types.js";
-import type { Tool } from "../tools/Tool.js";
+import type { Provider, StreamChunk, ProviderResponse } from "../providers/types.js";
+import type { SessionStore } from "../persistence/sessionStore.js";
+import { ToolRegistry } from "../tools/registry.js";
+import type { Tool, ToolApprovalRequest, ToolContext } from "../tools/Tool.js";
 import type { Message, StreamEvent, EngineState } from "./types.js";
-import { createResultEnvelope } from "./results.js";
 import { emitStreamEvent } from "./transitions.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import type { PermissionManager } from "../runtime/permissionManager.js";
@@ -48,6 +49,12 @@ export interface QueryEngineOptions {
   permissionManager?: PermissionManager;
   /** Working directory for tool execution */
   cwd?: string;
+  /** Session persistence surface for resumable approvals / memory tools */
+  sessionStore?: SessionStore;
+  /** Session id getter because interactive sessions are created lazily */
+  getSessionId?: () => string | null;
+  /** Optional extension directories for integration tooling */
+  extensionDirs?: string[];
   /**
    * Async callback invoked when a tool requires user approval and the
    * PermissionManager returns "ask". The UI should present a dialog and
@@ -82,11 +89,18 @@ export class QueryEngine {
     onToolExecute?: (toolName: string, input: unknown) => void;
     permissionManager?: import("../runtime/permissionManager.js").PermissionManager;
     cwd?: string;
+    sessionStore?: SessionStore;
+    getSessionId?: () => string | null;
+    extensionDirs?: string[];
     resolvePermission?: (request: PermissionRequest) => Promise<PermissionDecision>;
     resolveQuestion?: (request: AskUserQuestionRequest) => Promise<string>;
   };
+  private readonly toolRegistry: ToolRegistry;
 
   constructor(options: QueryEngineOptions) {
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.registerMany(options.tools);
+
     this.options = {
       maxTurns: options.maxTurns ?? 50,
       provider: options.provider,
@@ -97,9 +111,13 @@ export class QueryEngine {
       onToolExecute: options.onToolExecute,
       permissionManager: options.permissionManager,
       cwd: options.cwd,
+      sessionStore: options.sessionStore,
+      getSessionId: options.getSessionId,
+      extensionDirs: options.extensionDirs,
       resolvePermission: options.resolvePermission,
       resolveQuestion: options.resolveQuestion,
     };
+    this.toolRegistry = toolRegistry;
   }
 
   /**
@@ -129,11 +147,7 @@ export class QueryEngine {
       this.emit("progress", { turn: turnCount, maxTurns: this.options.maxTurns });
 
       // Build tool definitions for the provider
-      const toolDefs = this.options.tools.map((t) => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: t.inputSchema ? this.zodSchemaToJsonSchema(t.inputSchema) : {},
-      }));
+      const toolDefs = this.getProviderToolDefinitions();
 
       // Get completion from provider
       let response: ProviderResponse;
@@ -184,7 +198,8 @@ export class QueryEngine {
         // Execute each tool call
         for (const toolCall of response.toolCalls) {
           const toolInput = this.normalizeToolInput(toolCall.input);
-          const tool = this.options.tools.find((t) => t.name === toolCall.name);
+          const registration = this.toolRegistry.getRegistration(toolCall.name);
+          const tool = registration?.tool;
 
           if (!tool) {
             // Unknown tool — report error to model
@@ -200,27 +215,43 @@ export class QueryEngine {
           }
 
           // Check approval via PermissionManager
-          const needsApproval = tool.requiresApproval?.(toolInput) ?? false;
-          if (needsApproval && this.options.permissionManager) {
-            let permissionResult = await this.options.permissionManager.checkPermission({
-              toolName: toolCall.name,
-              toolArgs: this.toToolArgs(toolInput),
-              riskLevel: "high",
-            });
+          const toolContext = this.createToolContext();
+          const approvalRequest = this.getApprovalRequest(tool, registration.canonicalName, toolInput, toolContext);
+          const needsApproval = Boolean(approvalRequest);
+            if (approvalRequest && this.options.permissionManager) {
+              let permissionResult = await this.options.permissionManager.checkPermission({
+                toolName: registration.canonicalName,
+                toolArgs: approvalRequest.toolArgs,
+                riskLevel: approvalRequest.riskLevel ?? "high",
+                reason: approvalRequest.reason,
+                sessionId: this.options.getSessionId?.() ?? null,
+                toolCallId: toolCall.id,
+              });
 
             // If the manager says "ask", delegate to the interactive resolver
             if (permissionResult.decision === "ask") {
+              const pendingApproval = this.options.permissionManager.createPendingApproval({
+                sessionId: this.options.getSessionId?.() ?? null,
+                toolCallId: toolCall.id,
+                toolName: registration.canonicalName,
+                toolArgs: approvalRequest.toolArgs,
+                approvalMessage: approvalRequest.approvalMessage,
+              });
+
               if (this.options.resolvePermission) {
-                const approvalMsg =
-                  tool.getApprovalMessage?.(toolInput) ??
-                  `Allow ${toolCall.name}?`;
                 const userDecision = await this.options.resolvePermission({
-                  toolName: toolCall.name,
-                  toolArgs: this.toToolArgs(toolInput),
-                  approvalMessage: approvalMsg,
+                  toolName: registration.canonicalName,
+                  toolArgs: approvalRequest.toolArgs,
+                  approvalMessage: approvalRequest.approvalMessage,
                 });
+                if (pendingApproval) {
+                  this.options.permissionManager.resolvePendingApproval(pendingApproval.id, userDecision);
+                }
                 permissionResult = { decision: userDecision, reason: "User decision" };
               } else {
+                if (pendingApproval) {
+                  this.options.permissionManager.resolvePendingApproval(pendingApproval.id, "deny");
+                }
                 // No interactive resolver — deny by default
                 permissionResult = { decision: "deny", reason: "No interactive approval available" };
               }
@@ -228,19 +259,25 @@ export class QueryEngine {
 
             if (permissionResult.decision === "deny") {
               this.emit("permission_denied", {
-                tool: toolCall.name,
+                tool: registration.canonicalName,
                 input: toolInput,
                 reason: permissionResult.reason,
+                approvalMessage: approvalRequest.approvalMessage,
               });
               conversation.push({
                 role: "tool",
                 content: `Tool execution denied: ${permissionResult.reason ?? "Permission denied"}`,
                 toolCallId: toolCall.id,
-                toolName: toolCall.name,
+                toolName: registration.canonicalName,
                 metadata: {
                   success: false,
                   input: toolInput,
                   error: permissionResult.reason ?? "Permission denied",
+                  toolCallId: toolCall.id,
+                  canonicalToolName: registration.canonicalName,
+                  qualifiedToolName: registration.qualifiedName,
+                  requestedToolName: toolCall.name,
+                  approvalMessage: approvalRequest.approvalMessage,
                 },
               });
               continue;
@@ -248,14 +285,14 @@ export class QueryEngine {
 
             // Record the decision
             this.options.permissionManager.recordDecision(
-              toolCall.name,
+              registration.canonicalName,
               permissionResult.decision,
               permissionResult.persisted ?? false,
             );
           } else if (needsApproval) {
             // No permission manager — deny by default
             this.emit("permission_denied", {
-              tool: toolCall.name,
+              tool: registration.canonicalName,
               input: toolInput,
               reason: "No permission manager configured",
             });
@@ -263,35 +300,40 @@ export class QueryEngine {
               role: "tool",
               content: "Tool execution denied (no permission manager configured)",
               toolCallId: toolCall.id,
-              toolName: toolCall.name,
+              toolName: registration.canonicalName,
               metadata: {
                 success: false,
                 input: toolInput,
                 error: "No permission manager configured",
+                toolCallId: toolCall.id,
+                canonicalToolName: registration.canonicalName,
+                qualifiedToolName: registration.qualifiedName,
+                requestedToolName: toolCall.name,
               },
             });
             continue;
           }
 
           // Execute the tool
-          this.options.onToolExecute?.(tool.name, toolInput);
-          this.emit("tool_call", { tool: toolCall.name, input: toolInput });
+          this.options.onToolExecute?.(registration.canonicalName, toolInput);
+          this.emit("tool_call", {
+            tool: registration.canonicalName,
+            requestedToolName: toolCall.name,
+            qualifiedToolName: registration.qualifiedName,
+            category: registration.category,
+            input: toolInput,
+            toolCallId: toolCall.id,
+          });
 
           try {
             const startedAt = Date.now();
-            const result = await tool.execute(toolInput, {
-              cwd: this.options.cwd ?? process.cwd(),
-              signal: this.options.signal,
-              permissionMode: this.options.permissionManager?.getMode() ?? "always-ask",
-            });
+            const result = await tool.execute(toolInput, toolContext);
 
             const durationMs = Date.now() - startedAt;
             const outputBase = result.success ? result.output : (result.error ?? result.output);
             const output = result.truncated ? `${outputBase}\n[Output truncated]` : outputBase;
 
-            const askUserRequest = tool.name === "AskUserQuestion"
-              ? this.extractAskUserQuestionRequest(result.data, toolInput)
-              : null;
+            const askUserRequest = this.extractAskUserQuestionRequest(result.data, toolInput);
 
             if (askUserRequest && this.options.resolveQuestion) {
               const answer = await this.options.resolveQuestion(askUserRequest);
@@ -299,7 +341,7 @@ export class QueryEngine {
                 role: "tool",
                 content: answer,
                 toolCallId: toolCall.id,
-                toolName: toolCall.name,
+                toolName: registration.canonicalName,
                 metadata: {
                   success: true,
                   durationMs,
@@ -308,15 +350,20 @@ export class QueryEngine {
                   answer,
                   options: askUserRequest.options,
                   allowFreeform: askUserRequest.allowFreeform,
+                  toolCallId: toolCall.id,
+                  canonicalToolName: registration.canonicalName,
+                  qualifiedToolName: registration.qualifiedName,
+                  requestedToolName: toolCall.name,
                 },
               });
 
               this.emit("tool_result", {
-                tool: toolCall.name,
+                tool: registration.canonicalName,
                 success: true,
                 input: toolInput,
                 answer,
                 question: askUserRequest.question,
+                toolCallId: toolCall.id,
               });
               continue;
             }
@@ -325,24 +372,36 @@ export class QueryEngine {
               role: "tool",
               content: output,
               toolCallId: toolCall.id,
-              toolName: toolCall.name,
+              toolName: registration.canonicalName,
               metadata: {
                 success: result.success,
                 durationMs,
                 input: toolInput,
                 truncated: result.truncated ?? false,
+                summary: result.summary,
+                debug: result.debug,
+                toolCallId: toolCall.id,
+                canonicalToolName: registration.canonicalName,
+                qualifiedToolName: registration.qualifiedName,
+                requestedToolName: toolCall.name,
+                category: registration.category,
                 ...(result.error ? { error: result.error } : {}),
                 ...(result.data !== undefined ? { data: result.data } : {}),
               },
             });
 
             this.emit("tool_result", {
-              tool: toolCall.name,
+              tool: registration.canonicalName,
               success: result.success,
               input: toolInput,
               output,
               durationMs,
               truncated: result.truncated ?? false,
+              summary: result.summary,
+              toolCallId: toolCall.id,
+              qualifiedToolName: registration.qualifiedName,
+              requestedToolName: toolCall.name,
+              category: registration.category,
               ...(result.error ? { error: result.error } : {}),
               ...(result.data !== undefined ? { data: result.data } : {}),
             });
@@ -352,19 +411,26 @@ export class QueryEngine {
               role: "tool",
               content: `Tool execution error: ${message}`,
               toolCallId: toolCall.id,
-              toolName: toolCall.name,
+              toolName: registration.canonicalName,
               metadata: {
                 success: false,
                 input: toolInput,
                 error: message,
+                toolCallId: toolCall.id,
+                canonicalToolName: registration.canonicalName,
+                qualifiedToolName: registration.qualifiedName,
+                requestedToolName: toolCall.name,
               },
             });
             this.emit("tool_result", {
-              tool: toolCall.name,
+              tool: registration.canonicalName,
               success: false,
               input: toolInput,
               output: `Tool execution error: ${message}`,
               error: message,
+              toolCallId: toolCall.id,
+              qualifiedToolName: registration.qualifiedName,
+              requestedToolName: toolCall.name,
             });
           }
         }
@@ -431,11 +497,7 @@ export class QueryEngine {
       turnCount++;
       yield emitStreamEvent("progress", { turn: turnCount });
 
-      const toolDefs = this.options.tools.map((t) => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: t.inputSchema ? this.zodSchemaToJsonSchema(t.inputSchema) : {},
-      }));
+      const toolDefs = this.getProviderToolDefinitions();
 
       let fullText = "";
       const toolCalls: { id: string; name: string; input: string }[] = [];
@@ -517,7 +579,8 @@ export class QueryEngine {
       // Execute tool calls if any
       if (toolCalls.length > 0) {
         for (const tc of toolCalls) {
-          const tool = this.options.tools.find((t) => t.name === tc.name);
+          const registration = this.toolRegistry.getRegistration(tc.name);
+          const tool = registration?.tool;
           if (!tool) {
             yield emitStreamEvent("error", { tool: tc.name, message: `Unknown tool: ${tc.name}` });
             conversation.push({
@@ -530,58 +593,81 @@ export class QueryEngine {
           }
 
           const input = this.normalizeToolInput(tc.input);
+          const toolContext = this.createToolContext();
 
           // Check approval via PermissionManager
-          const needsApproval = tool.requiresApproval?.(input) ?? false;
-          if (needsApproval && this.options.permissionManager) {
+          const approvalRequest = this.getApprovalRequest(tool, registration.canonicalName, input, toolContext);
+          if (approvalRequest && this.options.permissionManager) {
             let permissionResult = await this.options.permissionManager.checkPermission({
-              toolName: tc.name,
-              toolArgs: this.toToolArgs(input),
-              riskLevel: "high",
+              toolName: registration.canonicalName,
+              toolArgs: approvalRequest.toolArgs,
+              riskLevel: approvalRequest.riskLevel ?? "high",
+              reason: approvalRequest.reason,
+              sessionId: this.options.getSessionId?.() ?? null,
+              toolCallId: tc.id,
             });
 
             if (permissionResult.decision === "ask") {
+              const pendingApproval = this.options.permissionManager.createPendingApproval({
+                sessionId: this.options.getSessionId?.() ?? null,
+                toolCallId: tc.id,
+                toolName: registration.canonicalName,
+                toolArgs: approvalRequest.toolArgs,
+                approvalMessage: approvalRequest.approvalMessage,
+              });
+
               if (this.options.resolvePermission) {
-                const approvalMsg = tool.getApprovalMessage?.(input) ?? `Allow ${tc.name}?`;
                 const userDecision = await this.options.resolvePermission({
-                  toolName: tc.name,
-                  toolArgs: this.toToolArgs(input),
-                  approvalMessage: approvalMsg,
+                  toolName: registration.canonicalName,
+                  toolArgs: approvalRequest.toolArgs,
+                  approvalMessage: approvalRequest.approvalMessage,
                 });
+                if (pendingApproval) {
+                  this.options.permissionManager.resolvePendingApproval(pendingApproval.id, userDecision);
+                }
                 permissionResult = { decision: userDecision, reason: "User decision" };
               } else {
+                if (pendingApproval) {
+                  this.options.permissionManager.resolvePendingApproval(pendingApproval.id, "deny");
+                }
                 permissionResult = { decision: "deny", reason: "No interactive approval available" };
               }
             }
 
             if (permissionResult.decision === "deny") {
               yield emitStreamEvent("permission_denied", {
-                tool: tc.name,
+                tool: registration.canonicalName,
                 input,
                 reason: permissionResult.reason,
+                approvalMessage: approvalRequest.approvalMessage,
               });
               conversation.push({
                 role: "tool",
                 content: `Tool execution denied: ${permissionResult.reason ?? "Permission denied"}`,
                 toolCallId: tc.id,
-                toolName: tc.name,
+                toolName: registration.canonicalName,
                 metadata: {
                   success: false,
                   input,
                   error: permissionResult.reason ?? "Permission denied",
+                  toolCallId: tc.id,
+                  canonicalToolName: registration.canonicalName,
+                  qualifiedToolName: registration.qualifiedName,
+                  requestedToolName: tc.name,
+                  approvalMessage: approvalRequest.approvalMessage,
                 },
               });
               continue;
             }
 
             this.options.permissionManager.recordDecision(
-              tc.name,
+              registration.canonicalName,
               permissionResult.decision,
               permissionResult.persisted ?? false,
             );
-          } else if (needsApproval) {
+          } else if (approvalRequest) {
             yield emitStreamEvent("permission_denied", {
-              tool: tc.name,
+              tool: registration.canonicalName,
               input,
               reason: "No permission manager configured",
             });
@@ -589,11 +675,15 @@ export class QueryEngine {
               role: "tool",
               content: "Tool execution denied (no permission manager configured)",
               toolCallId: tc.id,
-              toolName: tc.name,
+              toolName: registration.canonicalName,
               metadata: {
                 success: false,
                 input,
                 error: "No permission manager configured",
+                toolCallId: tc.id,
+                canonicalToolName: registration.canonicalName,
+                qualifiedToolName: registration.qualifiedName,
+                requestedToolName: tc.name,
               },
             });
             continue;
@@ -601,18 +691,12 @@ export class QueryEngine {
 
           try {
             const startedAt = Date.now();
-            const result = await tool.execute(input, {
-              cwd: this.options.cwd ?? process.cwd(),
-              signal: this.options.signal,
-              permissionMode: this.options.permissionManager?.getMode() ?? "always-ask",
-            });
+            const result = await tool.execute(input, toolContext);
 
             const durationMs = Date.now() - startedAt;
             const outputBase = result.success ? result.output : (result.error ?? result.output);
             const output = result.truncated ? `${outputBase}\n[Output truncated]` : outputBase;
-            const askUserRequest = tc.name === "AskUserQuestion"
-              ? this.extractAskUserQuestionRequest(result.data, input)
-              : null;
+            const askUserRequest = this.extractAskUserQuestionRequest(result.data, input);
 
             if (askUserRequest && this.options.resolveQuestion) {
               const answer = await this.options.resolveQuestion(askUserRequest);
@@ -620,21 +704,26 @@ export class QueryEngine {
                 role: "tool",
                 content: answer,
                 toolCallId: tc.id,
-                toolName: tc.name,
+                toolName: registration.canonicalName,
                 metadata: {
                   success: true,
                   durationMs,
                   input,
                   question: askUserRequest.question,
                   answer,
+                  toolCallId: tc.id,
+                  canonicalToolName: registration.canonicalName,
+                  qualifiedToolName: registration.qualifiedName,
+                  requestedToolName: tc.name,
                 },
               });
               yield emitStreamEvent("tool_result", {
-                tool: tc.name,
+                tool: registration.canonicalName,
                 success: true,
                 input,
                 answer,
                 question: askUserRequest.question,
+                toolCallId: tc.id,
               });
               continue;
             }
@@ -643,23 +732,35 @@ export class QueryEngine {
               role: "tool",
               content: output,
               toolCallId: tc.id,
-              toolName: tc.name,
+              toolName: registration.canonicalName,
               metadata: {
                 success: result.success,
                 durationMs,
                 input,
                 truncated: result.truncated ?? false,
+                summary: result.summary,
+                debug: result.debug,
+                toolCallId: tc.id,
+                canonicalToolName: registration.canonicalName,
+                qualifiedToolName: registration.qualifiedName,
+                requestedToolName: tc.name,
+                category: registration.category,
                 ...(result.error ? { error: result.error } : {}),
                 ...(result.data !== undefined ? { data: result.data } : {}),
               },
             });
             yield emitStreamEvent("tool_result", {
-              tool: tc.name,
+              tool: registration.canonicalName,
               success: result.success,
               input,
               output,
               durationMs,
               truncated: result.truncated ?? false,
+              summary: result.summary,
+              toolCallId: tc.id,
+              qualifiedToolName: registration.qualifiedName,
+              requestedToolName: tc.name,
+              category: registration.category,
               ...(result.error ? { error: result.error } : {}),
               ...(result.data !== undefined ? { data: result.data } : {}),
             });
@@ -669,19 +770,26 @@ export class QueryEngine {
               role: "tool",
               content: `Tool error: ${message}`,
               toolCallId: tc.id,
-              toolName: tc.name,
+              toolName: registration.canonicalName,
               metadata: {
                 success: false,
                 input,
                 error: message,
+                toolCallId: tc.id,
+                canonicalToolName: registration.canonicalName,
+                qualifiedToolName: registration.qualifiedName,
+                requestedToolName: tc.name,
               },
             });
             yield emitStreamEvent("tool_result", {
-              tool: tc.name,
+              tool: registration.canonicalName,
               success: false,
               input,
               output: `Tool error: ${message}`,
               error: message,
+              toolCallId: tc.id,
+              qualifiedToolName: registration.qualifiedName,
+              requestedToolName: tc.name,
             });
           }
         }
@@ -716,7 +824,61 @@ export class QueryEngine {
     this.options.onEvent?.(emitStreamEvent(type, data));
   }
 
+  private getProviderToolDefinitions(): Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> {
+    return this.toolRegistry.getProviderDefinitions({
+      providerId: this.options.provider.id,
+      model: this.options.provider.model,
+    }).map((definition) => ({
+      name: definition.name,
+      description: definition.description,
+      inputSchema: this.zodSchemaToJsonSchema(definition.inputSchema),
+    }));
+  }
+
+  private createToolContext(): ToolContext {
+    return {
+      cwd: this.options.cwd ?? process.cwd(),
+      signal: this.options.signal,
+      permissionMode: this.options.permissionManager?.getMode() ?? "always-ask",
+      runtime: {
+        sessionId: this.options.getSessionId?.() ?? null,
+        sessionStore: this.options.sessionStore,
+        permissionManager: this.options.permissionManager,
+        toolRegistry: this.toolRegistry,
+        extensionDirs: this.options.extensionDirs,
+      },
+    };
+  }
+
+  private getApprovalRequest(
+    tool: Tool,
+    toolName: string,
+    input: unknown,
+    context: ToolContext,
+  ): ToolApprovalRequest | null {
+    const explicit = tool.buildApprovalRequest?.(input, context);
+    if (explicit) {
+      return explicit;
+    }
+
+    if (tool.requiresApproval?.(input) !== true) {
+      return null;
+    }
+
+    return {
+      toolName,
+      toolArgs: this.toToolArgs(input),
+      approvalMessage: tool.getApprovalMessage?.(input) ?? `Allow ${toolName}?`,
+      riskLevel: "high",
+      resumable: true,
+    };
+  }
+
   private zodSchemaToJsonSchema(schema: unknown): Record<string, unknown> {
+    if (schema && typeof schema === "object" && !("safeParse" in (schema as Record<string, unknown>))) {
+      return schema as Record<string, unknown>;
+    }
+
     return zodToJsonSchema(schema as any) as Record<string, unknown>;
   }
 
@@ -749,6 +911,8 @@ export class QueryEngine {
   private extractAskUserQuestionRequest(data: unknown, fallbackInput: unknown): AskUserQuestionRequest | null {
     const candidate = isAskUserQuestionRequest(data)
       ? data
+      : isInteractiveQuestionPayload(data)
+        ? data
       : isAskUserQuestionFallbackInput(fallbackInput)
         ? {
             question: fallbackInput.question,
@@ -759,6 +923,19 @@ export class QueryEngine {
 
     return candidate;
   }
+}
+
+function isInteractiveQuestionPayload(value: unknown): value is AskUserQuestionRequest {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as { interaction?: unknown; question?: unknown; options?: unknown; allowFreeform?: unknown };
+  return candidate.interaction === "question"
+    && typeof candidate.question === "string"
+    && Array.isArray(candidate.options)
+    && candidate.options.every((option) => typeof option === "string")
+    && typeof candidate.allowFreeform === "boolean";
 }
 
 function isAskUserQuestionRequest(value: unknown): value is AskUserQuestionRequest {
