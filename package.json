@@ -1,0 +1,31 @@
+{
+  "name": "pebble-code",
+  "version": "0.1.0",
+  "description": "Terminal-native AI coding agent",
+  "module": "src/entrypoints/cli.tsx",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "pebble": "./src/entrypoints/cli.tsx"
+  },
+  "scripts": {
+    "dev": "bun run src/entrypoints/cli.tsx",
+    "build": "bun run scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "start": "bun run dist/pebble.js"
+  },
+  "dependencies": {
+    "@inkjs/ui": "^2.0.0",
+    "ink": "^6.8.0",
+    "react": "^19.2.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^18.3.3",
+    "typescript": "^5.5.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
