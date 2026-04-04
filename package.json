@@ -6,12 +6,13 @@
   "type": "module",
   "private": true,
   "bin": {
-    "pebble": "./src/entrypoints/cli.tsx"
+    "pebble": "./dist/pebble.js"
   },
   "scripts": {
     "dev": "bun run src/entrypoints/cli.tsx",
     "build": "bun run scripts/build.ts",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "start": "bun run dist/pebble.js"
   },
   "dependencies": {

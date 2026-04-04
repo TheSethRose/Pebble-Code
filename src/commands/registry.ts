@@ -26,11 +26,11 @@ export class CommandRegistry {
   /**
    * List all commands (deduplicated).
    */
-  list(): Command[] {
+  list(context?: CommandContext): Command[] {
     const seen = new Set<string>();
     const result: Command[] = [];
     for (const cmd of this.commands.values()) {
-      if (!seen.has(cmd.name)) {
+      if (!seen.has(cmd.name) && this.isAvailable(cmd, context)) {
         seen.add(cmd.name);
         result.push(cmd);
       }
@@ -54,9 +54,16 @@ export class CommandRegistry {
       };
     }
 
+    if (!this.isAvailable(cmd, context)) {
+      return {
+        success: false,
+        output: `Command /${cmd.name} is not available in the current mode or trust level`,
+      };
+    }
+
     try {
       const result = await cmd.execute(args, context);
-      return { success: true, output: result.output, exit: result.exit };
+      return { success: true, output: result.output, exit: result.exit, data: result.data };
     } catch (error) {
       return {
         success: false,
@@ -68,12 +75,14 @@ export class CommandRegistry {
   /**
    * Check if input is a command.
    */
-  isCommand(input: string): boolean {
+  isCommand(input: string, context?: CommandContext): boolean {
     const trimmed = input.trim();
     if (!trimmed.startsWith("/")) return false;
     const parts = trimmed.split(/\s+/);
     const name = parts[0]?.slice(1);
-    return name ? this.commands.has(name.toLowerCase()) : false;
+    if (!name) return false;
+    const command = this.find(name);
+    return command ? this.isAvailable(command, context) : false;
   }
 
   /**
@@ -87,5 +96,25 @@ export class CommandRegistry {
       name: parts[0]!,
       args: parts.slice(1).join(" "),
     };
+  }
+
+  private isAvailable(command: Command, context?: CommandContext): boolean {
+    if (!context) {
+      return true;
+    }
+
+    const currentMode = context.headless ? "headless" : "interactive";
+    if (command.modes?.length && !command.modes.includes(currentMode)) {
+      return false;
+    }
+
+    if (command.trustLevels?.length) {
+      const trustLevel = context.trustLevel ?? "trusted";
+      if (!command.trustLevels.includes(trustLevel)) {
+        return false;
+      }
+    }
+
+    return true;
   }
 }

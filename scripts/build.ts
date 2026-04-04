@@ -6,11 +6,12 @@
  * 1. Type checking
  * 2. Macro injection for build metadata
  * 3. Bundling for distribution
- * 4. Feature flag injection
+ * 4. Smoke verification of bundled output
+ * 5. Feature manifest generation
  */
 
 import { $ } from "bun";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = import.meta.dir + "/..";
@@ -70,7 +71,7 @@ async function build() {
     const result = await Bun.build({
       entrypoints: [join(SRC, "entrypoints/cli.tsx")],
       outdir: DIST,
-      target: "node",
+      target: "bun",
       minify: true,
       sourcemap: "external",
       define: {
@@ -81,7 +82,12 @@ async function build() {
     if (!result.success) {
       console.error("❌ Build failed");
       for (const msg of result.logs) {
-        console.error(msg);
+        const parts = [
+          msg.message,
+          "detail" in msg ? msg.detail : undefined,
+          "name" in msg ? msg.name : undefined,
+        ].filter(Boolean);
+        console.error(parts.length > 0 ? parts.join("\n") : JSON.stringify(msg, null, 2));
       }
       process.exit(1);
     }
@@ -90,7 +96,10 @@ async function build() {
     const cliJs = join(DIST, "cli.js");
     const pebbleJs = join(DIST, "pebble.js");
     if (existsSync(cliJs)) {
-      await $`mv ${cliJs} ${pebbleJs}`.cwd(ROOT);
+      if (existsSync(pebbleJs)) {
+        rmSync(pebbleJs);
+      }
+      renameSync(cliJs, pebbleJs);
     }
 
     console.log("✅ Bundle created in dist/pebble.js");
@@ -101,7 +110,19 @@ async function build() {
     process.exit(1);
   }
 
-  // Step 4: Generate feature manifest documentation
+  // Step 5: Verify the bundled output across success and failure paths
+  console.log("\n🧪 Verifying bundled output...");
+  try {
+    await verifyBundledCli();
+    console.log("✅ Bundled CLI passed success and failure-path verification");
+  } catch (err: unknown) {
+    console.error("❌ Bundled output verification failed");
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(message);
+    process.exit(1);
+  }
+
+  // Step 6: Generate feature manifest documentation
   console.log("\n📋 Generating feature manifest...");
   await generateFeatureManifest();
 
@@ -109,6 +130,103 @@ async function build() {
   console.log(`   Version: ${buildInfo.version}`);
   console.log(`   Commit:  ${buildInfo.commit}`);
   console.log(`   Variant: ${buildInfo.variant}`);
+}
+
+type SpawnResult = ReturnType<typeof Bun.spawnSync>;
+
+function runBundledCli(...args: string[]): SpawnResult {
+  return Bun.spawnSync({
+    cmd: [process.execPath, join(DIST, "pebble.js"), ...args],
+    cwd: ROOT,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+function outputOf(result: SpawnResult): string {
+  const stdout = stdoutOf(result);
+  const stderr = stderrOf(result);
+  return `${stdout}${stderr}`.trim();
+}
+
+function stdoutOf(result: SpawnResult): string {
+  return result.stdout ? result.stdout.toString() : "";
+}
+
+function stderrOf(result: SpawnResult): string {
+  return result.stderr ? result.stderr.toString() : "";
+}
+
+function assertSuccess(result: SpawnResult, label: string): string {
+  if (result.exitCode !== 0) {
+    throw new Error(`${label} exited with ${result.exitCode}: ${outputOf(result)}`);
+  }
+
+  return outputOf(result);
+}
+
+function assertFailure(result: SpawnResult, label: string): string {
+  if (result.exitCode === 0) {
+    throw new Error(`${label} was expected to fail but exited successfully: ${outputOf(result)}`);
+  }
+
+  return outputOf(result);
+}
+
+async function verifyBundledCli(): Promise<void> {
+  const buildInfoResult = assertSuccess(runBundledCli("--build-info"), "--build-info");
+  const bundledInfo = JSON.parse(buildInfoResult) as typeof buildInfo;
+
+  if (
+    bundledInfo.version !== buildInfo.version ||
+    bundledInfo.variant !== buildInfo.variant ||
+    bundledInfo.commit !== buildInfo.commit ||
+    bundledInfo.buildDate !== buildInfo.buildDate
+  ) {
+    throw new Error(
+      `Bundled build metadata mismatch. Expected ${JSON.stringify(buildInfo)}, received ${JSON.stringify(bundledInfo)}`,
+    );
+  }
+
+  const versionOutput = assertSuccess(runBundledCli("--version"), "--version");
+  if (!versionOutput.includes(buildInfo.version) || !versionOutput.includes(buildInfo.variant)) {
+    throw new Error(`--version output missing expected build metadata: ${versionOutput}`);
+  }
+
+  const helpOutput = assertSuccess(runBundledCli("--help"), "--help");
+  if (!helpOutput.includes("USAGE") || !helpOutput.includes("FAST COMMANDS")) {
+    throw new Error(`--help output missing expected sections: ${helpOutput}`);
+  }
+
+  const featuresOutput = assertSuccess(runBundledCli("--features"), "--features");
+  if (!featuresOutput.includes("Enabled features:")) {
+    throw new Error(`--features output missing enabled-features summary: ${featuresOutput}`);
+  }
+
+  const headlessSuccess = runBundledCli("--headless", "--prompt", "health check");
+  const headlessSuccessStdout = stdoutOf(headlessSuccess).trim();
+  if (headlessSuccess.exitCode !== 0) {
+    throw new Error(`--headless --prompt exited with ${headlessSuccess.exitCode}: ${outputOf(headlessSuccess)}`);
+  }
+
+  const headlessResult = JSON.parse(headlessSuccessStdout) as {
+    status: string;
+    success: boolean;
+    messages?: Array<{ role: string; content: string }>;
+  };
+
+  if (!headlessResult.success || headlessResult.status !== "success") {
+    throw new Error(`Headless bundled execution did not report success: ${headlessSuccessStdout}`);
+  }
+
+  if (!headlessResult.messages?.some((message) => message.role === "assistant")) {
+    throw new Error(`Headless bundled execution did not include an assistant response: ${headlessSuccessStdout}`);
+  }
+
+  const headlessFailureOutput = assertFailure(runBundledCli("--headless"), "--headless without prompt");
+  if (!headlessFailureOutput.includes("headless mode requires --prompt")) {
+    throw new Error(`Expected headless failure message not found: ${headlessFailureOutput}`);
+  }
 }
 
 // ─── Feature manifest generation ─────────────────────────────────────────────

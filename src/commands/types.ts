@@ -1,3 +1,7 @@
+import type { SessionStore } from "../persistence/sessionStore.js";
+import type { PermissionManager } from "../runtime/permissionManager.js";
+import type { TrustLevel } from "../runtime/permissions.js";
+
 /**
  * Command types for the slash-command system.
  */
@@ -12,6 +16,16 @@ export interface CommandContext {
   headless: boolean;
   /** Current configuration */
   config: Record<string, unknown>;
+  /** Active session store */
+  sessionStore?: SessionStore;
+  /** Active session id */
+  sessionId?: string | null;
+  /** Current trust level */
+  trustLevel?: TrustLevel;
+  /** Active permission manager */
+  permissionManager?: PermissionManager;
+  /** Loaded extension command names */
+  extensionCommandNames?: string[];
 }
 
 /**
@@ -24,7 +38,11 @@ export interface CommandResult {
   output: string;
   /** Whether the command should exit the REPL */
   exit?: boolean;
+  /** Structured data for the caller/UI */
+  data?: Record<string, unknown>;
 }
+
+export type CommandMode = "interactive" | "headless";
 
 /**
  * Command type determines how it's executed.
@@ -46,6 +64,10 @@ export interface Command {
   type: CommandType;
   /** Command aliases */
   aliases?: string[];
+  /** Modes where this command is available */
+  modes?: CommandMode[];
+  /** Trust levels where this command is available */
+  trustLevels?: TrustLevel[];
   /** Usage string */
   usage?: string;
   /** Execute the command */

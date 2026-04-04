@@ -11,6 +11,7 @@ import { getFeatureSummary, isFeatureEnabled } from "../build/featureFlags.js";
 import { buildRuntimeConfig } from "./config.js";
 import { PermissionManager } from "./permissionManager.js";
 import { loadRepositoryInstructions, formatInstructions } from "./instructions.js";
+import { createProjectSessionStore, createOrResumeSession, transcriptToConversation, engineMessageToTranscriptMessage } from "../persistence/runtimeSessions.js";
 
 export interface RuntimeOptions {
   /** Run in headless/print mode */
@@ -81,20 +82,82 @@ async function runHeadless(
   console.error(`Permission mode: ${config.settings.permissionMode}`);
   console.error(`Instructions: ${instructions ? "loaded" : "none"}`);
 
-  // Output a structured result envelope for headless callers
-  const result = {
-    type: "result",
-    status: "not_implemented",
-    message: "Engine not yet implemented",
-    sessionId: null,
-  };
+  // Initialize engine for headless execution
+  const { createPrimaryProvider } = await import("../providers/primary/index.js");
+  const { createMvpTools } = await import("../tools/orchestration.js");
+  const { query } = await import("../engine/query.js");
 
-  console.log(JSON.stringify(result, null, 2));
-  return 0;
+  const provider = createPrimaryProvider(options.model);
+  const tools = createMvpTools();
+  const sessionStore = createProjectSessionStore(config.cwd);
+  const session = createOrResumeSession(sessionStore, options.resume);
+
+  const systemPrompt = instructions || undefined;
+
+  try {
+    if (options.prompt) {
+      sessionStore.appendMessage(session.id, {
+        role: "user",
+        content: options.prompt,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const inputTranscript = sessionStore.loadTranscript(session.id) ?? session;
+    const conversation = transcriptToConversation(inputTranscript, config.settings.compactThreshold);
+
+    const result = await query(
+      conversation,
+      {
+        provider,
+        tools,
+        maxTurns: config.settings.maxTurns ?? 50,
+        systemPrompt,
+        signal: options.signal,
+        permissionManager,
+        cwd: config.cwd,
+      },
+    );
+
+    const newMessages = result.messages.slice(conversation.length);
+    for (const message of newMessages) {
+      const transcriptMessage = engineMessageToTranscriptMessage(message);
+      if (transcriptMessage) {
+        sessionStore.appendMessage(session.id, transcriptMessage);
+      }
+    }
+
+    sessionStore.updateStatus(session.id, result.success ? "completed" : result.state === "interrupted" ? "interrupted" : "error");
+
+    // Output structured result for headless callers
+    const output = {
+      type: "result",
+      status: result.state,
+      success: result.success,
+      message: result.success ? "Query completed successfully" : result.error,
+      sessionId: session.id,
+      usage: result.usage,
+      messages: result.messages,
+    };
+
+    console.log(JSON.stringify(output, null, 2));
+    return result.success ? 0 : 1;
+  } catch (error) {
+    sessionStore.updateStatus(session.id, "error");
+    const errorOutput = {
+      type: "result",
+      status: "error",
+      success: false,
+      message: error instanceof Error ? error.message : String(error),
+      sessionId: session.id,
+    };
+    console.error(JSON.stringify(errorOutput, null, 2));
+    return 1;
+  }
 }
 
 async function runInteractive(
-  _options: RuntimeOptions,
+  options: RuntimeOptions,
   config: ReturnType<typeof buildRuntimeConfig>,
   permissionManager: PermissionManager,
   instructions: string,
@@ -114,7 +177,13 @@ async function runInteractive(
       trust: config.trust.level,
       permissionMode: config.settings.permissionMode,
       model: config.settings.model,
+      compactThreshold: config.settings.compactThreshold,
     },
+    sessionStore: createProjectSessionStore(config.cwd),
+    sessionId: options.resume ?? null,
+    trustLevel: config.trust.level,
+    permissionManager,
+    extensionCommandNames: [],
   };
 
   return startREPL(context);

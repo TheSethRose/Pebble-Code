@@ -2,655 +2,272 @@
 
 ## Purpose
 
-This is the implementation roadmap for building **Pebble Code** — a terminal-native AI coding agent.
+This document is the **realistic** implementation backlog for **Pebble Code**.
 
-The implementation uses **Pi Mono / Pi Coding Agent** as the architectural reference and implementation guide. Pi Mono provides proven patterns for the agent loop, tool contracts, permission model, persistence layer, and extension system.
+Pebble Code is being built as a terminal-native AI coding agent using **Pi Mono / Pi Coding Agent** as the architectural reference. The reference snapshot shows a **very large and mature product surface**. Our current repo does **not** cover that full breadth yet.
 
-It is ordered by **dependency and risk**, not by snapshot file count.
+This file is intentionally blunt:
 
-Important execution rule:
+- `[x]` means the code exists and is meaningfully working today
+- `[ ]` means missing, partial, stubbed, or not wired end-to-end
+- if a thing only exists as an interface, placeholder, or TODO comment, it stays unchecked
 
-- prefer normal repository files and scripts for scaffolding, testing, and validation
-- avoid giant inline shell one-liners or long terminal eval blobs
-- build thin vertical slices and verify them before widening scope
+## Reality check against the reference snapshot
 
-## Delivery strategy
+The reference snapshot includes a much broader system than the current repo, including:
 
-### Guiding principles
+- a much richer terminal UI and message rendering system
+- permission dialogs and approval flows
+- session resume/history UX
+- MCP/plugin/skill loading and management
+- background task and worktree workflows
+- more commands, more tools, and more runtime surfaces
+- deeper testing and operational hardening
 
-1. **Build the spine first** — bootstrap, init, engine, REPL, headless.
-2. **Separate product modules** — commands, tools, providers, persistence, UI, extensions.
-3. **Defer optional experiments** until the core loop is stable.
-4. **Design for resumability** from the start.
-5. **Treat feature flags as taxonomy**, not a parity checklist.
-6. **Keep trust and permissions first-class**.
-7. **Define provider and extension interfaces early**, even if their full implementation lands later.
+Pebble Code currently has a **working core spine**:
 
-## Recommended fresh project shape
+- CLI bootstrap and fast paths
+- a real engine loop
+- a real provider adapter
+- core tools
+- basic trust/config/persistence helpers
+- a minimal REPL shell
 
-A clean recreation can use a structure like this:
+But the current repo is still **far from reference breadth**, especially in:
 
-- `src/entrypoints/`
-  - CLI bootstrap
-  - headless entry
-  - optional SDK entry
-- `src/runtime/`
-  - init
-  - config
-  - trust
-  - settings
-  - session boot
-- `src/engine/`
-  - `query.ts`
-  - `QueryEngine.ts`
-  - streaming/result model
-  - retries and continuation
-- `src/commands/`
-  - built-ins
-  - registry
-  - loaders
-- `src/tools/`
-  - tool contract
-  - built-ins
-  - orchestration
-  - permission enforcement
-- `src/providers/`
-  - provider abstraction
-  - adapters
-  - auth/config
-- `src/persistence/`
-  - transcripts
-  - resume
-  - memory
-  - compaction
-- `src/extensions/`
-  - skills
-  - plugins
-  - MCP
-- `src/ui/`
-  - Ink REPL
-  - dialogs
-  - prompt/input/output surfaces
-- `src/build/`
-  - feature flags
-  - build metadata
-  - variant definitions
+- UI/TUI quality and completeness
+- persistence wiring into runtime
+- extension loading
+- advanced workflows
+- end-to-end validation
+- build health
 
-## Snapshot mapping to fresh modules
+## Honest current state
 
-| Snapshot evidence | Fresh implementation target |
-|---|---|
-| `src/entrypoints/cli.tsx` | `src/entrypoints/cli.tsx` or equivalent bootstrap |
-| `src/main.tsx` | `src/runtime/main.tsx` / `src/runtime/run.ts` |
-| `src/query.ts` | `src/engine/query.ts` |
-| `src/QueryEngine.ts` | `src/engine/QueryEngine.ts` |
-| `src/commands.ts` | `src/commands/registry.ts` |
-| `src/tools.ts` | `src/tools/registry.ts` |
-| `scripts/build.ts` | `scripts/build.ts` + feature metadata |
-| transcript/memory code | `src/persistence/*` |
-| MCP/plugin/skill loading | `src/extensions/*` |
+### What is genuinely working today
 
-## Mandatory product surfaces to classify up front
+- CLI fast paths for `--version`, `--help`, `--features`, and `--build-info`
+- TypeScript typecheck passes
+- Bundled build passes end-to-end
+- Unit tests pass
+- Core `QueryEngine` multi-turn tool loop exists
+- Primary provider makes real OpenAI-compatible API calls
+- Core tools exist: Bash, FileRead, FileEdit, Glob, Grep, AskUserQuestion, Todo
+- Trust/config/instruction loading exists
+- Permission manager exists and is partly wired into engine execution
+- Session store and compaction helpers exist
+- Basic Ink REPL exists and can invoke the engine
+- UI now exposes trust/session startup chrome and recent-session history
 
-These must be labeled as **MVP**, **post-MVP**, or **intentionally dropped** during planning:
+### What is partial or weak
 
-- [x] interactive REPL (MVP)
-- [x] headless/print mode (MVP)
-- [x] SDK/streaming protocol (MVP)
-- [x] resume / continue / fork-session semantics (MVP)
-- [x] config layering and settings sources (MVP)
-- [x] repository instruction loading (`CLAUDE.md`-style behavior) (MVP)
-- [x] setup/session-start hooks (Post-MVP) — interfaces defined in `src/runtime/hooks.ts`
-- [x] worktree flows (Post-MVP) — implementation in `src/runtime/worktrees.ts`
-- [x] background-session utilities (Post-MVP) — implementation in `src/runtime/backgroundSessions.ts`
-- [x] bridge/remote-control flows (Dropped)
-- [x] daemon/worker flows (Dropped)
-- [x] SSH/direct-connect/deep-link style entry paths (Dropped)
-- [x] environment-runner / self-hosted-runner style flows (Dropped)
+- REPL is minimal and lacks rich terminal UX
+- Headless mode exists but is still thin compared to the docs promise
+- `/memory` is still a thin session-backed status view, not a full memory system
+- Persistence exists but is not fully wired into runtime flow
+- Compaction exists but is not triggered automatically by runtime
+- AskUserQuestionTool returns structured prompt data but not a full interactive approval flow
+- Todo state is in-memory only
+
+### What is still scaffolding/stub territory
+
+- Extension loading (`src/extensions/loaders.ts`) is still stubbed
+- MCP/plugin/skill runtime integration is not implemented
+- Hooks/worktrees/background sessions are mostly future-facing scaffolding
+- Tests do not yet cover the real CLI/REPL/headless/extension flows end-to-end
 
 ---
 
-## Phase 0 — Frame the product before writing code
+## Build
 
-### Goals
+- [x] Bun + TypeScript project scaffolding exists
+- [x] `package.json` scripts exist for typecheck, build, and test
+- [x] `scripts/build.ts` exists
+- [x] feature flag module exists
+- [x] build metadata module exists
+- [x] `bun run typecheck` passes
+- [x] `bun test` passes
+- [x] `bun run build` completes successfully end-to-end
+- [x] bundled output in `dist/` is reliable for release use
+- [x] build verification covers both normal and failure scenarios
 
-- freeze MVP scope
-- classify deferred/experimental capabilities
-- avoid snapshot-parity rabbit holes
+## Commands
 
-### Tasks
+- [x] command types exist
+- [x] command registry exists
+- [x] `/help` works
+- [x] `/clear` works
+- [x] `/exit` works
+- [x] `/config` works
+- [x] `/model` works
+- [x] command aliases work
+- [x] command discovery through `/help` works
+- [x] `/resume` actually resumes a stored session
+- [ ] `/memory` is backed by a real memory system
+- [x] `/review` performs a real review flow
+- [ ] command loading merges extension-provided commands at runtime
+- [x] command filtering by runtime mode/trust is implemented cleanly
 
-- [x] Write/approve ADR: recreate product capabilities, not file layout
-- [x] Define MVP provider strategy
-- [x] Define extension strategy for MCP/plugins/skills
-- [x] Define telemetry/privacy policy
-- [x] Define headless/SDK event protocol
-- [x] Define resume semantics (`continue`, `resume`, `fork`, point-in-time restore)
-- [x] Define settings layering and repository-instruction behavior
-- [x] Define feature flag taxonomy:
-  - [x] core
-  - [x] beta
-  - [x] runtime-optional
-  - [x] deferred
-  - [x] dropped
+## Engine
 
-### Acceptance check
+- [x] canonical message types exist
+- [x] result envelope types exist
+- [x] stream event protocol types exist
+- [x] `QueryEngine` supports multi-turn recursion
+- [x] `QueryEngine` supports tool-call -> tool-result -> continuation cycles
+- [x] `QueryEngine` supports abort/max-turn/error terminal states
+- [x] engine emits stream events during execution
+- [x] engine integrates with permission checks before risky tool use
+- [x] query wrappers exist in `src/engine/query.ts`
+- [ ] headless/runtime use the full SDK/event contract promised in docs
+- [ ] engine recovery/compaction behavior is wired into long sessions
+- [ ] engine behavior is covered by integration tests instead of just helper/unit tests
 
-- [x] team can name what is in MVP and what is explicitly deferred
-- [x] no missing/broken snapshot subsystem is accidentally treated as mandatory
-- [x] all major operating modes are explicitly classified as MVP, later, or dropped
+## Entrypoints
 
----
+- [x] CLI entrypoint exists
+- [x] fast-path routing exists for trivial commands
+- [x] runtime option parsing exists for headless/model/provider/cwd/resume
+- [x] runtime boot is dynamically loaded after fast-path checks
+- [x] interactive path starts the runtime
+- [x] headless path starts the runtime
+- [ ] `--resume` is actually wired into a resume flow
+- [ ] SDK-specific entrypoint/runtime surface exists beyond the basic CLI path
+- [ ] entrypoint behavior is covered by smoke tests
 
-## Phase 1 — Build the executable skeleton
+## Extensions
 
-### Goals
+- [x] extension contracts/interfaces exist
+- [x] loader API shape exists
+- [x] extension failure reporting shape exists
+- [ ] extension loading is actually implemented
+- [ ] MCP servers are loaded at runtime
+- [ ] plugins are discovered and loaded at runtime
+- [ ] skills are discovered and loaded at runtime
+- [ ] extension-provided tools are merged into the live registry
+- [ ] extension-provided commands are merged into the live registry
+- [ ] extension isolation is proven by tests
 
-Create a bootable CLI with fast routing and a stable build pipeline.
+## Persistence
 
-### Tasks
+- [x] session transcript types exist
+- [x] file-backed session store exists
+- [x] create/load/list/fork/update status operations exist
+- [x] corrupt session files are handled defensively during load/list
+- [x] compaction helper code exists
+- [x] token accounting helper code exists
+- [x] cost tracking helper code exists
+- [ ] runtime writes active conversations to session storage during real use
+- [ ] runtime can continue the most recent session
+- [ ] runtime can resume a session by ID
+- [ ] runtime exposes memory loading/injection beyond placeholders
+- [ ] compaction is automatically triggered in long conversations
 
-- [x] Initialize Bun + TypeScript workspace
-- [x] Add binary entry configuration in `package.json`
-- [x] Create `src/entrypoints/cli.tsx`
-- [x] Implement fast-path routing for:
-  - [x] `--version`
-  - [x] `--help`
-  - [x] simple utility paths
-  - [x] fallback to full runtime
-- [x] Create `src/runtime/main.ts` or `src/main.tsx`
-- [x] Add compile/build script similar to `scripts/build.ts`
-- [x] Add compile-time macro injection for version/build metadata
-- [x] Add first feature-flag injection layer
-- [x] Add provider abstraction stub now, even if only one provider ships first
-- [x] Reserve extension registry interfaces for MCP/plugins/skills now
+## Providers
 
-### Suggested files
+- [x] provider abstraction exists
+- [x] provider capabilities are modeled
+- [x] primary provider adapter exists
+- [x] primary provider can make real OpenAI-compatible calls
+- [x] primary provider supports non-streaming responses
+- [x] primary provider supports streaming text responses
+- [x] provider configuration reads from environment variables
+- [ ] provider auth/setup UX exists in the product
+- [ ] provider fallback behavior is implemented and tested
+- [ ] multi-provider support exists beyond the primary adapter
+- [ ] provider failure scenarios are covered by tests
 
-- `src/entrypoints/cli.tsx`
-- `src/runtime/main.ts`
-- `scripts/build.ts`
-- `src/build/featureFlags.ts`
-- `src/build/buildInfo.ts`
-- `src/providers/types.ts`
-- `src/extensions/contracts.ts`
+## Runtime
 
-### Acceptance check
+- [x] runtime boot path exists
+- [x] config loading exists
+- [x] trust detection exists
+- [x] repository instruction loading exists
+- [x] permission manager exists
+- [x] headless runtime path exists
+- [x] interactive runtime path exists
+- [ ] runtime loads extensions/hooks/background workflows during boot
+- [ ] runtime persists sessions as part of normal CLI execution
+- [ ] runtime resume flow is implemented end-to-end
+- [ ] runtime trust/permission behavior is validated through full interactive flows
 
-- [x] `--version` works without full runtime boot
-- [x] interactive runtime starts
-- [x] headless runtime starts
-- [x] standalone binary build succeeds
-- [x] provider and extension interfaces exist without forcing full implementation
+## Tools
 
----
+- [x] tool contract exists
+- [x] tool registry exists
+- [x] tool orchestration builds an MVP tool set
+- [x] Bash tool is implemented
+- [x] FileRead tool is implemented
+- [x] FileEdit tool is implemented
+- [x] Glob tool is implemented
+- [x] Grep tool is implemented
+- [x] AskUserQuestion tool exists
+- [x] Todo tool exists
+- [x] risky tool approval detection exists for Bash/FileEdit
+- [ ] AskUserQuestion provides a full user-response loop rather than just returning prompt data
+- [ ] Todo state persists across sessions/process restarts
+- [ ] broader tool surface from the reference snapshot is implemented
+- [ ] tool approval UX is surfaced properly in the interactive UI
 
-## Phase 2 — Implement the message model and core engine ✅
+## UI
 
-### Goals
+- [x] Ink app shell exists
+- [x] prompt input exists
+- [x] basic transcript rendering exists
+- [x] slash commands work inside the REPL
+- [x] basic engine invocation from the REPL exists
+- [x] basic tool activity messages are shown
+- [x] basic processing/error states are shown
+- [ ] UI has a dedicated prompt input component system
+- [ ] UI has a real streaming renderer instead of a minimal flat list
+- [ ] UI has permission approval dialogs / prompts
+- [x] UI has trust/onboarding/startup surfaces
+- [x] UI has session resume/history UI
+- [ ] UI has richer message rendering for tools, progress, and errors
+- [ ] UI quality is anywhere close to the reference snapshot breadth
 
-Build the heart of the product: a reusable agent loop that can stream, recurse, and terminate correctly.
+## Tests
 
-### Tasks
-
-- [x] Define canonical message types:
-  - [x] user
-  - [x] assistant
-  - [x] tool result
-  - [x] progress
-  - [x] system/control messages
-  - [x] attachments if needed
-- [x] Implement `src/engine/query.ts`
-- [x] Implement `src/engine/QueryEngine.ts`
-- [x] Support streaming response events
-- [x] Support tool-use → tool-result → continuation cycles
-- [x] Support recursive turns with bounded max turns
-- [x] Support success/error/result terminal states
-- [x] Support abort/interrupt handling
-- [x] Support structured headless result envelopes
-- [x] Define and emit a stable stream event protocol for headless/SDK callers
-- [x] Model result envelope types for:
-  - [x] init/session metadata
-  - [x] user replay
-  - [x] stream events
-  - [x] retry events
-  - [x] progress events
-  - [x] permission denials
-  - [x] result terminal states
-
-### Suggested files
-
-- `src/engine/query.ts`
-- `src/engine/QueryEngine.ts`
-- `src/engine/types.ts`
-- `src/engine/results.ts`
-- `src/engine/transitions.ts`
-- `src/engine/sdkProtocol.ts`
-
-### Acceptance check
-
-- [x] engine can process a multi-turn prompt with mocked tool calls
-- [x] engine can stop on success, error, max-turn, or interrupt
-- [x] headless caller receives deterministic result objects
-- [x] stream consumers can parse a stable event contract
-
----
-
-## Phase 3 — Implement the tool contract and MVP tools ✅
-
-### Goals
-
-Build a permission-aware tool system with enough primitives to do real coding work.
-
-### Tasks
-
-- [x] Define tool interface/schema
-- [x] Implement tool registry assembly
-- [x] Implement tool filtering by runtime state and permissions
-- [x] Implement tool orchestration and result normalization
-- [x] Build MVP tools:
-  - [x] Bash
-  - [x] FileRead
-  - [x] FileEdit / ApplyPatch / FileWrite
-  - [x] Glob
-  - [x] Grep
-  - [x] AskUserQuestion
-  - [x] Todo / task tracker
-- [x] Optional for MVP+:
-  - [x] WebFetch
-  - [x] WebSearch
-  - [x] NotebookEdit
-
-### Suggested files
-
-- `src/tools/Tool.ts`
-- `src/tools/registry.ts`
-- `src/tools/orchestration.ts`
-- `src/tools/BashTool/*`
-- `src/tools/FileReadTool/*`
-- `src/tools/FileEditTool/*`
-- `src/tools/ApplyPatchTool/*`
-- `src/tools/GrepTool/*`
-- `src/tools/GlobTool/*`
-- `src/tools/AskUserQuestionTool/*`
-- `src/tools/TodoTool/*`
-
-### Acceptance check
-
-- [x] agent can inspect and modify files end-to-end
-- [x] denied tools are blocked cleanly
-- [x] tool failures do not corrupt the session
+- [x] test suite exists
+- [x] commands have unit tests
+- [x] persistence helpers have unit tests
+- [x] trust/permission helpers have unit tests
+- [x] current tests pass
+- [ ] build success is covered by tests or CI-like verification
+- [ ] headless mode has end-to-end tests
+- [ ] REPL has integration/smoke tests
+- [ ] provider failure/fallback paths have tests
+- [ ] extension loading/isolation has tests
+- [ ] engine/tool flows have end-to-end tests
 
 ---
 
-## Phase 4 — Implement trust and permissions ✅
+## Immediate priorities
 
-### Goals
+These are the next honest priority slices if we want the repo to materially close the gap with the reference snapshot:
 
-Make trust and permission gating part of the product, not a late bolt-on.
+1. **Fix the build** so `bun run build` works again
+2. **Finish runtime wiring** for persistence and resume
+3. **Make the REPL meaningfully usable** with better streaming, approvals, and session UX
+4. **Turn extensions from contracts into runtime behavior**
+5. **Add real integration tests** for CLI/headless/engine flows
 
-### Tasks
+## Success criteria for the next milestone
 
-- [x] Define permission modes
-- [x] Define trust model for working directory/project
-- [x] Implement permission prompts and allow/deny state
-- [x] Implement persistent permission context
-- [x] Implement safe defaults for risky tools
-- [x] Implement headless behavior for permission denial reporting
-- [x] Implement repository trust gating for project-scoped settings/instructions/hooks
-- [x] Implement minimal/bare mode that deliberately bypasses most dynamic loading
+We should not call the product “feature complete” until all of these are true:
 
-### Suggested files
+- [x] build passes
+- [ ] REPL supports real agent interaction cleanly
+- [ ] headless mode is reliable and structured
+- [ ] session resume works end-to-end
+- [ ] extensions load at runtime
+- [ ] integration tests cover core flows
 
-- `src/runtime/trust.ts`
-- `src/runtime/permissions.ts`
-- `src/tools/permissionContext.ts`
-- `src/ui/PermissionDialog.tsx`
-- `src/runtime/projectContext.ts`
-- `src/runtime/hooks.ts`
-- `src/runtime/bareMode.ts`
-
-### Acceptance check
-
-- [x] interactive mode prompts when appropriate
-- [x] headless mode reports denials structurally
-- [x] unsafe actions do not bypass the declared mode
-- [x] untrusted repositories cannot silently activate project-scoped behavior
-
----
-
-## Phase 5 — Build the command system ✅
-
-### Goals
-
-Create a slash-command layer distinct from tools.
-
-### Tasks
-
-- [x] Define command types:
-  - [x] local
-  - [x] prompt-generating
-  - [x] UI-only/local-jsx equivalent
-- [x] Create command registry loader
-- [x] Create runtime command filtering
-- [x] Implement MVP commands:
-  - [x] `/help`
-  - [x] `/clear`
-  - [x] `/exit`
-  - [x] `/model`
-  - [x] `/config`
-  - [x] `/resume`
-  - [x] `/memory`
-  - [x] `/permissions`
-  - [x] `/plan` or equivalent
-  - [x] `/review` or equivalent
-- [x] Add compatibility for command aliases where desired
-
-### Suggested files
-
-- `src/commands/types.ts`
-- `src/commands/registry.ts`
-- `src/commands/loaders.ts`
-- `src/commands/help.ts`
-- `src/commands/resume.ts`
-- `src/commands/model.ts`
-
-### Acceptance check
-
-- [x] slash commands are discoverable in REPL
-- [x] prompt-style and local commands can coexist cleanly
-- [x] command loading can later merge extension-provided commands
-
----
-
-## Phase 6 — Build the interactive REPL UX ✅
-
-### Goals
-
-Ship a usable terminal interface around the engine.
-
-### Tasks
-
-- [x] Create Ink app shell
-- [x] Create prompt input component
-- [x] Create streaming output renderer
-- [x] Create tool approval / progress rendering
-- [x] Create startup/onboarding/trust surfaces
-- [x] Create session resume/history UI
-- [x] Create graceful interrupt and abort UX
-
-### Suggested files
-
-- `src/ui/App.tsx`
-- `src/ui/PromptInput.tsx`
-- `src/ui/MessageStream.tsx`
-- `src/ui/StartupScreen.tsx`
-- `src/ui/ResumePicker.tsx`
-
-### Acceptance check
-
-- [x] user can complete a real coding task in REPL
-- [x] streaming output is readable
-- [x] tool activity is understandable
-- [x] aborting does not leave the UI broken
-
----
-
-## Phase 7 — Build persistence, resume, and memory ✅
-
-### Goals
-
-Make conversations durable and resumable.
-
-### Tasks
-
-- [x] Define transcript format
-- [x] Implement append-safe transcript recording
-- [x] Implement session lookup/resume flow
-- [x] Implement continue-most-recent behavior
-- [x] Implement explicit resume-by-id behavior
-- [x] Implement fork-session behavior
-- [x] Decide whether point-in-time resume and rewind-files semantics are MVP or later
-- [x] Handle partial/corrupt sessions gracefully
-- [x] Implement memory loading policy
-- [x] Implement memory attachment or injection path
-
-### Suggested files
-
-- `src/persistence/transcripts.ts`
-- `src/persistence/sessionStore.ts`
-- `src/persistence/resume.ts`
-- `src/persistence/memory.ts`
-- `src/persistence/sessionForks.ts`
-
-### Acceptance check
-
-- [x] interrupted sessions can usually be resumed
-- [x] session files survive normal agent usage
-- [x] memory does not duplicate endlessly across turns
-- [x] users can continue, resume, and fork sessions predictably
-
----
-
-## Phase 8 — Implement compaction, token, and cost management ✅
-
-### Goals
-
-Keep long sessions usable without losing the task thread.
-
-### Tasks
-
-- [x] Add token accounting hooks
-- [x] Add cost accounting hooks
-- [x] Add compact boundary/message model
-- [x] Implement proactive or reactive compaction strategy
-- [x] Implement long-context recovery path
-- [x] Preserve resume semantics across compaction
-
-### Suggested files
-
-- `src/persistence/compaction.ts`
-- `src/persistence/tokenBudget.ts`
-- `src/persistence/costTracker.ts`
-- `src/engine/recovery.ts`
-
-### Acceptance check
-
-- [x] long sessions stay functional
-- [x] compaction does not break resume or tool continuity
-- [x] token/cost summaries are available to the user
-
----
-
-## Phase 9 — Complete provider implementations and auth ✅
-
-### Goals
-
-Complete the provider layer reserved earlier and support one provider well before widening.
-
-### Tasks
-
-- [x] Define provider interface
-- [x] Define capability registry per provider/model
-- [x] Implement primary provider adapter
-- [x] Implement auth/config flow
-- [x] Implement model selection and fallback rules
-- [x] Add secondary provider adapter only after the first is stable
-
-### Suggested files
-
-- `src/providers/types.ts`
-- `src/providers/registry.ts`
-- `src/providers/primary/*`
-- `src/providers/auth/*`
-- `src/providers/capabilities.ts`
-
-### Acceptance check
-
-- [x] user can configure and use one provider end-to-end
-- [x] model selection works in interactive and headless mode
-- [x] fallback behavior is bounded and visible
-
----
-
-## Phase 10 — Add MCP, plugins, and skills ✅
-
-### Goals
-
-Add extension surfaces after the core product is stable.
-
-### Tasks
-
-- [x] Implement MCP config loading
-- [x] Implement MCP tool/resource registration
-- [x] Implement plugin discovery and loading
-- [x] Implement bundled skill loading
-- [x] Implement dynamic skill loading
-- [x] Isolate extension failures from core runtime
-- [x] Merge extension commands/tools into registries cleanly
-
-### Suggested files
-
-- `src/extensions/mcp/*`
-- `src/extensions/plugins/*`
-- `src/extensions/skills/*`
-- `src/extensions/loaders.ts`
-
-### Acceptance check
-
-- [x] MCP can contribute capabilities without core edits
-- [x] skills/plugins can be loaded and filtered at runtime
-- [x] bad extensions fail isolated
-
----
-
-## Phase 11 — Add advanced workflows selectively ✅
-
-### Goals
-
-Promote only the advanced capabilities that are worth the maintenance burden.
-
-### Candidates
-
-- [x] worktree flows
-- [x] background task model
-- [x] plan/verify loops
-- [x] remote/bridge workflows
-- [x] higher-order agent orchestration
-
-### Important rule
-
-Do **not** port advanced snapshot surfaces by default just because they exist.
-Each must justify itself in terms of user value, complexity, and maintenance cost.
-
-### Acceptance check
-
-- [x] any promoted advanced workflow is documented, testable, and non-fragile
-
----
-
-## Phase 12 — Feature flag taxonomy and build variants ✅
-
-### Goals
-
-Recreate the product’s feature-variant strategy without blindly copying all historical flags.
-
-### Tasks
-
-- [x] Define stable/default feature set
-- [x] Define beta feature set
-- [x] Define experimental/full build set
-- [x] Mark intentionally dropped flags
-- [x] Mark runtime-optional capabilities separately from compile-time flags
-- [x] Add feature manifest documentation
-
-### Suggested files
-
-- `src/build/featureManifest.ts`
-- `docs/FEATURES_RECREATED.md`
-- `scripts/build.ts`
-
-### Acceptance check
-
-- [x] stable build works
-- [x] experimental build works
-- [x] unsupported flags cannot silently half-enable broken subsystems
-
----
-
-## Phase 13 — Validation and hardening ✅
-
-### Goals
-
-Prove the recreation is trustworthy.
-
-### Test categories
-
-- [x] startup smoke tests
-- [x] interactive REPL smoke tests
-- [x] headless deterministic tests
-- [x] transcript persistence tests
-- [x] resume tests
-- [x] permission/trust tests
-- [x] compaction/recovery tests
-- [x] provider failure/fallback tests
-- [x] extension isolation tests
-
-### Acceptance check
-
-- [x] failures are localized and diagnosable
-- [x] core flows remain intact when optional surfaces are disabled
-
----
-
-## Explicit MVP stop line
-
-Claude Code should consider the MVP complete when all of these are true:
-
-- [x] CLI bootstrap is fast and stable
-- [x] REPL works
-- [x] headless mode works
-- [x] core engine supports multi-turn tool use
-- [x] core tools support real coding tasks
-- [x] trust + permission model is functional
-- [x] transcript persistence + resume work
-- [x] one provider is production-ready
-- [x] build variants exist
-- [x] privacy-first operation is preserved
-
----
-
-## Explicitly deferred unless promoted
-
-These areas are present in the snapshot but should **not** automatically block the fresh build:
-
-- [x] full assistant/KAIROS stack — intentionally excluded, not core to terminal agent
-- [x] proactive/dream systems — intentionally excluded, experimental feature
-- [x] every broken feature-flag reconstruction in `FEATURES.md` — intentionally excluded, using clean taxonomy
-- [x] deep bridge/daemon/coordinator parity — intentionally excluded, dropped from scope
-- [x] exact command-count parity — intentionally excluded, not a product requirement
-- [x] Anthropic-internal package restoration — intentionally excluded, not relevant to fresh build
-- [x] compile-safe-but-runtime-fragile experiments without clear product value — intentionally excluded
-
----
-
-## Final instruction
-
-Build this in vertical slices:
-
-1. boot
-2. init
-3. engine
-4. tools
-5. REPL/headless
-6. persistence
-7. provider
-8. extensibility
-9. advanced workflows
+## Working rule
 
 When in doubt:
 
-- preserve product behavior
-- simplify implementation
-- keep privacy and trust explicit
-- prefer a smaller coherent MVP over a sprawling fragile parity clone
+- prefer a smaller, honest backlog over inflated green checkmarks
+- mark partial work as partial
+- only check things that are wired end-to-end
+- keep this document aligned with the actual repo, not the aspirational reference snapshot

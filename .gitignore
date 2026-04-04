@@ -45,5 +45,15 @@ coverage/
 # Repomix / AI context dumps
 repomix-output.xml
 
-# Docs (already ignored)
+# Misc
 docs/
+task_plan.md
+findings.md
+progress.md
+
+# Local agent/runtime artifacts
+.agents/
+.pebble/sessions/
+.pebble/test-command-memory/
+.pebble/test-command-sessions/
+dist-debug/

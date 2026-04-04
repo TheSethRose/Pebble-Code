@@ -9,6 +9,7 @@ import type { Provider } from "../providers/types.js";
 import type { Tool } from "../tools/Tool.js";
 import type { Message, StreamEvent } from "./types.js";
 import { QueryEngine } from "./QueryEngine.js";
+import type { PermissionManager } from "../runtime/permissionManager.js";
 
 export interface QueryOptions {
   provider: Provider;
@@ -17,6 +18,8 @@ export interface QueryOptions {
   maxTurns?: number;
   signal?: AbortSignal;
   onEvent?: (event: StreamEvent) => void;
+  permissionManager?: PermissionManager;
+  cwd?: string;
 }
 
 /**
@@ -33,6 +36,8 @@ export async function query(
     maxTurns: options.maxTurns,
     signal: options.signal,
     onEvent: options.onEvent,
+    permissionManager: options.permissionManager,
+    cwd: options.cwd,
   });
 
   return engine.process(messages);
@@ -51,6 +56,8 @@ export async function *streamQuery(
     systemPrompt: options.systemPrompt,
     maxTurns: options.maxTurns,
     signal: options.signal,
+    permissionManager: options.permissionManager,
+    cwd: options.cwd,
   });
 
   yield* engine.stream(messages);
