@@ -14,8 +14,8 @@ import { TodoTool } from "./TodoTool/index.js";
 /**
  * Create the default set of MVP tools.
  */
-export function createMvpTools(): Tool[] {
-  return [
+export function createMvpTools(extensionTools: Tool[] = []): Tool[] {
+  const builtInTools = [
     new BashTool(),
     new FileReadTool(),
     new FileEditTool(),
@@ -24,6 +24,17 @@ export function createMvpTools(): Tool[] {
     new AskUserQuestionTool(),
     new TodoTool(),
   ];
+
+  const mergedTools = new Map<string, Tool>();
+  for (const tool of builtInTools) {
+    mergedTools.set(tool.name, tool);
+  }
+
+  for (const tool of extensionTools) {
+    mergedTools.set(tool.name, tool);
+  }
+
+  return Array.from(mergedTools.values());
 }
 
 /**

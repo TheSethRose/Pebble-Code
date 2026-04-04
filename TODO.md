@@ -125,7 +125,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] query wrappers exist in `src/engine/query.ts`
 - [x] headless/runtime use the full SDK/event contract promised in docs
 - [x] engine recovery/compaction behavior is wired into long sessions
-- [ ] engine behavior is covered by integration tests instead of just helper/unit tests
+- [x] engine behavior is covered by integration tests instead of just helper/unit tests
 
 ## Entrypoints
 
@@ -136,7 +136,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] interactive path starts the runtime
 - [x] headless path starts the runtime
 - [x] `--resume` is actually wired into a resume flow
-- [ ] SDK-specific entrypoint/runtime surface exists beyond the basic CLI path
+- [x] SDK-specific entrypoint/runtime surface exists beyond the basic CLI path
 - [x] entrypoint behavior is covered by smoke tests
 
 ## Extensions
@@ -148,7 +148,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - [ ] MCP servers are loaded at runtime
 - [x] plugins are discovered and loaded at runtime
 - [ ] skills are discovered and loaded at runtime
-- [ ] extension-provided tools are merged into the live registry
+- [x] extension-provided tools are merged into the live registry
 - [x] extension-provided commands are merged into the live registry
 - [x] extension isolation is proven by tests
 

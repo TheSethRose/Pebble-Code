@@ -106,19 +106,15 @@ function createHelpCommand(registry: CommandRegistry): Command {
   return {
     name: "help",
     aliases: ["h", "?"],
-    description: "Show available commands",
+    description: "Show keyboard shortcuts",
     type: "local",
     usage: "/help",
     modes: ["interactive"],
-    execute: (_args, ctx): CommandResult => {
-      const commands = registry.list(ctx);
-      const lines = commands.map((cmd) => {
-        const aliases = cmd.aliases?.length ? ` (${cmd.aliases.map((a) => `/${a}`).join(", ")})` : "";
-        return `  /${cmd.name}${aliases.padEnd(20)} ${cmd.description}`;
-      });
+    execute: (_args, _ctx): CommandResult => {
       return {
         success: true,
-        output: `Available commands:\n${lines.join("\n")}`,
+        output: "",
+        data: { action: "show-keybindings" },
       };
     },
   };

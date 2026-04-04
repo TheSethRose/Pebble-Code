@@ -1,6 +1,8 @@
 import type { SessionStore } from "../persistence/sessionStore.js";
 import type { PermissionManager } from "../runtime/permissionManager.js";
+import type { HookRegistry } from "../runtime/hooks.js";
 import type { TrustLevel } from "../runtime/permissions.js";
+import type { Tool } from "../tools/Tool.js";
 
 /**
  * Command types for the slash-command system.
@@ -28,6 +30,10 @@ export interface CommandContext {
   extensionCommandNames?: string[];
   /** Loaded extension command implementations */
   extensionCommands?: Command[];
+  /** Loaded extension tool implementations */
+  extensionTools?: Tool[];
+  /** Active hook registry populated from extensions */
+  hookRegistry?: HookRegistry;
 }
 
 /**

@@ -10,6 +10,7 @@ import { BUILD_INFO, getVersionString } from "../build/buildInfo.js";
 import { getFeatureSummary, isFeatureEnabled } from "../build/featureFlags.js";
 import { buildRuntimeConfig } from "./config.js";
 import { PermissionManager } from "./permissionManager.js";
+import { createHookRegistry, type HookRegistry } from "./hooks.js";
 import { loadRepositoryInstructions, formatInstructions } from "./instructions.js";
 import { createProjectSessionStore, createOrResumeSession, compactSessionIfNeeded, transcriptToConversation, engineMessageToTranscriptMessage } from "../persistence/runtimeSessions.js";
 import { getSettingsPath } from "./config.js";
@@ -17,6 +18,8 @@ import { resolveProviderConfig } from "../providers/config.js";
 import { getDefaultExtensionDirs, loadExtensions, reportExtensionStatus } from "../extensions/loaders.js";
 import type { Command } from "../commands/types.js";
 import type { Message, StreamEvent, EngineState } from "../engine/types.js";
+import type { Extension } from "../extensions/contracts.js";
+import type { Tool } from "../tools/Tool.js";
 import {
   createInitEvent,
   createPermissionDenialEvent,
@@ -81,17 +84,31 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
   // Phase 5: Initialize extensions
   const extensionResults = await loadExtensions(getDefaultExtensionDirs(cwd));
   reportExtensionStatus(extensionResults);
+  const loadedExtensions = extensionResults
+    .filter((result): result is typeof result & { extension: Extension } => result.loaded && Boolean(result.extension))
+    .map((result) => result.extension);
   const extensionCommands = extensionResults
     .filter((result) => result.loaded && result.extension?.commands?.length)
     .flatMap((result) => result.extension?.commands ?? []);
   const extensionCommandNames = extensionCommands.map((command) => command.name);
+  const extensionTools = loadedExtensions.flatMap((extension) => extension.tools ?? []);
+  const hookRegistry = createHookRegistry(loadedExtensions);
 
   // Phase 6: Start the appropriate mode
   if (options.headless) {
-    return runHeadless(options, config, permissionManager, instructions, extensionCommandNames);
+    return runHeadless(options, config, permissionManager, instructions, extensionCommandNames, extensionTools, hookRegistry);
   }
 
-  return runInteractive(options, config, permissionManager, instructions, extensionCommands, extensionCommandNames);
+  return runInteractive(
+    options,
+    config,
+    permissionManager,
+    instructions,
+    extensionCommands,
+    extensionCommandNames,
+    extensionTools,
+    hookRegistry,
+  );
 }
 
 async function runHeadless(
@@ -100,6 +117,8 @@ async function runHeadless(
   permissionManager: PermissionManager,
   instructions: string,
   extensionCommandNames: string[],
+  extensionTools: Tool[],
+  hookRegistry: HookRegistry,
 ): Promise<number> {
   if (!options.prompt) {
     console.error("Error: headless mode requires --prompt");
@@ -126,7 +145,7 @@ async function runHeadless(
     provider: options.provider,
     model: options.model,
   });
-  const tools = createMvpTools();
+  const tools = createMvpTools(extensionTools);
   const sessionStore = createProjectSessionStore(config.cwd);
   const session = createOrResumeSession(sessionStore, options.resume);
 
@@ -144,7 +163,11 @@ async function runHeadless(
     }
   };
 
+  let sessionStarted = false;
   try {
+    await hookRegistry.fire("session:start", { sessionId: session.id });
+    sessionStarted = true;
+
     if (options.prompt) {
       sessionStore.appendMessage(session.id, {
         role: "user",
@@ -163,6 +186,8 @@ async function runHeadless(
     emitSdkEvent(createInitEvent(session.id, provider.model, provider.name, config.cwd));
     emitSdkEvent(createUserReplayEvent(options.prompt));
 
+    await hookRegistry.fire("turn:before", { sessionId: session.id });
+
     const result = await query(
       conversation,
       {
@@ -176,6 +201,8 @@ async function runHeadless(
         onEvent: (event: StreamEvent) => emitHeadlessStreamEvent(event, emitSdkEvent),
       },
     );
+
+    await hookRegistry.fire("turn:after", { sessionId: session.id });
 
     const newMessages = result.messages.slice(conversation.length);
     for (const message of newMessages) {
@@ -227,6 +254,10 @@ async function runHeadless(
     sessionStore.updateStatus(session.id, "error");
 
     const message = error instanceof Error ? error.message : String(error);
+    await hookRegistry.fire("error", {
+      sessionId: session.id,
+      error: error instanceof Error ? error : new Error(message),
+    });
     if (format === "json-stream") {
       emitSdkEvent(createResultEnvelope("error", message, session.id));
     } else if (format === "json") {
@@ -236,6 +267,10 @@ async function runHeadless(
     }
 
     return 1;
+  } finally {
+    if (sessionStarted) {
+      await hookRegistry.fire("session:end", { sessionId: session.id });
+    }
   }
 }
 
@@ -246,6 +281,8 @@ async function runInteractive(
   instructions: string,
   extensionCommands: Command[],
   extensionCommandNames: string[],
+  extensionTools: Tool[],
+  hookRegistry: HookRegistry,
 ): Promise<number> {
   const resolvedProvider = resolveProviderConfig(config.settings, {
     provider: options.provider,
@@ -281,6 +318,8 @@ async function runInteractive(
     permissionManager,
     extensionCommandNames,
     extensionCommands,
+    extensionTools,
+    hookRegistry,
   };
 
   return startREPL(context);

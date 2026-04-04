@@ -96,8 +96,7 @@ describe("Command Registry", () => {
       ...createCommandContext(),
     });
     expect(result.success).toBe(true);
-    expect(result.output).toContain("/help");
-    expect(result.output).toContain("/exit");
+    expect(result.data?.action).toBe("show-keybindings");
   });
 
   test("executes exit command", async () => {

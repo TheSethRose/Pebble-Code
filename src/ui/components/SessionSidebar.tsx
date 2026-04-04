@@ -95,7 +95,7 @@ export function SessionSidebar({
       {/* Hint */}
       {isFocused && (
         <Box marginTop={1}>
-          <Text dimColor>↑↓ move · Enter select</Text>
+          <Text dimColor>↑↓ move · Enter select · Del remove</Text>
         </Box>
       )}
     </Box>

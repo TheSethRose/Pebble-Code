@@ -105,6 +105,7 @@ export function App({ context }: { context: CommandContext }) {
 
   const engineRef = React.useRef<QueryEngine | null>(null);
   const sessionIdRef = React.useRef<string | null>(null);
+  const hookSessionIdRef = React.useRef<string | null>(null);
   const ctrlCTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionStore = context.sessionStore ?? null;
 
@@ -220,7 +221,7 @@ export function App({ context }: { context: CommandContext }) {
       provider: typeof runtimeConfig.provider === "string" ? runtimeConfig.provider : undefined,
       model: typeof runtimeConfig.model === "string" ? runtimeConfig.model : undefined,
     });
-    const tools = createMvpTools();
+    const tools = createMvpTools(context.extensionTools ?? []);
     const permissionManager =
       context.permissionManager ??
       new PermissionManager({ mode: "always-ask", projectRoot: context.cwd });
@@ -269,7 +270,16 @@ export function App({ context }: { context: CommandContext }) {
         }
       },
     });
-  }, [context.cwd, context.permissionManager, runtimeConfig.model, runtimeConfig.provider]);
+  }, [context.cwd, context.extensionTools, context.permissionManager, runtimeConfig.model, runtimeConfig.provider]);
+
+  React.useEffect(() => {
+    return () => {
+      if (context.hookRegistry && hookSessionIdRef.current) {
+        void context.hookRegistry.fire("session:end", { sessionId: hookSessionIdRef.current });
+        hookSessionIdRef.current = null;
+      }
+    };
+  }, [context.hookRegistry]);
 
   // ------------------------------------------------------------------
   // Session resume — only when launched with --resume/--continue
@@ -295,17 +305,47 @@ export function App({ context }: { context: CommandContext }) {
   }, []); // run once on mount — intentionally not re-running on id change
 
   // ------------------------------------------------------------------
-  // Keyboard: Tab focus, ↑↓ navigation, Ctrl+C exit
+  // Keyboard: Tab focus, ↑↓ navigation, Ctrl+C exit, Cmd+P, Delete
   // ------------------------------------------------------------------
   useInput(
     (_input, key) => {
-      // Tab toggles focus between input and sidebar
+      // --- Delete confirmation dialog (absorbs all keys while open) ---
+      if (deleteConfirm) {
+        if (key.leftArrow || key.rightArrow) {
+          setDeleteConfirm((prev) =>
+            prev
+              ? { ...prev, selectedButton: prev.selectedButton === "delete" ? "cancel" : "delete" }
+              : null,
+          );
+          return;
+        }
+        if (key.return) {
+          if (deleteConfirm.selectedButton === "delete") {
+            handleDeleteSession(deleteConfirm.sessionId);
+          }
+          setDeleteConfirm(null);
+          return;
+        }
+        if (key.escape) {
+          setDeleteConfirm(null);
+          return;
+        }
+        return;
+      }
+
+      // --- Keybindings popup (Cmd+P on macOS, Ctrl+P elsewhere) ---
+      if ((key.meta && _input === "p") || (key.ctrl && _input === "p")) {
+        setShowKeybindings((prev) => !prev);
+        return;
+      }
+
+      // Tab toggles focus between input and sidebar (only when no suggestions)
       if (key.tab && suggestions.length === 0) {
         setFocusArea((prev) => (prev === "input" ? "sidebar" : "input"));
         return;
       }
 
-      // --- Sidebar focused: ↑↓ to move, Enter to select, Escape/Tab back ---
+      // --- Sidebar focused ---
       if (focusArea === "sidebar") {
         const maxIndex = sidebarSessions.length; // 0=New Chat, 1..N=sessions
         if (key.upArrow) {
@@ -322,11 +362,19 @@ export function App({ context }: { context: CommandContext }) {
           setFocusArea("input");
           return;
         }
+        // Delete / Backspace key — opens confirm dialog for session rows only
+        // macOS Delete key → \x7F → key.backspace; fn+Delete → key.delete
+        if ((key.backspace || key.delete) && sidebarIndex > 0) {
+          const session = sidebarSessions[sidebarIndex - 1];
+          if (session) {
+            setDeleteConfirm({ sessionId: session.id, title: session.title, selectedButton: "cancel" });
+          }
+          return;
+        }
         if (key.escape) {
           setFocusArea("input");
           return;
         }
-        // Ctrl+C still works from sidebar
         if (key.ctrl && _input === "c") {
           setFocusArea("input");
           return;
@@ -404,7 +452,7 @@ export function App({ context }: { context: CommandContext }) {
         ctrlCTimerRef.current = setTimeout(() => setCtrlCOnce(false), 2000);
       }
     },
-    { isActive: !showSettings },
+    { isActive: !showSettings && !showKeybindings },
   );
 
   // ------------------------------------------------------------------
@@ -520,6 +568,15 @@ export function App({ context }: { context: CommandContext }) {
         setState((prev) => ({ ...prev, activeSessionId: session.id }));
       }
 
+      if (context.hookRegistry && sessionIdRef.current && hookSessionIdRef.current !== sessionIdRef.current) {
+        if (hookSessionIdRef.current) {
+          await context.hookRegistry.fire("session:end", { sessionId: hookSessionIdRef.current });
+        }
+
+        await context.hookRegistry.fire("session:start", { sessionId: sessionIdRef.current });
+        hookSessionIdRef.current = sessionIdRef.current;
+      }
+
       // Persist user message
       if (sessionStore && sessionIdRef.current) {
         sessionStore.appendMessage(sessionIdRef.current, {
@@ -560,7 +617,15 @@ export function App({ context }: { context: CommandContext }) {
       }));
 
       try {
+        if (context.hookRegistry && sessionIdRef.current) {
+          await context.hookRegistry.fire("turn:before", { sessionId: sessionIdRef.current });
+        }
+
         const result = await engineRef.current.process(conversation);
+
+        if (context.hookRegistry && sessionIdRef.current) {
+          await context.hookRegistry.fire("turn:after", { sessionId: sessionIdRef.current });
+        }
 
         // Persist assistant messages
         if (sessionStore && sessionIdRef.current) {
@@ -604,6 +669,12 @@ export function App({ context }: { context: CommandContext }) {
           sessionStore.updateStatus(sessionIdRef.current, "error");
         }
         const msg = err instanceof Error ? err.message : String(err);
+        if (context.hookRegistry && sessionIdRef.current) {
+          await context.hookRegistry.fire("error", {
+            sessionId: sessionIdRef.current,
+            error: err instanceof Error ? err : new Error(msg),
+          });
+        }
         setState((prev) => ({
           ...prev,
           isProcessing: false,
@@ -626,6 +697,76 @@ export function App({ context }: { context: CommandContext }) {
     : undefined;
   const isFullscreen = runtimeConfig.fullscreenRenderer !== false;
   const { columns, rows } = useTerminalDimensions();
+
+  // --- Modals rendered as full-screen replacements (Ink has no z-index) ---
+  if (deleteConfirm) {
+    return (
+      <Box
+        flexDirection="column"
+        alignItems="center"
+        justifyContent="center"
+        width={isFullscreen ? columns : undefined}
+        height={isFullscreen ? rows : undefined}
+      >
+        <Box
+          flexDirection="column"
+          borderStyle="round"
+          borderColor="red"
+          paddingX={3}
+          paddingY={1}
+          width={44}
+        >
+          <Box marginBottom={1} justifyContent="center">
+            <Text bold color="red">Delete session?</Text>
+          </Box>
+          <Box marginBottom={1} justifyContent="center">
+            <Text color="white">
+              {deleteConfirm.title.length > 34
+                ? deleteConfirm.title.slice(0, 33) + "…"
+                : deleteConfirm.title}
+            </Text>
+          </Box>
+          <Box justifyContent="center" gap={3}>
+            <Text
+              color={deleteConfirm.selectedButton === "delete" ? "white" : "gray"}
+              backgroundColor={deleteConfirm.selectedButton === "delete" ? "red" : undefined}
+              bold={deleteConfirm.selectedButton === "delete"}
+            >
+              {"  Delete  "}
+            </Text>
+            <Text
+              color={deleteConfirm.selectedButton === "cancel" ? "black" : "gray"}
+              backgroundColor={deleteConfirm.selectedButton === "cancel" ? "white" : undefined}
+              bold={deleteConfirm.selectedButton === "cancel"}
+            >
+              {"  Cancel  "}
+            </Text>
+          </Box>
+          <Box marginTop={1} justifyContent="center">
+            <Text dimColor>← → switch · Enter confirm · Esc cancel</Text>
+          </Box>
+        </Box>
+      </Box>
+    );
+  }
+
+  if (showKeybindings) {
+    return (
+      <Box
+        flexDirection="column"
+        alignItems="center"
+        justifyContent="center"
+        width={isFullscreen ? columns : undefined}
+        height={isFullscreen ? rows : undefined}
+      >
+        <KeybindingsPopup
+          onClose={() => setShowKeybindings(false)}
+          width={Math.min(columns - 4, 62)}
+        />
+      </Box>
+    );
+  }
+
   if (showSettings) {
     return (
       <Settings

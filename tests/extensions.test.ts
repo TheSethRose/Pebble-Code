@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CommandRegistry } from "../src/commands/registry";
 import type { Command } from "../src/commands/types";
+import { createHookRegistry } from "../src/runtime/hooks";
 import { loadExtensions } from "../src/extensions/loaders";
+import type { Tool } from "../src/tools/Tool";
+import { createMvpTools } from "../src/tools/orchestration";
 
 const tempDirs: string[] = [];
 
@@ -89,5 +92,88 @@ describe("Command registry extension merging", () => {
 
     expect(result.success).toBe(true);
     expect(result.output).toBe("hello from extension");
+  });
+
+  test("createMvpTools merges extension tools into the runtime toolset", async () => {
+    const dir = createTempDir("pebble-extension-tools-");
+    writeFileSync(
+      join(dir, "tool.ts"),
+      `
+export default {
+  metadata: {
+    id: "tool-plugin",
+    name: "Tool Plugin",
+    version: "1.0.0"
+  },
+  tools: [
+    {
+      name: "HelloTool",
+      description: "returns a greeting",
+      inputSchema: {
+        safeParse(input) {
+          return { success: true, data: input };
+        }
+      },
+      async execute() {
+        return { success: true, output: "hello from tool" };
+      }
+    }
+  ]
+};
+      `.trim(),
+      "utf-8",
+    );
+
+    const results = await loadExtensions([dir]);
+    const extensionTools = results.flatMap((result) => result.extension?.tools ?? []);
+    const tools = createMvpTools(extensionTools as Tool[]);
+    const helloTool = tools.find((tool) => tool.name === "HelloTool");
+
+    expect(helloTool).toBeDefined();
+    const execution = await helloTool?.execute({}, {
+      cwd: process.cwd(),
+      permissionMode: "always-ask",
+    });
+
+    expect(execution).toEqual({ success: true, output: "hello from tool" });
+  });
+
+  test("hook registry wires extension lifecycle hooks", async () => {
+    const events: string[] = [];
+    const registry = createHookRegistry([
+      {
+        metadata: {
+          id: "hooks-plugin",
+          name: "Hooks Plugin",
+          version: "1.0.0",
+        },
+        hooks: {
+          onSessionStart: async () => {
+            events.push("session:start");
+          },
+          onBeforeTurn: async () => {
+            events.push("turn:before");
+          },
+          onAfterTurn: async () => {
+            events.push("turn:after");
+          },
+          onSessionEnd: async () => {
+            events.push("session:end");
+          },
+        },
+      },
+    ]);
+
+    await registry.fire("session:start", { sessionId: "test-session" });
+    await registry.fire("turn:before", { sessionId: "test-session" });
+    await registry.fire("turn:after", { sessionId: "test-session" });
+    await registry.fire("session:end", { sessionId: "test-session" });
+
+    expect(events).toEqual([
+      "session:start",
+      "turn:before",
+      "turn:after",
+      "session:end",
+    ]);
   });
 });

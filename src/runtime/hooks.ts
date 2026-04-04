@@ -3,6 +3,8 @@
  * Post-MVP feature — interfaces defined for future implementation.
  */
 
+import type { Extension } from "../extensions/contracts.js";
+
 export type HookEvent =
   | "session:start"
   | "session:end"
@@ -61,4 +63,31 @@ export class HookRegistry {
       this.hooks.clear();
     }
   }
+}
+
+/**
+ * Build a hook registry from loaded extensions.
+ */
+export function createHookRegistry(extensions: Extension[] = []): HookRegistry {
+  const registry = new HookRegistry();
+
+  for (const extension of extensions) {
+    if (extension.hooks?.onSessionStart) {
+      registry.on("session:start", () => extension.hooks?.onSessionStart?.());
+    }
+
+    if (extension.hooks?.onSessionEnd) {
+      registry.on("session:end", () => extension.hooks?.onSessionEnd?.());
+    }
+
+    if (extension.hooks?.onBeforeTurn) {
+      registry.on("turn:before", () => extension.hooks?.onBeforeTurn?.());
+    }
+
+    if (extension.hooks?.onAfterTurn) {
+      registry.on("turn:after", () => extension.hooks?.onAfterTurn?.());
+    }
+  }
+
+  return registry;
 }

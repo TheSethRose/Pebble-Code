@@ -2,6 +2,8 @@ import React from "react";
 import { Box, Text } from "ink";
 import { TextInput } from "@inkjs/ui";
 
+const IS_MAC = process.platform === "darwin";
+
 export interface CommandSuggestion {
   name: string;
   description: string;
@@ -96,7 +98,7 @@ export function PromptInput({
           {!isProcessing ? " · Enter submits · Tab ⇄ sessions" : ""}
         </Text>
         <Text dimColor>
-          {model} · {sessionLabel} · /help
+          {model} · {sessionLabel} · {IS_MAC ? "⌘" : "Ctrl"}+P help
         </Text>
       </Box>
     </Box>
