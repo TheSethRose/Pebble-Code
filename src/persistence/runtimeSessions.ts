@@ -24,6 +24,32 @@ export function createOrResumeSession(
   return store.getLatestSession() ?? store.createSession();
 }
 
+export function compactSessionIfNeeded(
+  store: SessionStore,
+  sessionId: string,
+  compactThreshold?: number,
+): SessionTranscript | null {
+  if (!compactThreshold || compactThreshold <= 0) {
+    return store.loadTranscript(sessionId);
+  }
+
+  const transcript = store.loadTranscript(sessionId);
+  if (!transcript) {
+    return null;
+  }
+
+  if (estimateTokens(transcript.messages) < compactThreshold) {
+    return transcript;
+  }
+
+  return store.replaceMessages(sessionId, compactTranscript(transcript.messages), {
+    compactionCount: Number(transcript.metadata?.compactionCount ?? 0) + 1,
+    lastCompactedAt: new Date().toISOString(),
+    previousMessageCount: transcript.messages.length,
+    compactThreshold,
+  });
+}
+
 export function transcriptToConversation(
   transcript: SessionTranscript,
   compactThreshold?: number,

@@ -225,7 +225,7 @@ async function verifyBundledCli(): Promise<void> {
     throw new Error(`--features output missing enabled-features summary: ${featuresOutput}`);
   }
 
-  const headlessSuccess = runBundledCli("--headless", "--prompt", "health check");
+  const headlessSuccess = runBundledCli("--headless", "--format", "json", "--prompt", "health check");
   const headlessSuccessStdout = stdoutOf(headlessSuccess).trim();
   if (headlessSuccess.exitCode !== 0) {
     throw new Error(`--headless --prompt exited with ${headlessSuccess.exitCode}: ${outputOf(headlessSuccess)}`);
@@ -233,15 +233,17 @@ async function verifyBundledCli(): Promise<void> {
 
   const headlessResult = JSON.parse(headlessSuccessStdout) as {
     status: string;
-    success: boolean;
-    messages?: Array<{ role: string; content: string }>;
+    data?: {
+      success?: boolean;
+      messages?: Array<{ role: string; content: string }>;
+    };
   };
 
-  if (!headlessResult.success || headlessResult.status !== "success") {
+  if (!headlessResult.data?.success || headlessResult.status !== "success") {
     throw new Error(`Headless bundled execution did not report success: ${headlessSuccessStdout}`);
   }
 
-  if (!headlessResult.messages?.some((message) => message.role === "assistant")) {
+  if (!headlessResult.data.messages?.some((message) => message.role === "assistant")) {
     throw new Error(`Headless bundled execution did not include an assistant response: ${headlessSuccessStdout}`);
   }
 

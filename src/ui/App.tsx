@@ -24,6 +24,7 @@ import { WelcomeHeader } from "./components/WelcomeHeader.js";
 import { TranscriptView } from "./components/TranscriptView.js";
 import { SessionSidebar, deriveSessionTitle } from "./components/SessionSidebar.js";
 import type { SessionSummary } from "./components/SessionSidebar.js";
+import { KeybindingsPopup } from "./components/KeybindingsPopup.js";
 import { Settings } from "./Settings.js";
 import type { TabId } from "./Settings.js";
 
@@ -95,6 +96,12 @@ export function App({ context }: { context: CommandContext }) {
   const [sidebarIndex, setSidebarIndex] = React.useState(0);
   const [inputHistory, setInputHistory] = React.useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = React.useState(-1);
+  const [showKeybindings, setShowKeybindings] = React.useState(false);
+  const [deleteConfirm, setDeleteConfirm] = React.useState<{
+    sessionId: string;
+    title: string;
+    selectedButton: "delete" | "cancel";
+  } | null>(null);
 
   const engineRef = React.useRef<QueryEngine | null>(null);
   const sessionIdRef = React.useRef<string | null>(null);
@@ -148,6 +155,30 @@ export function App({ context }: { context: CommandContext }) {
         error: null,
         statusText: "",
       }));
+    },
+    [sessionStore, refreshSessions],
+  );
+
+  const handleDeleteSession = React.useCallback(
+    (sessionId: string) => {
+      if (!sessionStore) return;
+      sessionStore.deleteSession(sessionId);
+
+      // If we deleted the active session, reset to new chat
+      if (sessionIdRef.current === sessionId) {
+        sessionIdRef.current = null;
+        setState({ ...INITIAL_STATE });
+      }
+
+      refreshSessions();
+
+      // If no sessions remain, ensure we're on a new chat
+      const remaining = sessionStore.listSessions();
+      if (remaining.length === 0) {
+        sessionIdRef.current = null;
+        setState({ ...INITIAL_STATE });
+        setSidebarIndex(0);
+      }
     },
     [sessionStore, refreshSessions],
   );

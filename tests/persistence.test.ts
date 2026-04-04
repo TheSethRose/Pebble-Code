@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { SessionStore } from "../src/persistence/sessionStore";
 import { compactTranscript, estimateTokens, TokenTracker } from "../src/persistence/compaction";
 import { buildSessionMemory, isSessionMemoryStale } from "../src/persistence/memory";
+import { compactSessionIfNeeded } from "../src/persistence/runtimeSessions";
 
 describe("Session Store", () => {
   let store: SessionStore;
@@ -167,6 +168,31 @@ describe("Compaction", () => {
     ];
     const tokens = estimateTokens(messages);
     expect(tokens).toBe(3); // "Hello world" = 11 chars / 4 ≈ 3
+  });
+
+  test("persists automatic compaction metadata when a session crosses the threshold", () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), "pebble-test-sessions-"));
+    const store = new SessionStore(sessionsDir);
+
+    try {
+      const session = store.createSession("compact-runtime-test");
+      for (let index = 0; index < 30; index += 1) {
+        store.appendMessage(session.id, {
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `Message ${index}`,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const compacted = compactSessionIfNeeded(store, session.id, 1);
+      expect(compacted).not.toBeNull();
+      expect(compacted!.messages.length).toBeLessThan(30);
+      expect(compacted!.messages.some((message) => message.content.startsWith("[Summary of"))).toBe(true);
+      expect(compacted!.metadata?.compactionCount).toBe(1);
+      expect(compacted!.metadata?.compactThreshold).toBe(1);
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+    }
   });
 });
 

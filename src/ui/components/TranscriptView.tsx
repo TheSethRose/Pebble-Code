@@ -6,11 +6,9 @@ import { MessageItem } from "./MessageItem.js";
 
 interface TranscriptViewProps {
   messages: DisplayMessage[];
-  isProcessing: boolean;
-  statusText: string;
 }
 
-export function TranscriptView({ messages, isProcessing, statusText }: TranscriptViewProps) {
+export function TranscriptView({ messages }: TranscriptViewProps) {
   const overflow = messages.length > VISIBLE_MESSAGE_COUNT;
   const visible = overflow ? messages.slice(-VISIBLE_MESSAGE_COUNT) : messages;
 
@@ -30,12 +28,6 @@ export function TranscriptView({ messages, isProcessing, statusText }: Transcrip
           message={msg}
         />
       ))}
-
-      {isProcessing && statusText && (
-        <Box paddingLeft={2} marginBottom={1}>
-          <Text color="yellow">{statusText}</Text>
-        </Box>
-      )}
     </Box>
   );
 }

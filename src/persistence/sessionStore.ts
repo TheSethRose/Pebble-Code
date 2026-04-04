@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { SessionMemory } from "./memory.js";
 
@@ -177,6 +177,40 @@ export class SessionStore {
     transcript.updatedAt = new Date().toISOString();
     this.saveTranscript(transcript);
     return transcript;
+  }
+
+  replaceMessages(
+    sessionId: string,
+    messages: TranscriptMessage[],
+    metadata?: Record<string, unknown>,
+  ): SessionTranscript {
+    const transcript = this.loadTranscript(sessionId);
+    if (!transcript) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    transcript.messages = [...messages];
+    transcript.updatedAt = new Date().toISOString();
+    if (metadata) {
+      transcript.metadata = {
+        ...(transcript.metadata ?? {}),
+        ...metadata,
+      };
+    }
+
+    this.saveTranscript(transcript);
+    return transcript;
+  }
+
+  /**
+   * Delete a session by ID.
+   * Returns true if the file existed and was removed.
+   */
+  deleteSession(sessionId: string): boolean {
+    const path = this.getSessionPath(sessionId);
+    if (!existsSync(path)) return false;
+    unlinkSync(path);
+    return true;
   }
 
   private saveTranscript(transcript: SessionTranscript): void {

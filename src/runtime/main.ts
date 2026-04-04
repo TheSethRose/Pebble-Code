@@ -11,11 +11,22 @@ import { getFeatureSummary, isFeatureEnabled } from "../build/featureFlags.js";
 import { buildRuntimeConfig } from "./config.js";
 import { PermissionManager } from "./permissionManager.js";
 import { loadRepositoryInstructions, formatInstructions } from "./instructions.js";
-import { createProjectSessionStore, createOrResumeSession, transcriptToConversation, engineMessageToTranscriptMessage } from "../persistence/runtimeSessions.js";
+import { createProjectSessionStore, createOrResumeSession, compactSessionIfNeeded, transcriptToConversation, engineMessageToTranscriptMessage } from "../persistence/runtimeSessions.js";
 import { getSettingsPath } from "./config.js";
 import { resolveProviderConfig } from "../providers/config.js";
 import { getDefaultExtensionDirs, loadExtensions, reportExtensionStatus } from "../extensions/loaders.js";
 import type { Command } from "../commands/types.js";
+import type { Message, StreamEvent, EngineState } from "../engine/types.js";
+import {
+  createInitEvent,
+  createPermissionDenialEvent,
+  createResultEnvelope,
+  createStreamEvent,
+  createUserReplayEvent,
+  serializeSdkEvent,
+} from "../engine/sdkProtocol.js";
+
+export type HeadlessFormat = "text" | "json" | "json-stream";
 
 export interface RuntimeOptions {
   /** Run in headless/print mode */
@@ -30,6 +41,8 @@ export interface RuntimeOptions {
   model?: string;
   /** Provider to use */
   provider?: string;
+  /** Headless output format */
+  format?: string;
   /** Abort signal */
   signal?: AbortSignal;
 }
@@ -93,8 +106,11 @@ async function runHeadless(
     return 1;
   }
 
+  const format = normalizeHeadlessFormat(options.format);
+
   console.error("Headless mode: processing prompt...");
   console.error(`Permission mode: ${config.settings.permissionMode}`);
+  console.error(`Output format: ${format}`);
   console.error(`Instructions: ${instructions ? "loaded" : "none"}`);
   if (extensionCommandNames.length > 0) {
     console.error(`Extension commands available: ${extensionCommandNames.join(", ")}`);
@@ -115,6 +131,18 @@ async function runHeadless(
   const session = createOrResumeSession(sessionStore, options.resume);
 
   const systemPrompt = instructions || undefined;
+  const emitSdkEvent = (
+    event:
+      | ReturnType<typeof createInitEvent>
+      | ReturnType<typeof createUserReplayEvent>
+      | ReturnType<typeof createStreamEvent>
+      | ReturnType<typeof createPermissionDenialEvent>
+      | ReturnType<typeof createResultEnvelope>,
+  ) => {
+    if (format === "json-stream") {
+      console.log(serializeSdkEvent(event));
+    }
+  };
 
   try {
     if (options.prompt) {
@@ -125,8 +153,15 @@ async function runHeadless(
       });
     }
 
-    const inputTranscript = sessionStore.loadTranscript(session.id) ?? session;
+    const inputTranscript = compactSessionIfNeeded(
+      sessionStore,
+      session.id,
+      config.settings.compactThreshold,
+    ) ?? sessionStore.loadTranscript(session.id) ?? session;
     const conversation = transcriptToConversation(inputTranscript, config.settings.compactThreshold);
+
+    emitSdkEvent(createInitEvent(session.id, provider.model, provider.name, config.cwd));
+    emitSdkEvent(createUserReplayEvent(options.prompt));
 
     const result = await query(
       conversation,
@@ -138,6 +173,7 @@ async function runHeadless(
         signal: options.signal,
         permissionManager,
         cwd: config.cwd,
+        onEvent: (event: StreamEvent) => emitHeadlessStreamEvent(event, emitSdkEvent),
       },
     );
 
@@ -149,31 +185,56 @@ async function runHeadless(
       }
     }
 
+    const compactedTranscript = compactSessionIfNeeded(
+      sessionStore,
+      session.id,
+      config.settings.compactThreshold,
+    );
+
     sessionStore.updateStatus(session.id, result.success ? "completed" : result.state === "interrupted" ? "interrupted" : "error");
 
-    // Output structured result for headless callers
-    const output = {
-      type: "result",
-      status: result.state,
-      success: result.success,
-      message: result.success ? "Query completed successfully" : result.error,
-      sessionId: session.id,
-      usage: result.usage,
-      messages: result.messages,
-    };
+    if (format === "json-stream") {
+      emitAssistantReplayEvents(newMessages, emitSdkEvent);
+      emitSdkEvent(
+        createResultEnvelope(
+          mapEngineStateToResultStatus(result.state),
+          result.success ? "Query completed successfully" : result.error ?? "Query failed",
+          session.id,
+          {
+            success: result.success,
+            usage: result.usage,
+            messageCount: compactedTranscript?.messages.length ?? result.messages.length,
+          },
+        ),
+      );
+    } else if (format === "json") {
+      console.log(JSON.stringify(createResultEnvelope(
+        mapEngineStateToResultStatus(result.state),
+        result.success ? "Query completed successfully" : result.error ?? "Query failed",
+        session.id,
+        {
+          success: result.success,
+          usage: result.usage,
+          messages: result.messages,
+        },
+      )));
+    } else {
+      printHeadlessTextOutput(newMessages, result.error);
+    }
 
-    console.log(JSON.stringify(output, null, 2));
     return result.success ? 0 : 1;
   } catch (error) {
     sessionStore.updateStatus(session.id, "error");
-    const errorOutput = {
-      type: "result",
-      status: "error",
-      success: false,
-      message: error instanceof Error ? error.message : String(error),
-      sessionId: session.id,
-    };
-    console.error(JSON.stringify(errorOutput, null, 2));
+
+    const message = error instanceof Error ? error.message : String(error);
+    if (format === "json-stream") {
+      emitSdkEvent(createResultEnvelope("error", message, session.id));
+    } else if (format === "json") {
+      console.log(JSON.stringify(createResultEnvelope("error", message, session.id)));
+    } else {
+      console.error(message);
+    }
+
     return 1;
   }
 }
@@ -223,4 +284,75 @@ async function runInteractive(
   };
 
   return startREPL(context);
+}
+
+function normalizeHeadlessFormat(format?: string): HeadlessFormat {
+  if (format === "json" || format === "json-stream") {
+    return format;
+  }
+
+  return "text";
+}
+
+function emitHeadlessStreamEvent(
+  event: StreamEvent,
+  emitSdkEvent: (
+    event:
+      | ReturnType<typeof createInitEvent>
+      | ReturnType<typeof createUserReplayEvent>
+      | ReturnType<typeof createStreamEvent>
+      | ReturnType<typeof createPermissionDenialEvent>
+      | ReturnType<typeof createResultEnvelope>,
+  ) => void,
+): void {
+  if (event.type === "permission_denied") {
+    const data = (event.data ?? {}) as { tool?: string; reason?: string };
+    emitSdkEvent(createPermissionDenialEvent(data.tool ?? "unknown", data.reason ?? "Permission denied"));
+    return;
+  }
+
+  emitSdkEvent(createStreamEvent(event.type, event.data));
+}
+
+function emitAssistantReplayEvents(
+  messages: Message[],
+  emitSdkEvent: (
+    event:
+      | ReturnType<typeof createInitEvent>
+      | ReturnType<typeof createUserReplayEvent>
+      | ReturnType<typeof createStreamEvent>
+      | ReturnType<typeof createPermissionDenialEvent>
+      | ReturnType<typeof createResultEnvelope>,
+  ) => void,
+): void {
+  for (const message of messages) {
+    if (message.role === "assistant" && message.content.trim().length > 0) {
+      emitSdkEvent(createStreamEvent("text_delta", { delta: message.content }));
+    }
+  }
+}
+
+function mapEngineStateToResultStatus(state: EngineState): "success" | "error" | "interrupted" | "max_turns" | "not_implemented" {
+  if (state === "success") return "success";
+  if (state === "interrupted") return "interrupted";
+  if (state === "max_turns_reached") return "max_turns";
+  if (state === "error") return "error";
+  return "not_implemented";
+}
+
+function printHeadlessTextOutput(messages: Message[], error?: string): void {
+  const assistantText = messages
+    .filter((message) => message.role === "assistant" && message.content.trim().length > 0)
+    .map((message) => message.content.trim())
+    .join("\n\n")
+    .trim();
+
+  if (assistantText.length > 0) {
+    console.log(assistantText);
+    return;
+  }
+
+  if (error) {
+    console.log(error);
+  }
 }

@@ -1,47 +1,64 @@
 import React from "react";
 import { Box, Text } from "ink";
-import { PebbleMascot, type PebbleMood } from "./PebbleMascot.js";
+
+export const PEBBLE_ASCII_LOGO_LINES = [
+  "██████╗ ███████╗██████╗ ██████╗ ██╗     ███████╗",
+  "██╔══██╗██╔════╝██╔══██╗██╔══██╗██║     ██╔════╝",
+  "██████╔╝█████╗  ██████╔╝██████╔╝██║     █████╗  ",
+  "██╔═══╝ ██╔══╝  ██╔══██╗██╔══██╗██║     ██╔══╝  ",
+  "██║     ███████╗██████╔╝██████╔╝███████╗███████╗",
+  "╚═╝     ╚══════╝╚═════╝ ╚═════╝ ╚══════╝╚══════╝",
+] as const;
+
+const LOGO_WIDTH = Math.max(...PEBBLE_ASCII_LOGO_LINES.map((line) => line.length));
+
+export function truncateMiddle(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  if (maxLength <= 3) {
+    return value.slice(0, maxLength);
+  }
+
+  const visible = maxLength - 1;
+  const left = Math.ceil(visible / 2);
+  const right = Math.floor(visible / 2);
+  return `${value.slice(0, left)}…${value.slice(-right)}`;
+}
 
 interface WelcomeHeaderProps {
   cwd: string;
   model: string;
   providerLabel?: string;
   sessionId: string | null;
-  mascotMood: PebbleMood;
   width?: number;
 }
 
 /**
- * Shown only when the conversation is empty (no messages yet).
- * Mirrors the reference's LogoV2 in intent: project context + quick-start hint.
+ * Persistent top header for the Pebble TUI.
+ * Shows the ASCII logo with metadata beneath.
  */
-export function WelcomeHeader({ cwd, model, providerLabel, sessionId, mascotMood, width = 80 }: WelcomeHeaderProps) {
+export function WelcomeHeader({ cwd, model, providerLabel, sessionId, width = 80 }: WelcomeHeaderProps) {
   const sessionLabel = sessionId ? `session ${sessionId.slice(0, 8)}` : "new session";
   const modelLine = providerLabel ? `${model} · ${providerLabel}` : model;
-  const cardWidth = Math.max(40, width - 2);
+  const metadataLine = `${modelLine} • ${sessionLabel}`;
+  const cwdLine = truncateMiddle(cwd, Math.max(28, width - 4));
 
   return (
-    <Box flexDirection="column" marginBottom={1}>
+    <Box flexDirection="column" marginTop={2} marginBottom={1}>
+      <Box flexDirection="column">
+        <Box flexDirection="column" marginBottom={1}>
+          {PEBBLE_ASCII_LOGO_LINES.map((line, index) => (
+            <Text key={`pebble-logo-${index}`} color="green" bold>
+              {line}
+            </Text>
+          ))}
+        </Box>
 
-
-      <Box
-        borderStyle="round"
-        borderColor="green"
-        paddingX={2}
-        paddingY={1}
-        width={cardWidth}
-        flexDirection="column"
-      >
-        <Box flexDirection="column" alignItems="center">
-          <Text bold>Welcome to Pebble Code</Text>
-
-          <Box marginY={1}>
-            <PebbleMascot mood={mascotMood} color="green" />
-          </Box>
-
-          <Text dimColor>{modelLine}</Text>
-          <Text dimColor>{sessionLabel}</Text>
-          <Text dimColor>{cwd}</Text>
+        <Box paddingLeft={1} flexDirection="column">
+          <Text dimColor>{metadataLine}</Text>
+          <Text dimColor>{cwdLine}</Text>
         </Box>
       </Box>
 

@@ -123,8 +123,8 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] engine emits stream events during execution
 - [x] engine integrates with permission checks before risky tool use
 - [x] query wrappers exist in `src/engine/query.ts`
-- [ ] headless/runtime use the full SDK/event contract promised in docs
-- [ ] engine recovery/compaction behavior is wired into long sessions
+- [x] headless/runtime use the full SDK/event contract promised in docs
+- [x] engine recovery/compaction behavior is wired into long sessions
 - [ ] engine behavior is covered by integration tests instead of just helper/unit tests
 
 ## Entrypoints
@@ -137,7 +137,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] headless path starts the runtime
 - [x] `--resume` is actually wired into a resume flow
 - [ ] SDK-specific entrypoint/runtime surface exists beyond the basic CLI path
-- [ ] entrypoint behavior is covered by smoke tests
+- [x] entrypoint behavior is covered by smoke tests
 
 ## Extensions
 
@@ -165,7 +165,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] runtime can continue the most recent session
 - [x] runtime can resume a session by ID
 - [ ] runtime exposes memory loading/injection beyond placeholders
-- [ ] compaction is automatically triggered in long conversations
+- [x] compaction is automatically triggered in long conversations
 
 ## Providers
 
@@ -239,11 +239,11 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] persistence helpers have unit tests
 - [x] trust/permission helpers have unit tests
 - [x] current tests pass
-- [ ] build success is covered by tests or CI-like verification
-- [ ] headless mode has end-to-end tests
+- [x] build success is covered by tests or CI-like verification
+- [x] headless mode has end-to-end tests
 - [ ] REPL has integration/smoke tests
 - [ ] provider failure/fallback paths have tests
-- [ ] extension loading/isolation has tests
+- [x] extension loading/isolation has tests
 - [ ] engine/tool flows have end-to-end tests
 
 ---

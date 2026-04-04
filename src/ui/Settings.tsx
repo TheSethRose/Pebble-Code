@@ -193,6 +193,7 @@ function ProviderTab({
         return;
       }
       const provider = normalizeProviderId(value);
+      if (provider === settings.provider) return;
       const next = ensureProviderDefaults({ ...settings, provider });
       onSave(next);
       setMessage(`Provider set to ${provider}`);
@@ -347,6 +348,7 @@ function ModelTab({
         setShowManual(true);
         return;
       }
+      if (value === settings.model) return;
       const next = ensureProviderDefaults({ ...settings, model: value });
       onSave(next);
       setMessage(`Model set to ${value}`);

@@ -58,6 +58,7 @@ const runtimeOptions = {
   resume: getFlagValue(args, "--resume"),
   model: getFlagValue(args, "--model"),
   provider: getFlagValue(args, "--provider"),
+  format: getFlagValue(args, "--format"),
   cwd: getFlagValue(args, "--cwd") ?? process.cwd(),
 };
 
@@ -102,6 +103,7 @@ RUNTIME OPTIONS
   --resume <id>       Resume a previous session
   --model <name>      Override the model to use
   --provider <name>   Override the provider to use
+  --format <type>     Headless output format: text, json, or json-stream
   --cwd <path>        Set the working directory
 
 SLASH COMMANDS (interactive mode)
@@ -119,6 +121,7 @@ SLASH COMMANDS (interactive mode)
 EXAMPLES
   pebble                          # Start interactive REPL
   pebble --headless --prompt "fix the bug in src/index.ts"
+  pebble --headless --format json-stream --prompt "summarize README.md"
   pebble --resume abc123
   pebble --model claude-sonnet-4-20250514
   pebble --provider openrouter
