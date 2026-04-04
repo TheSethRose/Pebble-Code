@@ -134,7 +134,7 @@ export function getProviderNotConfiguredMessage(
   config: ResolvedProviderConfig,
 ): string {
   if (!config.implemented) {
-    return `${config.providerLabel} is cataloged in Pebble, but its built-in runtime path is not implemented yet. ${config.help ?? "See docs/PROVIDERS.md for the required auth and transport details."}`;
+    return `${config.providerLabel} is cataloged in Pebble, but its built-in runtime path is not implemented yet. ${config.help ?? "See private/PROVIDERS.md for the required auth and transport details."}`;
   }
 
   const hints: string[] = [];

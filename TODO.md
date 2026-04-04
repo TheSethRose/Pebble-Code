@@ -192,8 +192,8 @@ But the current repo is still **far from reference breadth**, especially in:
 
 ### Provider coverage backlog
 
-Source-backed inventory and implementation notes live in `docs/PROVIDERS.md`.
-Every provider task below should check `docs/PROVIDERS.md` first for auth type, env/config inputs, model refs, routing quirks, and Pebble-specific implementation guidance.
+Source-backed inventory and implementation notes live in `private/PROVIDERS.md`.
+Every provider task below should check `private/PROVIDERS.md` first for auth type, env/config inputs, model refs, routing quirks, and Pebble-specific implementation guidance.
 
 Checked items below mean Pebble now has real config/runtime wiring for that provider path and regression coverage around selection/config behavior. Most of them still need **live credential smoke tests** before we should claim production-hardened support, and cataloged-but-unimplemented providers intentionally stay unchecked.
 
@@ -269,11 +269,11 @@ Checked items below mean Pebble now has real config/runtime wiring for that prov
 
 #### Cross-cutting provider work
 
-- [x] implement per-provider config/env resolution for every provider listed in `docs/PROVIDERS.md`
-- [x] implement provider bootstrap and runtime selection for every provider listed in `docs/PROVIDERS.md`
-- [ ] implement streaming and non-streaming execution coverage for every provider listed in `docs/PROVIDERS.md`
-- [ ] implement actionable failure handling and fallback behavior for every provider listed in `docs/PROVIDERS.md`
-- [ ] add provider-specific tests for every provider listed in `docs/PROVIDERS.md`
+- [x] implement per-provider config/env resolution for every provider listed in `private/PROVIDERS.md`
+- [x] implement provider bootstrap and runtime selection for every provider listed in `private/PROVIDERS.md`
+- [ ] implement streaming and non-streaming execution coverage for every provider listed in `private/PROVIDERS.md`
+- [ ] implement actionable failure handling and fallback behavior for every provider listed in `private/PROVIDERS.md`
+- [ ] add provider-specific tests for every provider listed in `private/PROVIDERS.md`
 
 ## Runtime
 

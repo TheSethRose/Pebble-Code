@@ -283,6 +283,23 @@ describe("TranscriptView", () => {
     expect(dimSegments.find((segment) => segment.text.includes("○"))?.color).toBe("gray");
   });
 
+  test("only unresolved tool calls blink while completed tool groups stay settled", () => {
+    const messages = [
+      createMessage("tool", "WorkspaceEdit", { toolName: "WorkspaceEdit", toolArgs: { path: "test.md" } }),
+      createMessage("tool_result", "WorkspaceEdit done", { toolName: "WorkspaceEdit", toolOutput: "done" }),
+      createMessage("tool", "WorkspaceRead", { toolName: "WorkspaceRead", toolArgs: { path: "test.md" } }),
+    ];
+
+    const liveRows = collectRenderedRows(TranscriptView({ messages, width: 80, isProcessing: true, blinkPhase: true }));
+    const dimRows = collectRenderedRows(TranscriptView({ messages, width: 80, isProcessing: true, blinkPhase: false }));
+
+    expect(liveRows.some((row) => row.includes("● WorkspaceEdit"))).toBe(true);
+    expect(liveRows.some((row) => row.includes("● WorkspaceRead"))).toBe(true);
+    expect(dimRows.some((row) => row.includes("● WorkspaceEdit"))).toBe(true);
+    expect(dimRows.some((row) => row.includes("○ WorkspaceEdit"))).toBe(false);
+    expect(dimRows.some((row) => row.includes("○ WorkspaceRead"))).toBe(true);
+  });
+
   test("renders tool result states with dot indicators instead of checkmarks", () => {
     const successSegments = collectTextSegments(TranscriptView({
       messages: [createMessage("tool_result", "Bash done", { toolName: "Bash", toolOutput: "ok" })],

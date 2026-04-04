@@ -56,7 +56,7 @@ repomix.config.*
 .repomixignore
 
 # Misc
-docs/
+private/
 TODO.md
 task_plan.md
 findings.md

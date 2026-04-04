@@ -1,2 +1,2 @@
 [test]
-pathIgnorePatterns = ["docs/context/**", "dist-debug/**"]
+pathIgnorePatterns = ["private/context/**", "dist-debug/**"]

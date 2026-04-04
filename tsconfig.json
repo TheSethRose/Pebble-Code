@@ -34,7 +34,7 @@
     "scripts/**/*.ts"
   ],
   "exclude": [
-    "docs/context/**",
+    "private/context/**",
     "dist",
     "dist-debug",
     "node_modules"

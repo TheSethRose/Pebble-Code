@@ -202,7 +202,7 @@ src/
   tools/        # Tool contracts, registries, and built-in implementations
   ui/           # Ink app state, settings, and terminal components
 tests/          # Subsystem-oriented tests (build, runtime, tools, UI, entrypoints)
-docs/           # Architecture, PRD, and reference documentation
+private/        # Internal architecture, PRD, reference docs, and imported context snapshots
 scripts/        # Build and automation helpers
 ```
 
@@ -218,10 +218,10 @@ scripts/        # Build and automation helpers
 
 Pebble now includes a small documentation-suite spine so the repo stays easier to navigate and maintain over time.
 
-- [`docs/DOCS_DIRECTORY.md`](docs/DOCS_DIRECTORY.md) — curated starting points for the most-used docs
-- [`docs/DOCS_HUB.md`](docs/DOCS_HUB.md) — exhaustive map of the Markdown docs suite
-- [`docs/DOCS_MAINTENANCE.md`](docs/DOCS_MAINTENANCE.md) — canonical ownership and update triggers for self-documenting maintenance
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/CODEBASE_TREE.md`](docs/CODEBASE_TREE.md) — the main system and structure references
+- [`private/DOCS_DIRECTORY.md`](private/DOCS_DIRECTORY.md) — curated starting points for the most-used docs
+- [`private/DOCS_HUB.md`](private/DOCS_HUB.md) — exhaustive map of the Markdown docs suite
+- [`private/DOCS_MAINTENANCE.md`](private/DOCS_MAINTENANCE.md) — canonical ownership and update triggers for self-documenting maintenance
+- [`private/ARCHITECTURE.md`](private/ARCHITECTURE.md) and [`private/CODEBASE_TREE.md`](private/CODEBASE_TREE.md) — the main system and structure references
 
 ### Extensibility
 

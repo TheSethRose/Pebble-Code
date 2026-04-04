@@ -40,7 +40,7 @@ const GIT_COMMIT_PATTERN = /\bgit\s+commit\b/i;
 const GIT_PUSH_PATTERN = /\bgit\s+push\b/i;
 const PROVIDER_SENSITIVE_PATH_PREFIXES = [
   "TODO.md",
-  "docs/PROVIDERS.md",
+  "private/PROVIDERS.md",
   "src/providers/",
   "src/runtime/config.ts",
 ];

@@ -170,7 +170,9 @@ function buildTranscriptRows(
     }
 
     if (group.type === "tool-group") {
-      rows.push(...messageToRows(group.call, width, `${group.key}:call`, {}, blinkPhase));
+      rows.push(...messageToRows(group.call, width, `${group.key}:call`, {
+        toolResolved: Boolean(group.result),
+      }, blinkPhase));
       if (group.result) {
         rows.push(...messageToRows(group.result, width, `${group.key}:result`, {
           collapseDetails: !isProcessing && !group.result.meta?.isError,
@@ -269,7 +271,7 @@ function messageToRows(
   message: DisplayMessage,
   width: number,
   keyBase: string,
-  options: { collapseDetails?: boolean } = {},
+  options: { collapseDetails?: boolean; toolResolved?: boolean } = {},
   blinkPhase = true,
 ): TranscriptRow[] {
   const meta = message.meta;
@@ -321,15 +323,23 @@ function messageToRows(
     case "tool": {
       const toolName = meta?.toolName ?? message.content;
       const header = compactParts([toolName, summarizeToolArgs(meta?.toolArgs, 60)]);
+      const toolResolved = options.toolResolved === true;
+      const marker = `${getStatusDot(toolResolved ? "complete" : "tool-running", blinkPhase)} `;
+      const toolColor = toolResolved ? "#888888" : "yellow";
       pushWrappedRows(
         rows,
         keyBase,
-        `${getStatusDot("tool-running", blinkPhase)} `,
+        marker,
         "  ",
         header || toolName,
         width,
-        { color: "yellow", bold: true },
-        { prefixStyle: { color: blinkPhase ? "yellow" : "gray", bold: true } },
+        { color: toolColor, bold: true },
+        {
+          prefixStyle: {
+            color: toolResolved ? "#888888" : (blinkPhase ? "yellow" : "gray"),
+            bold: true,
+          },
+        },
       );
 
       const aliasLine = meta?.requestedToolName && meta.requestedToolName !== toolName
