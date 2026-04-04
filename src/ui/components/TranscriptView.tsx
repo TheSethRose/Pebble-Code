@@ -60,6 +60,17 @@ interface StyledLine {
 
 type TableAlignment = "left" | "center" | "right";
 
+interface LinkTokenMatchGroups {
+  markdownLabel?: string;
+  markdownHref?: string;
+  autoHref?: string;
+  boldAsterisk?: string;
+  boldUnderscore?: string;
+  code?: string;
+  italicAsterisk?: string;
+  italicUnderscore?: string;
+}
+
 /**
  * Deterministic line-virtualized transcript viewport.
  *
@@ -406,7 +417,10 @@ function pushWrappedRows(
     : renderPlainLines(text, style);
 
   sourceLines.forEach((sourceLine, lineIndex) => {
-    const wrapped = wrapStyledLine(sourceLine.spans, lineIndex === 0 ? firstLineWidth : nextLineWidth);
+    const targetWidth = lineIndex === 0 ? firstLineWidth : nextLineWidth;
+    const wrapped = spansWidth(sourceLine.spans) <= targetWidth
+      ? [sourceLine.spans]
+      : wrapStyledLine(sourceLine.spans, targetWidth);
     wrapped.forEach((segment, segmentIndex) => {
       const isFirstRenderedLine = lineIndex === 0 && segmentIndex === 0;
       rows.push({
@@ -447,31 +461,56 @@ function renderMarkdownLines(text: string, style: RowStyle, maxWidth = Number.PO
       continue;
     }
 
+    const ruleLine = renderMarkdownRule(sourceLine, style, maxWidth);
+    if (ruleLine) {
+      rendered.push(ruleLine);
+      continue;
+    }
+
+    const quoteLines = renderMarkdownQuote(sourceLine, style, maxWidth);
+    if (quoteLines) {
+      rendered.push(...quoteLines);
+      continue;
+    }
+
     const headingMatch = sourceLine.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
     if (headingMatch) {
       rendered.push({ spans: parseInlineMarkdown(headingMatch[2] ?? "", { ...style, bold: true }) });
       continue;
     }
 
+    const taskListMatch = sourceLine.match(/^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$/);
+    if (taskListMatch) {
+      const checked = (taskListMatch[2] ?? " ").toLowerCase() === "x";
+      rendered.push(...renderPrefixedMarkdownLines(
+        [createSpan(`${taskListMatch[1] ?? ""}${checked ? "☑" : "☐"} `, checked ? { ...style, color: style.color ?? "green", bold: true } : { ...style, color: style.color ?? "gray" })],
+        parseInlineMarkdown(taskListMatch[3] ?? "", style),
+        maxWidth,
+        [createSpan(`${taskListMatch[1] ?? ""}  `, style)],
+      ));
+      continue;
+    }
+
     const bulletMatch = sourceLine.match(/^(\s*)[-*+]\s+(.*)$/);
     if (bulletMatch) {
-      rendered.push({
-        spans: [
-          createSpan(`${bulletMatch[1] ?? ""}• `, style),
-          ...parseInlineMarkdown(bulletMatch[2] ?? "", style),
-        ],
-      });
+      rendered.push(...renderPrefixedMarkdownLines(
+        [createSpan(`${bulletMatch[1] ?? ""}• `, style)],
+        parseInlineMarkdown(bulletMatch[2] ?? "", style),
+        maxWidth,
+        [createSpan(`${bulletMatch[1] ?? ""}  `, style)],
+      ));
       continue;
     }
 
     const orderedMatch = sourceLine.match(/^(\s*)(\d+)\.\s+(.*)$/);
     if (orderedMatch) {
-      rendered.push({
-        spans: [
-          createSpan(`${orderedMatch[1] ?? ""}${orderedMatch[2] ?? "1"}. `, style),
-          ...parseInlineMarkdown(orderedMatch[3] ?? "", style),
-        ],
-      });
+      const orderedPrefix = `${orderedMatch[1] ?? ""}${orderedMatch[2] ?? "1"}. `;
+      rendered.push(...renderPrefixedMarkdownLines(
+        [createSpan(orderedPrefix, style)],
+        parseInlineMarkdown(orderedMatch[3] ?? "", style),
+        maxWidth,
+        [createSpan(" ".repeat(stringWidth(orderedPrefix)), style)],
+      ));
       continue;
     }
 
@@ -479,6 +518,55 @@ function renderMarkdownLines(text: string, style: RowStyle, maxWidth = Number.PO
   }
 
   return rendered.length > 0 ? rendered : [{ spans: [createSpan("", style)] }];
+}
+
+function renderMarkdownRule(sourceLine: string, style: RowStyle, maxWidth: number): StyledLine | null {
+  if (!/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(sourceLine)) {
+    return null;
+  }
+
+  const ruleWidth = Math.max(8, Number.isFinite(maxWidth) ? maxWidth : 24);
+  return {
+    spans: [createSpan("─".repeat(ruleWidth), { color: style.color ?? "gray", dimColor: true })],
+  };
+}
+
+function renderMarkdownQuote(sourceLine: string, style: RowStyle, maxWidth: number): StyledLine[] | null {
+  const quoteMatch = sourceLine.match(/^(\s*)(>\s?)+(.*)$/);
+  if (!quoteMatch) {
+    return null;
+  }
+
+  const level = (quoteMatch[2]?.match(/>/g) ?? []).length;
+  const indent = quoteMatch[1] ?? "";
+  const content = quoteMatch[3] ?? "";
+  const railStyle: RowStyle = { color: style.color ?? "gray", dimColor: true };
+  const prefixText = `${indent}${"│ ".repeat(Math.max(1, level))}`;
+
+  return renderPrefixedMarkdownLines(
+    [createSpan(prefixText, railStyle)],
+    parseInlineMarkdown(content, { ...style, dimColor: true }),
+    maxWidth,
+    [createSpan(prefixText, railStyle)],
+  );
+}
+
+function renderPrefixedMarkdownLines(
+  prefixSpans: TranscriptSpan[],
+  contentSpans: TranscriptSpan[],
+  maxWidth: number,
+  continuationPrefixSpans = prefixSpans,
+): StyledLine[] {
+  const firstWidth = Math.max(4, maxWidth - spansWidth(prefixSpans));
+  const continuationWidth = Math.max(4, maxWidth - spansWidth(continuationPrefixSpans));
+  const wrapped = wrapStyledLine(contentSpans, firstWidth, continuationWidth);
+
+  return wrapped.map((line, index) => ({
+    spans: [
+      ...(index === 0 ? prefixSpans : continuationPrefixSpans),
+      ...line,
+    ],
+  }));
 }
 
 function consumeMarkdownTable(
@@ -758,7 +846,7 @@ function parseInlineMarkdown(text: string, style: RowStyle): TranscriptSpan[] {
   }
 
   const result: TranscriptSpan[] = [];
-  const pattern = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*\n]+\*|_[^_\n]+_)/g;
+  const pattern = /\[(?<markdownLabel>[^\]\n]+)\]\((?<markdownHref>https?:\/\/[^\s)]+)\)|<(?<autoHref>https?:\/\/[^>\s]+)>|(?<autoHref>https?:\/\/[^\s<]+)|(?<boldAsterisk>\*\*[^*]+\*\*)|(?<boldUnderscore>__[^_]+__)|(?<code>`[^`]+`)|(?<italicAsterisk>\*[^*\n]+\*)|(?<italicUnderscore>_[^_\n]+_)/g;
   let lastIndex = 0;
 
   for (const match of text.matchAll(pattern)) {
@@ -768,7 +856,12 @@ function parseInlineMarkdown(text: string, style: RowStyle): TranscriptSpan[] {
     }
 
     const token = match[0] ?? "";
-    if (token.startsWith("**") || token.startsWith("__")) {
+    const groups = (match.groups ?? {}) as LinkTokenMatchGroups;
+    if (groups.markdownLabel && groups.markdownHref) {
+      result.push(...renderLinkSpans(groups.markdownLabel, groups.markdownHref, style));
+    } else if (groups.autoHref) {
+      result.push(createSpan(trimTrailingUrlPunctuation(groups.autoHref), { ...style, color: "cyan" }));
+    } else if (token.startsWith("**") || token.startsWith("__")) {
       result.push(createSpan(token.slice(2, -2), { ...style, bold: true }));
     } else if (token.startsWith("`")) {
       result.push(createSpan(token.slice(1, -1), { ...style, color: style.color ?? "cyan", bold: true }));
@@ -785,7 +878,27 @@ function parseInlineMarkdown(text: string, style: RowStyle): TranscriptSpan[] {
   return result.length > 0 ? mergeAdjacentSpans(result) : [createSpan("", style)];
 }
 
-function wrapStyledLine(spans: TranscriptSpan[], width: number): TranscriptSpan[][] {
+function renderLinkSpans(label: string, href: string, style: RowStyle): TranscriptSpan[] {
+  const trimmedHref = trimTrailingUrlPunctuation(href);
+  const labelSpans = parseInlineMarkdown(label, { ...style, color: "cyan" });
+  const labelText = label.trim();
+
+  if (labelText === trimmedHref) {
+    return [createSpan(trimmedHref, { ...style, color: "cyan" })];
+  }
+
+  return mergeAdjacentSpans([
+    ...labelSpans,
+    createSpan(" → ", { color: style.color ?? "gray", dimColor: true }),
+    createSpan(trimmedHref, { ...style, color: "cyan" }),
+  ]);
+}
+
+function trimTrailingUrlPunctuation(value: string): string {
+  return value.replace(/[),.;!?]+$/u, "");
+}
+
+function wrapStyledLine(spans: TranscriptSpan[], width: number, continuationWidth = width): TranscriptSpan[][] {
   if (spans.length === 0 || spans.every((span) => span.text.length === 0)) {
     return [[createSpan("")]];
   }
@@ -793,11 +906,13 @@ function wrapStyledLine(spans: TranscriptSpan[], width: number): TranscriptSpan[
   const lines: TranscriptSpan[][] = [];
   let currentLine: TranscriptSpan[] = [];
   let currentWidth = 0;
+  let currentLimit = Math.max(1, width);
 
   const pushLine = () => {
     lines.push(trimTrailingWhitespace(currentLine));
     currentLine = [];
     currentWidth = 0;
+    currentLimit = Math.max(1, continuationWidth);
   };
 
   for (const span of spans) {
@@ -812,7 +927,7 @@ function wrapStyledLine(spans: TranscriptSpan[], width: number): TranscriptSpan[
         }
 
         const tokenWidth = stringWidth(token.text);
-        if (currentWidth + tokenWidth > width) {
+        if (currentWidth + tokenWidth > currentLimit) {
           pushLine();
           continue;
         }
@@ -825,7 +940,7 @@ function wrapStyledLine(spans: TranscriptSpan[], width: number): TranscriptSpan[
       let remaining = token.text;
       while (remaining.length > 0) {
         const tokenWidth = stringWidth(remaining);
-        const remainingWidth = width - currentWidth;
+        const remainingWidth = currentLimit - currentWidth;
 
         if (tokenWidth <= remainingWidth) {
           currentLine = appendSpan(currentLine, createSpan(remaining, token));
@@ -839,7 +954,7 @@ function wrapStyledLine(spans: TranscriptSpan[], width: number): TranscriptSpan[
           continue;
         }
 
-        const [head, tail] = splitTextByWidth(remaining, width);
+        const [head, tail] = splitTextByWidth(remaining, currentLimit);
         currentLine = appendSpan(currentLine, createSpan(head, token));
         currentWidth += stringWidth(head);
         pushLine();

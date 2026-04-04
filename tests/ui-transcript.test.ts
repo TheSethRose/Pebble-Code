@@ -205,6 +205,47 @@ describe("TranscriptView", () => {
     expect(segments.some((segment) => segment.text.includes("Name") && segment.bold)).toBe(true);
   });
 
+  test("renders task lists, blockquotes, links, and rules in terminal-native form", () => {
+    const element = TranscriptView({
+      messages: [createMessage("assistant", [
+        "- [x] shipped",
+        "- [ ] pending follow-up",
+        "> Important: review [Docs](https://example.com/docs)",
+        "---",
+        "Direct link: https://example.com/changelog.",
+      ].join("\n"))],
+      width: 80,
+    });
+    const rows = collectRenderedRows(element);
+    const flat = rows.join("\n");
+    const segments = collectTextSegments(element);
+
+    expect(flat).toContain("☑ shipped");
+    expect(flat).toContain("☐ pending follow-up");
+    expect(flat).toContain("│ Important: review Docs → https://example.com/docs");
+    expect(flat).toContain("Direct link: https://example.com/changelog");
+    expect(rows.some((row) => /^\s{2}─{8,}$/.test(row))).toBe(true);
+    expect(flat).not.toContain("- [x]");
+    expect(flat).not.toContain("[Docs](https://example.com/docs)");
+    expect(segments.some((segment) => segment.text.includes("https://example.com/docs") && segment.color === "cyan")).toBe(true);
+    expect(segments.some((segment) => segment.text.includes("https://example.com/changelog") && segment.color === "cyan")).toBe(true);
+  });
+
+  test("keeps quote and task list prefixes visible on wrapped rows", () => {
+    const element = TranscriptView({
+      messages: [createMessage("assistant", [
+        "> This quoted line is intentionally long so it wraps and keeps the quote rail visible across rows in the transcript.",
+        "- [ ] This checklist line is also intentionally long so wrapped rows stay aligned under the checkbox marker.",
+      ].join("\n"))],
+      width: 44,
+    });
+    const rows = collectRenderedRows(element);
+
+    expect(rows.filter((row) => row.includes("│ ")).length).toBeGreaterThanOrEqual(2);
+    expect(rows.some((row) => row.includes("☐ This checklist"))).toBe(true);
+    expect(rows.some((row) => /^\s{4,}intentionally/.test(row))).toBe(true);
+  });
+
   test("uses blinking dot indicators for in-progress transcript rows", () => {
     const live = flattenText(TranscriptView({ messages: [createMessage("streaming", "working")], width: 60, blinkPhase: true }));
     const dim = flattenText(TranscriptView({ messages: [createMessage("streaming", "working")], width: 60, blinkPhase: false }));

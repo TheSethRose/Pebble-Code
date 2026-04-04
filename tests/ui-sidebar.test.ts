@@ -51,5 +51,7 @@ describe("SessionSidebar helpers", () => {
   test("shows the correct sidebar hint for focused vs unfocused states", () => {
     expect(getSidebarHintText(true)).toBe("↑↓ move  ⏎ select\nDel to Delete Chats");
     expect(getSidebarHintText(false)).toBe("→ Tab to Select Chats");
+    expect(getSidebarHintText(true, true)).toBe("↑↓ move  ⏎ select\nClick to switch · Del deletes");
+    expect(getSidebarHintText(false, true)).toBe("→ Tab to Select Chats\nClick chats to switch");
   });
 });

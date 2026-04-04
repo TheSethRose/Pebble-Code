@@ -1,5 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
+import { MousePressableRegion } from "./MousePressableRegion.js";
 
 export interface SessionSummary {
   id: string;
@@ -12,9 +13,10 @@ export interface SessionSummary {
 interface SessionSidebarProps {
   sessions: SessionSummary[];
   activeSessionId: string | null;
-  onSelect: (sessionId: string | null) => void;
+  onSelect: (sessionId: string | null, index: number) => void;
   selectedIndex: number;
   isFocused: boolean;
+  mouseEnabled?: boolean;
   width?: number;
 }
 
@@ -27,6 +29,12 @@ const SIDEBAR_WIDTH = 24;
 const SIDEBAR_HORIZONTAL_PADDING = 2;
 const SIDEBAR_LABEL_PREFIX_WIDTH = 2;
 
+interface SidebarSelectableRowProps {
+  children: React.ReactNode;
+  mouseEnabled: boolean;
+  onSelect: () => void;
+}
+
 export function SidebarRail({ height, isFocused }: SidebarRailProps) {
   const rows = Math.max(1, height ?? 1);
 
@@ -34,6 +42,18 @@ export function SidebarRail({ height, isFocused }: SidebarRailProps) {
     <Box width={1} flexShrink={0}>
       <Text color={isFocused ? "green" : "gray"}>{buildVerticalDivider(rows)}</Text>
     </Box>
+  );
+}
+
+function SidebarSelectableRow({ children, mouseEnabled, onSelect }: SidebarSelectableRowProps) {
+  if (!mouseEnabled) {
+    return <Box>{children}</Box>;
+  }
+
+  return (
+    <MousePressableRegion onPress={onSelect}>
+      <Box>{children}</Box>
+    </MousePressableRegion>
   );
 }
 
@@ -48,6 +68,7 @@ export function SessionSidebar({
   onSelect,
   selectedIndex,
   isFocused,
+  mouseEnabled = false,
   width = SIDEBAR_WIDTH,
 }: SessionSidebarProps) {
   const [marqueeTick, setMarqueeTick] = React.useState(0);
@@ -98,7 +119,7 @@ export function SessionSidebar({
       </Box>
 
       {/* New Chat entry (index 0) */}
-      <Box>
+      <SidebarSelectableRow mouseEnabled={mouseEnabled} onSelect={() => onSelect(null, 0)}>
         <Text
           color={isNewChatSelected ? "black" : isNewChatActive ? "green" : "white"}
           backgroundColor={isNewChatSelected ? "green" : undefined}
@@ -106,7 +127,7 @@ export function SessionSidebar({
         >
           {buildSidebarRow("◈ New Chat", width)}
         </Text>
-      </Box>
+      </SidebarSelectableRow>
 
       {/* Session list */}
       {sessions.map((s, i) => {
@@ -119,7 +140,11 @@ export function SessionSidebar({
           : truncateSessionLabel(s.title, width);
 
         return (
-          <Box key={s.id}>
+          <SidebarSelectableRow
+            key={s.id}
+            mouseEnabled={mouseEnabled}
+            onSelect={() => onSelect(s.id, rowIndex)}
+          >
             <Text
               color={isCursor ? "black" : isActive ? "green" : "gray"}
               backgroundColor={isCursor ? "green" : undefined}
@@ -127,7 +152,7 @@ export function SessionSidebar({
             >
               {buildSidebarRow(label, width, prefix)}
             </Text>
-          </Box>
+          </SidebarSelectableRow>
         );
       })}
 
@@ -139,7 +164,7 @@ export function SessionSidebar({
 
       {/* Hint */}
       <Box marginTop={1}>
-        <Text dimColor>{getSidebarHintText(isFocused)}</Text>
+        <Text dimColor>{getSidebarHintText(isFocused, mouseEnabled)}</Text>
       </Box>
     </Box>
   );
@@ -226,8 +251,14 @@ export function shouldAnimateSessionLabel(title: string, width: number): boolean
   return normalized.length > getSidebarUsableWidth(width);
 }
 
-export function getSidebarHintText(isFocused: boolean): string {
-  return isFocused ? "↑↓ move  ⏎ select\nDel to Delete Chats" : "→ Tab to Select Chats";
+export function getSidebarHintText(isFocused: boolean, mouseEnabled = false): string {
+  if (isFocused) {
+    return mouseEnabled
+      ? "↑↓ move  ⏎ select\nClick to switch · Del deletes"
+      : "↑↓ move  ⏎ select\nDel to Delete Chats";
+  }
+
+  return mouseEnabled ? "→ Tab to Select Chats\nClick chats to switch" : "→ Tab to Select Chats";
 }
 
 export function buildVerticalDivider(height: number): string {

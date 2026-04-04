@@ -360,6 +360,10 @@ export function App({ context }: { context: CommandContext }) {
     refreshSessions();
   }, [refreshSessions, state.activeSessionId]);
 
+  React.useEffect(() => {
+    setSidebarIndex((current) => Math.min(current, sidebarSessions.length));
+  }, [sidebarSessions.length]);
+
   const handleSessionSelect = React.useCallback(
     (selectedId: string | null) => {
       if (selectedId === null) {
@@ -390,6 +394,18 @@ export function App({ context }: { context: CommandContext }) {
     [reconcilePendingApprovals, sessionStore, refreshSessions],
   );
 
+  const activateSidebarSelection = React.useCallback(
+    (nextIndex: number, options: { focusArea?: "input" | "sidebar" } = {}) => {
+      const clampedIndex = Math.max(0, Math.min(nextIndex, sidebarSessions.length));
+      const selectedId = clampedIndex === 0 ? null : (sidebarSessions[clampedIndex - 1]?.id ?? null);
+
+      setSidebarIndex(clampedIndex);
+      handleSessionSelect(selectedId);
+      setFocusArea(options.focusArea ?? "input");
+    },
+    [handleSessionSelect, sidebarSessions],
+  );
+
   const handleDeleteSession = React.useCallback(
     (sessionId: string) => {
       if (!sessionStore) return;
@@ -399,12 +415,14 @@ export function App({ context }: { context: CommandContext }) {
       if (sessionIdRef.current === sessionId) {
         sessionIdRef.current = null;
         setState({ ...INITIAL_STATE });
+        setSidebarIndex(0);
       }
 
       refreshSessions();
 
       // If no sessions remain, ensure we're on a new chat
       const remaining = sessionStore.listSessions();
+      setSidebarIndex((current) => Math.min(current, remaining.length));
       if (remaining.length === 0) {
         sessionIdRef.current = null;
         setState({ ...INITIAL_STATE });
@@ -621,9 +639,7 @@ export function App({ context }: { context: CommandContext }) {
           return;
         }
         if (key.return) {
-          const selectedId = sidebarIndex === 0 ? null : (sidebarSessions[sidebarIndex - 1]?.id ?? null);
-          handleSessionSelect(selectedId);
-          setFocusArea("input");
+          activateSidebarSelection(sidebarIndex, { focusArea: "input" });
           return;
         }
         // Delete / Backspace key — opens confirm dialog for session rows only
@@ -1294,9 +1310,10 @@ export function App({ context }: { context: CommandContext }) {
           <SessionSidebar
             sessions={sidebarSessions}
             activeSessionId={state.activeSessionId}
-            onSelect={handleSessionSelect}
+            onSelect={(_sessionId, index) => activateSidebarSelection(index, { focusArea: "input" })}
             selectedIndex={sidebarIndex}
             isFocused={focusArea === "sidebar"}
+            mouseEnabled={isFullscreen}
             width={sidebarWidth - 1}
           />
         </Box>
