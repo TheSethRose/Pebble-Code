@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { PassThrough } from "node:stream";
 import { render } from "ink";
-import { run } from "../src/runtime/main";
+import { run, setStartReplForTesting } from "../src/runtime/main";
 import { buildSessionMemory } from "../src/persistence/memory";
 import { createProjectSessionStore } from "../src/persistence/runtimeSessions";
 import { PermissionManager } from "../src/runtime/permissionManager";
@@ -546,6 +546,33 @@ export default {
 });
 
 describe("interactive runtime permissions", () => {
+  test("starts interactive mode without printing pre-TUI diagnostics", async () => {
+    const projectDir = createTempProject("pebble-runtime-interactive-quiet-");
+    let startReplCalls = 0;
+
+    setStartReplForTesting(async (context) => {
+      expect(context.cwd).toBe(projectDir);
+      startReplCalls += 1;
+      return 0;
+    });
+
+    try {
+      const { result: exitCode, stderr } = await withProviderKeysUnset(() =>
+        captureConsole(() =>
+          run({
+            cwd: projectDir,
+          })
+        )
+      );
+
+      expect(exitCode).toBe(0);
+      expect(startReplCalls).toBe(1);
+      expect(stderr).toEqual([]);
+    } finally {
+      setStartReplForTesting(null);
+    }
+  });
+
   test("deny blocks risky tool execution from the interactive app", async () => {
     const projectDir = createTempProject("pebble-runtime-interactive-deny-", {
       settings: {

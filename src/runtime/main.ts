@@ -30,13 +30,17 @@ import {
   reportExtensionStatus,
   type RuntimeIntegrations,
 } from "../extensions/loaders.js";
-import type { Command } from "../commands/types.js";
+import type { Command, CommandContext } from "../commands/types.js";
 import type { StreamEvent, EngineState } from "../engine/types.js";
 import type { Tool } from "../tools/Tool.js";
 import { resolveRuntimeProvider, type RuntimeProviderResolution } from "../providers/runtime.js";
 import { createHeadlessReporter, type HeadlessFormat } from "./reporters.js";
 
 export type { HeadlessFormat } from "./reporters.js";
+
+type StartRepl = (context: CommandContext) => Promise<number>;
+
+let startReplForTesting: StartRepl | null = null;
 
 export interface RuntimeOptions {
   /** Run in headless/print mode */
@@ -57,19 +61,28 @@ export interface RuntimeOptions {
   signal?: AbortSignal;
 }
 
+export function setStartReplForTesting(startRepl: StartRepl | null): void {
+  startReplForTesting = startRepl;
+}
+
 export async function run(options: RuntimeOptions = {}): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
+  const shouldLogStartup = options.headless ?? false;
 
   // Phase 1: Log startup
-  console.error(getVersionString());
-  console.error(getFeatureSummary());
-  console.error(`Mode: ${options.headless ? "headless" : "interactive"}`);
-  console.error(`Working directory: ${cwd}`);
+  if (shouldLogStartup) {
+    console.error(getVersionString());
+    console.error(getFeatureSummary());
+    console.error(`Mode: ${options.headless ? "headless" : "interactive"}`);
+    console.error(`Working directory: ${cwd}`);
+  }
 
   // Phase 2: Initialize config layer
   const config = buildRuntimeConfig(cwd);
-  console.error(`Trust level: ${config.trust.level}`);
-  console.error(`Project root: ${config.trust.projectRoot}`);
+  if (shouldLogStartup) {
+    console.error(`Trust level: ${config.trust.level}`);
+    console.error(`Project root: ${config.trust.projectRoot}`);
+  }
 
   // Phase 3: Initialize trust system
   const permissionManager = new PermissionManager({
@@ -79,13 +92,13 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
 
   // Phase 4: Load repository instructions and prompt files
   const instructions = formatInstructions(config.instructions);
-  if (instructions) {
+  if (shouldLogStartup && instructions) {
     console.error(`Loaded ${config.instructions.length} instruction file(s)`);
   }
 
   const promptFiles = loadPromptFiles(config.trust.projectRoot);
   const promptContent = formatPromptFiles(promptFiles);
-  if (promptFiles.length > 0) {
+  if (shouldLogStartup && promptFiles.length > 0) {
     console.error(`Loaded ${promptFiles.length} prompt file(s) from .pebble/prompts/`);
   }
 
@@ -93,7 +106,9 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
   const integrations = await loadRuntimeIntegrations(extensionDirs, {
     mcpServers: config.settings.mcpServers,
   });
-  reportExtensionStatus(integrations.results);
+  if (shouldLogStartup) {
+    reportExtensionStatus(integrations.results);
+  }
 
   const resolvedProvider = resolveRuntimeProvider(
     config.settings,
@@ -107,9 +122,11 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
   const hookRegistry = createHookRegistry(integrations.extensions);
   const systemPrompt = mergeRuntimeInstructions(promptContent, instructions, integrations.skills);
 
-  console.error(`Provider: ${resolvedProvider.providerLabel} (${resolvedProvider.model})`);
-  console.error(`Extensions: ${integrations.extensions.length} plugin(s), ${integrations.skills.length} skill(s), ${integrations.mcpServers.length} MCP server(s), ${integrations.providers.length} provider(s)`);
-  console.error(`Worktree root: ${join(config.trust.projectRoot, ".pebble", "worktrees")}`);
+  if (shouldLogStartup) {
+    console.error(`Provider: ${resolvedProvider.providerLabel} (${resolvedProvider.model})`);
+    console.error(`Extensions: ${integrations.extensions.length} plugin(s), ${integrations.skills.length} skill(s), ${integrations.mcpServers.length} MCP server(s), ${integrations.providers.length} provider(s)`);
+    console.error(`Worktree root: ${join(config.trust.projectRoot, ".pebble", "worktrees")}`);
+  }
 
   // Phase 6: Start the appropriate mode
   if (options.headless) {
@@ -330,13 +347,8 @@ async function runInteractive(
   hookRegistry: HookRegistry,
   extensionDirs: string[],
 ): Promise<number> {
-  console.error("Interactive mode: starting REPL...");
-  console.error(`Trust level: ${config.trust.level}`);
-  console.error(`Permission mode: ${config.settings.permissionMode}`);
-  console.error(`Instructions: ${systemPrompt ? "loaded" : "none"}`);
-
   // Import Ink REPL dynamically to avoid blocking fast paths
-  const { startREPL } = await import("../ui/App.js");
+  const startREPL = startReplForTesting ?? (await import("../ui/App.js")).startREPL;
 
   const context = {
     cwd: config.cwd,
