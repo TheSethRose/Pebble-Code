@@ -66,7 +66,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - REPL now has real streaming, richer tool/result rendering, and permission approval, but still lacks full reference UX breadth
 - Headless mode exists and supports plain-text / JSON / JSON-stream output through a shared typed reporter, but is still thin compared to the docs promise
 - `/memory` now manages persisted session summaries, and runtime reloads/injects refreshed session memory before the next turn, but the memory model is still much thinner than the reference
-- conversation compaction exists, but Pebble still lacks the richer auto-compaction strategies seen in the Claude and VS Code Copilot Chat references (background thresholds, provider-managed context compaction, pre-compact hooks, and durable compaction artifacts)
+- conversation compaction exists, now emits deterministic local summary artifacts, and supports a manual `/compact` flow, but Pebble still lacks the richer auto-compaction strategies seen in the Claude and VS Code Copilot Chat references (background thresholds, provider-managed context compaction, and pre-compact hooks/custom instructions)
 - Persistence is wired for session storage, resume, and basic memory injection, but run metadata/report summaries remain thinner than the reference product
 - AskUserQuestionTool has a working structured request/response path, but still lacks richer multi-question and preview UX like the reference
 - Permission approval dialogs exist in the REPL; the engine supports async user resolution via `resolvePermission`, including the streaming interactive path
@@ -108,6 +108,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - [x] command discovery through `/help` works
 - [x] `/resume` actually resumes a stored session
 - [x] `/memory` is backed by a real memory system
+- [x] `/compact` works
 - [x] `/review` performs a real review flow
 - [x] command loading merges extension-provided commands at runtime
 - [x] command filtering by runtime mode/trust is implemented cleanly
@@ -381,27 +382,28 @@ Checked items below mean Pebble now has real config/runtime wiring for that prov
 - [ ] [REFACTOR] implement real background/subagent orchestration with durable runtime state, resumable logs, stop semantics, and session-linked metadata if Pebble needs this surface later
 
 - [x] [REFACTOR] `WorktreeManager` can still create/remove worktrees through git commands
-- [ ] [REFACTOR] persist worktree metadata across processes instead of relying on in-memory maps that lose state between invocations
-- [ ] [REFACTOR] add worktree availability checks, startup preference handling, cleanup guarantees, and session/worktree linkage closer to the Claude reference implementation
+- [x] [REFACTOR] persist worktree metadata across processes instead of relying on in-memory maps that lose state between invocations
+- [x] [REFACTOR] add worktree availability checks, bind worktree git commands to the intended repo root, surface startup worktree support status, and link session metadata to created/removed worktrees
+- [ ] [REFACTOR] add worktree startup preference handling and stronger cleanup guarantees closer to the Claude reference implementation
 
 - [x] [REFACTOR] `src/engine/query.ts` now routes `query()` and `streamQuery()` through one shared `QueryEngine` constructor helper
-- [ ] [REFACTOR] collapse the duplicated tool execution, permission, and result-packaging logic shared by `QueryEngine.process()` and `QueryEngine.stream()`
+- [x] [REFACTOR] collapse the duplicated tool execution, permission, and result-packaging logic shared by `QueryEngine.process()` and `QueryEngine.stream()`
 
 - [x] [REFACTOR] removed the unused `registry` parameter from `createHelpCommand()` in `src/commands/builtins.ts`
-- [ ] [REFACTOR] split `src/commands/builtins.ts` by domain (auth/provider, session/memory, UI/navigation, review/dev flows) before it grows further
+- [x] [REFACTOR] split `src/commands/builtins.ts` by domain (auth/provider, session/memory, UI/navigation, review/dev flows) before it grows further
 
-- [ ] [REFACTOR] split `src/tools/shared/outputCompaction.ts` into smaller shell, grep, file-read, and raw-output persistence seams without changing behavior
+- [x] [REFACTOR] split `src/tools/shared/outputCompaction.ts` into smaller shell, grep, file-read, and raw-output persistence seams without changing behavior
 
 - [x] [REFACTOR] removed unused engine/event helpers: `isStreamEvent`, `EVENT_TYPES`, `messagesToSdkEvents`, `createRetryEvent`, and `createProgressEvent`
-- [ ] [REFACTOR] formalize the public SDK/headless event contract around the reporter outputs that are actually emitted today, then add focused tests/docs for that contract
+- [x] [REFACTOR] formalize the public SDK/headless event contract around the reporter outputs that are actually emitted today, then add focused tests/docs for that contract
 
 - [x] [REFACTOR] Pebble already auto-triggers transcript compaction in long conversations and rebuilds/injects persisted session memory before resumed or new turns
-- [ ] [REFACTOR] replace placeholder transcript summaries like `[Summary of X previous messages]` with real summary artifacts or rename the current path so it is honestly described as truncation
-- [ ] [REFACTOR] add a real manual compaction UX (`/compact` or equivalent) instead of relying only on automatic threshold-triggered compaction
+- [x] [REFACTOR] replace placeholder transcript summaries like `[Summary of X previous messages]` with real summary artifacts or rename the current path so it is honestly described as truncation
+- [x] [REFACTOR] add a real manual compaction UX (`/compact` or equivalent) instead of relying only on automatic threshold-triggered compaction
 - [ ] [REFACTOR] evaluate `PreCompact`-style hook support and compaction-specific custom instructions similar to the VS Code Copilot Chat reference
 - [ ] [REFACTOR] evaluate background compaction thresholds similar to VS Code Copilot Chat's dual-threshold approach (prepare around ~80%, block/apply near ~95%) where that fits Pebble's runtime model
 - [ ] [REFACTOR] evaluate provider-managed/context-management compaction markers for response APIs, closer to VS Code Copilot Chat's `context_management.compact_threshold` flow
-- [ ] [REFACTOR] separate conversation/session compaction from tool-output compaction in code organization and docs so these two concerns stop sharing one vague "compaction" label
+- [x] [REFACTOR] separate conversation/session compaction from tool-output compaction in code organization and docs so these two concerns stop sharing one vague "compaction" label
 
 ---
 

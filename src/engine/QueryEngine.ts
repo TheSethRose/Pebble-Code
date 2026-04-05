@@ -259,6 +259,19 @@ export interface QueryResult {
   };
 }
 
+type EngineExecutionMode = "process" | "stream";
+
+interface PendingToolCall {
+  id: string;
+  name: string;
+  input: unknown;
+}
+
+interface ToolCallExecutionOutcome {
+  message: Message;
+  events: StreamEvent[];
+}
+
 export class QueryEngine {
   private options: Required<Pick<QueryEngineOptions, "maxTurns" | "provider" | "tools" | "systemPrompt">> & {
     signal?: AbortSignal;
@@ -390,315 +403,11 @@ export class QueryEngine {
       if (response.toolCalls.length > 0) {
         // Execute each tool call
         for (const toolCall of response.toolCalls) {
-          const toolInput = this.normalizeToolInput(toolCall.input);
-          const registration = this.toolRegistry.getRegistration(toolCall.name);
-          const tool = registration?.tool;
-
-          if (!tool) {
-            // Unknown tool — report error to model
-            const errorMsg = `Unknown tool: ${toolCall.name}`;
-            this.emit("error", { tool: toolCall.name, message: errorMsg });
-            await this.fireErrorLifecycleEvent(errorMsg, {
-              sessionId: this.options.getSessionId?.() ?? null,
-              turnCount,
-              toolName: toolCall.name,
-              toolCallId: toolCall.id,
-              toolInput: toolInput,
-            });
-            conversation.push({
-              role: "tool",
-              content: errorMsg,
-              toolCallId: toolCall.id,
-              toolName: toolCall.name,
-            });
-            continue;
+          const outcome = await this.executeToolCall(toolCall, turnCount, "process");
+          for (const event of outcome.events) {
+            this.options.onEvent?.(event);
           }
-
-          const toolContext = this.createToolContext();
-          const normalizedToolInput = tool.normalizeInput?.(toolInput, toolContext) ?? toolInput;
-
-          // Check approval via PermissionManager
-          const approvalRequest = this.getApprovalRequest(tool, registration.canonicalName, normalizedToolInput, toolContext);
-          const needsApproval = Boolean(approvalRequest);
-            if (approvalRequest && this.options.permissionManager) {
-              let permissionResult = await this.options.permissionManager.checkPermission({
-                toolName: registration.canonicalName,
-                toolArgs: approvalRequest.toolArgs,
-                riskLevel: approvalRequest.riskLevel ?? "high",
-                reason: approvalRequest.reason,
-                sessionId: this.options.getSessionId?.() ?? null,
-                toolCallId: toolCall.id,
-              });
-
-            // If the manager says "ask", delegate to the interactive resolver
-            if (permissionResult.decision === "ask") {
-              const pendingApproval = this.options.permissionManager.createPendingApproval({
-                sessionId: this.options.getSessionId?.() ?? null,
-                toolCallId: toolCall.id,
-                toolName: registration.canonicalName,
-                toolArgs: approvalRequest.toolArgs,
-                approvalMessage: approvalRequest.approvalMessage,
-              });
-
-              if (this.options.resolvePermission) {
-                const userDecision = await this.options.resolvePermission({
-                  toolName: registration.canonicalName,
-                  toolArgs: approvalRequest.toolArgs,
-                  approvalMessage: approvalRequest.approvalMessage,
-                });
-                if (pendingApproval) {
-                  this.options.permissionManager.resolvePendingApproval(pendingApproval.id, userDecision);
-                }
-                permissionResult = {
-                  decision: userDecision,
-                  persisted: userDecision === "allow-always",
-                  reason: "User decision",
-                };
-              } else {
-                if (pendingApproval) {
-                  this.options.permissionManager.resolvePendingApproval(pendingApproval.id, "deny");
-                }
-                // No interactive resolver — deny by default
-                permissionResult = { decision: "deny", reason: "No interactive approval available" };
-              }
-            }
-
-            if (permissionResult.decision === "deny") {
-              this.emit("permission_denied", {
-                tool: registration.canonicalName,
-                input: normalizedToolInput,
-                reason: permissionResult.reason,
-                approvalMessage: approvalRequest.approvalMessage,
-              });
-              await this.fireLifecycleEvent("tool:after", {
-                sessionId: this.options.getSessionId?.() ?? null,
-                turnCount,
-                toolName: registration.canonicalName,
-                toolCallId: toolCall.id,
-                toolInput: normalizedToolInput,
-                toolSuccess: false,
-                error: new Error(permissionResult.reason ?? "Permission denied"),
-              });
-              conversation.push({
-                role: "tool",
-                content: `Tool execution denied: ${permissionResult.reason ?? "Permission denied"}`,
-                toolCallId: toolCall.id,
-                toolName: registration.canonicalName,
-                metadata: {
-                  success: false,
-                  input: normalizedToolInput,
-                  error: permissionResult.reason ?? "Permission denied",
-                  toolCallId: toolCall.id,
-                  canonicalToolName: registration.canonicalName,
-                  qualifiedToolName: registration.qualifiedName,
-                  requestedToolName: toolCall.name,
-                  approvalMessage: approvalRequest.approvalMessage,
-                },
-              });
-              continue;
-            }
-
-            // Record the decision
-            this.options.permissionManager.recordDecision(
-              registration.canonicalName,
-              permissionResult.decision,
-              permissionResult.persisted ?? false,
-            );
-          } else if (needsApproval) {
-            // No permission manager — deny by default
-            this.emit("permission_denied", {
-              tool: registration.canonicalName,
-              input: normalizedToolInput,
-              reason: "No permission manager configured",
-            });
-            await this.fireLifecycleEvent("tool:after", {
-              sessionId: this.options.getSessionId?.() ?? null,
-              turnCount,
-              toolName: registration.canonicalName,
-              toolCallId: toolCall.id,
-              toolInput: normalizedToolInput,
-              toolSuccess: false,
-              error: new Error("No permission manager configured"),
-            });
-            conversation.push({
-              role: "tool",
-              content: "Tool execution denied (no permission manager configured)",
-              toolCallId: toolCall.id,
-              toolName: registration.canonicalName,
-              metadata: {
-                success: false,
-                input: normalizedToolInput,
-                error: "No permission manager configured",
-                toolCallId: toolCall.id,
-                canonicalToolName: registration.canonicalName,
-                qualifiedToolName: registration.qualifiedName,
-                requestedToolName: toolCall.name,
-              },
-            });
-            continue;
-          }
-
-          // Execute the tool
-          this.options.onToolExecute?.(registration.canonicalName, normalizedToolInput);
-          this.emit("tool_call", {
-            tool: registration.canonicalName,
-            requestedToolName: toolCall.name,
-            qualifiedToolName: registration.qualifiedName,
-            category: registration.category,
-            input: normalizedToolInput,
-            toolCallId: toolCall.id,
-          });
-          await this.fireLifecycleEvent("tool:before", {
-            sessionId: this.options.getSessionId?.() ?? null,
-            turnCount,
-            toolName: registration.canonicalName,
-            toolCallId: toolCall.id,
-            toolInput: normalizedToolInput,
-          });
-
-          try {
-            const startedAt = Date.now();
-            const result = await tool.execute(normalizedToolInput, toolContext);
-
-            const durationMs = Date.now() - startedAt;
-            const outputBase = result.success ? result.output : (result.error ?? result.output);
-            const output = result.truncated ? `${outputBase}\n[Output truncated]` : outputBase;
-
-            const askUserRequest = this.extractAskUserQuestionRequest(result.data, normalizedToolInput);
-
-            if (askUserRequest && this.options.resolveQuestion) {
-              const answer = await this.options.resolveQuestion(askUserRequest);
-              await this.fireLifecycleEvent("tool:after", {
-                sessionId: this.options.getSessionId?.() ?? null,
-                turnCount,
-                toolName: registration.canonicalName,
-                toolCallId: toolCall.id,
-                toolInput: normalizedToolInput,
-                toolSuccess: true,
-              });
-              conversation.push({
-                role: "tool",
-                content: answer,
-                toolCallId: toolCall.id,
-                toolName: registration.canonicalName,
-                metadata: {
-                  success: true,
-                  durationMs,
-                  input: normalizedToolInput,
-                  question: askUserRequest.question,
-                  answer,
-                  options: askUserRequest.options,
-                  allowFreeform: askUserRequest.allowFreeform,
-                  toolCallId: toolCall.id,
-                  canonicalToolName: registration.canonicalName,
-                  qualifiedToolName: registration.qualifiedName,
-                  requestedToolName: toolCall.name,
-                },
-              });
-
-              this.emit("tool_result", {
-                tool: registration.canonicalName,
-                success: true,
-                input: normalizedToolInput,
-                answer,
-                question: askUserRequest.question,
-                toolCallId: toolCall.id,
-              });
-              continue;
-            }
-
-            await this.fireLifecycleEvent("tool:after", {
-              sessionId: this.options.getSessionId?.() ?? null,
-              turnCount,
-              toolName: registration.canonicalName,
-              toolCallId: toolCall.id,
-              toolInput: normalizedToolInput,
-              toolSuccess: result.success,
-              ...(result.success ? {} : { error: new Error(result.error ?? result.output) }),
-            });
-
-            conversation.push({
-              role: "tool",
-              content: output,
-              toolCallId: toolCall.id,
-              toolName: registration.canonicalName,
-              metadata: {
-                success: result.success,
-                durationMs,
-                input: normalizedToolInput,
-                truncated: result.truncated ?? false,
-                summary: result.summary,
-                debug: result.debug,
-                toolCallId: toolCall.id,
-                canonicalToolName: registration.canonicalName,
-                qualifiedToolName: registration.qualifiedName,
-                requestedToolName: toolCall.name,
-                category: registration.category,
-                ...(result.error ? { error: result.error } : {}),
-                ...(result.data !== undefined ? { data: result.data } : {}),
-              },
-            });
-
-            this.emit("tool_result", {
-              tool: registration.canonicalName,
-              success: result.success,
-              input: normalizedToolInput,
-              output,
-              durationMs,
-              truncated: result.truncated ?? false,
-              summary: result.summary,
-              toolCallId: toolCall.id,
-              qualifiedToolName: registration.qualifiedName,
-              requestedToolName: toolCall.name,
-              category: registration.category,
-              ...(result.error ? { error: result.error } : {}),
-              ...(result.data !== undefined ? { data: result.data } : {}),
-            });
-          } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
-            await this.fireLifecycleEvent("tool:after", {
-              sessionId: this.options.getSessionId?.() ?? null,
-              turnCount,
-              toolName: registration.canonicalName,
-              toolCallId: toolCall.id,
-              toolInput: normalizedToolInput,
-              toolSuccess: false,
-              error: err instanceof Error ? err : new Error(message),
-            });
-            await this.fireErrorLifecycleEvent(message, {
-              sessionId: this.options.getSessionId?.() ?? null,
-              turnCount,
-              toolName: registration.canonicalName,
-              toolCallId: toolCall.id,
-              toolInput: normalizedToolInput,
-              error: err instanceof Error ? err : new Error(message),
-            });
-            conversation.push({
-              role: "tool",
-              content: `Tool execution error: ${message}`,
-              toolCallId: toolCall.id,
-              toolName: registration.canonicalName,
-              metadata: {
-                success: false,
-                input: normalizedToolInput,
-                error: message,
-                toolCallId: toolCall.id,
-                canonicalToolName: registration.canonicalName,
-                qualifiedToolName: registration.qualifiedName,
-                requestedToolName: toolCall.name,
-              },
-            });
-            this.emit("tool_result", {
-              tool: registration.canonicalName,
-              success: false,
-              input: normalizedToolInput,
-              output: `Tool execution error: ${message}`,
-              error: message,
-              toolCallId: toolCall.id,
-              qualifiedToolName: registration.qualifiedName,
-              requestedToolName: toolCall.name,
-            });
-          }
+          conversation.push(outcome.message);
         }
 
         // Continue the loop — model will get tool results and respond
@@ -766,7 +475,7 @@ export class QueryEngine {
       const toolDefs = this.getProviderToolDefinitions();
 
       let fullText = "";
-      const toolCalls: { id: string; name: string; input: string }[] = [];
+      const toolCalls: PendingToolCall[] = [];
       let stopReason: ProviderResponse["stopReason"] = "end_turn";
 
       try {
@@ -784,7 +493,7 @@ export class QueryEngine {
             toolCalls.push({
               id: chunk.toolCall.id,
               name: chunk.toolCall.name,
-              input: JSON.stringify(chunk.toolCall.input),
+              input: chunk.toolCall.input,
             });
           }
 
@@ -849,298 +558,11 @@ export class QueryEngine {
       // Execute tool calls if any
       if (toolCalls.length > 0) {
         for (const tc of toolCalls) {
-          const registration = this.toolRegistry.getRegistration(tc.name);
-          const tool = registration?.tool;
-          if (!tool) {
-            yield emitStreamEvent("error", { tool: tc.name, message: `Unknown tool: ${tc.name}` });
-            await this.fireErrorLifecycleEvent(`Unknown tool: ${tc.name}`, {
-              sessionId: this.options.getSessionId?.() ?? null,
-              turnCount,
-              toolName: tc.name,
-              toolCallId: tc.id,
-            });
-            conversation.push({
-              role: "tool",
-              content: `Unknown tool: ${tc.name}`,
-              toolCallId: tc.id,
-              toolName: tc.name,
-            });
-            continue;
+          const outcome = await this.executeToolCall(tc, turnCount, "stream");
+          for (const event of outcome.events) {
+            yield event;
           }
-
-          const toolContext = this.createToolContext();
-          const rawInput = this.normalizeToolInput(tc.input);
-          const input = tool.normalizeInput?.(rawInput, toolContext) ?? rawInput;
-
-          // Check approval via PermissionManager
-          const approvalRequest = this.getApprovalRequest(tool, registration.canonicalName, input, toolContext);
-          if (approvalRequest && this.options.permissionManager) {
-            let permissionResult = await this.options.permissionManager.checkPermission({
-              toolName: registration.canonicalName,
-              toolArgs: approvalRequest.toolArgs,
-              riskLevel: approvalRequest.riskLevel ?? "high",
-              reason: approvalRequest.reason,
-              sessionId: this.options.getSessionId?.() ?? null,
-              toolCallId: tc.id,
-            });
-
-            if (permissionResult.decision === "ask") {
-              const pendingApproval = this.options.permissionManager.createPendingApproval({
-                sessionId: this.options.getSessionId?.() ?? null,
-                toolCallId: tc.id,
-                toolName: registration.canonicalName,
-                toolArgs: approvalRequest.toolArgs,
-                approvalMessage: approvalRequest.approvalMessage,
-              });
-
-              if (this.options.resolvePermission) {
-                const userDecision = await this.options.resolvePermission({
-                  toolName: registration.canonicalName,
-                  toolArgs: approvalRequest.toolArgs,
-                  approvalMessage: approvalRequest.approvalMessage,
-                });
-                if (pendingApproval) {
-                  this.options.permissionManager.resolvePendingApproval(pendingApproval.id, userDecision);
-                }
-                permissionResult = {
-                  decision: userDecision,
-                  persisted: userDecision === "allow-always",
-                  reason: "User decision",
-                };
-              } else {
-                if (pendingApproval) {
-                  this.options.permissionManager.resolvePendingApproval(pendingApproval.id, "deny");
-                }
-                permissionResult = { decision: "deny", reason: "No interactive approval available" };
-              }
-            }
-
-            if (permissionResult.decision === "deny") {
-              yield emitStreamEvent("permission_denied", {
-                tool: registration.canonicalName,
-                input,
-                reason: permissionResult.reason,
-                approvalMessage: approvalRequest.approvalMessage,
-              });
-              await this.fireLifecycleEvent("tool:after", {
-                sessionId: this.options.getSessionId?.() ?? null,
-                turnCount,
-                toolName: registration.canonicalName,
-                toolCallId: tc.id,
-                toolInput: input,
-                toolSuccess: false,
-                error: new Error(permissionResult.reason ?? "Permission denied"),
-              });
-              conversation.push({
-                role: "tool",
-                content: `Tool execution denied: ${permissionResult.reason ?? "Permission denied"}`,
-                toolCallId: tc.id,
-                toolName: registration.canonicalName,
-                metadata: {
-                  success: false,
-                  input,
-                  error: permissionResult.reason ?? "Permission denied",
-                  toolCallId: tc.id,
-                  canonicalToolName: registration.canonicalName,
-                  qualifiedToolName: registration.qualifiedName,
-                  requestedToolName: tc.name,
-                  approvalMessage: approvalRequest.approvalMessage,
-                },
-              });
-              continue;
-            }
-
-            this.options.permissionManager.recordDecision(
-              registration.canonicalName,
-              permissionResult.decision,
-              permissionResult.persisted ?? false,
-            );
-          } else if (approvalRequest) {
-            yield emitStreamEvent("permission_denied", {
-              tool: registration.canonicalName,
-              input,
-              reason: "No permission manager configured",
-            });
-            await this.fireLifecycleEvent("tool:after", {
-              sessionId: this.options.getSessionId?.() ?? null,
-              turnCount,
-              toolName: registration.canonicalName,
-              toolCallId: tc.id,
-              toolInput: input,
-              toolSuccess: false,
-              error: new Error("No permission manager configured"),
-            });
-            conversation.push({
-              role: "tool",
-              content: "Tool execution denied (no permission manager configured)",
-              toolCallId: tc.id,
-              toolName: registration.canonicalName,
-              metadata: {
-                success: false,
-                input,
-                error: "No permission manager configured",
-                toolCallId: tc.id,
-                canonicalToolName: registration.canonicalName,
-                qualifiedToolName: registration.qualifiedName,
-                requestedToolName: tc.name,
-              },
-            });
-            continue;
-          }
-
-          try {
-            yield emitStreamEvent("tool_call", {
-              tool: registration.canonicalName,
-              requestedToolName: tc.name,
-              qualifiedToolName: registration.qualifiedName,
-              category: registration.category,
-              input,
-              toolCallId: tc.id,
-            });
-            await this.fireLifecycleEvent("tool:before", {
-              sessionId: this.options.getSessionId?.() ?? null,
-              turnCount,
-              toolName: registration.canonicalName,
-              toolCallId: tc.id,
-              toolInput: input,
-            });
-            const startedAt = Date.now();
-            const result = await tool.execute(input, toolContext);
-
-            const durationMs = Date.now() - startedAt;
-            const outputBase = result.success ? result.output : (result.error ?? result.output);
-            const output = result.truncated ? `${outputBase}\n[Output truncated]` : outputBase;
-            const askUserRequest = this.extractAskUserQuestionRequest(result.data, input);
-
-            if (askUserRequest && this.options.resolveQuestion) {
-              const answer = await this.options.resolveQuestion(askUserRequest);
-              await this.fireLifecycleEvent("tool:after", {
-                sessionId: this.options.getSessionId?.() ?? null,
-                turnCount,
-                toolName: registration.canonicalName,
-                toolCallId: tc.id,
-                toolInput: input,
-                toolSuccess: true,
-              });
-              conversation.push({
-                role: "tool",
-                content: answer,
-                toolCallId: tc.id,
-                toolName: registration.canonicalName,
-                metadata: {
-                  success: true,
-                  durationMs,
-                  input,
-                  question: askUserRequest.question,
-                  answer,
-                  toolCallId: tc.id,
-                  canonicalToolName: registration.canonicalName,
-                  qualifiedToolName: registration.qualifiedName,
-                  requestedToolName: tc.name,
-                },
-              });
-              yield emitStreamEvent("tool_result", {
-                tool: registration.canonicalName,
-                success: true,
-                input,
-                answer,
-                question: askUserRequest.question,
-                toolCallId: tc.id,
-              });
-              continue;
-            }
-
-            await this.fireLifecycleEvent("tool:after", {
-              sessionId: this.options.getSessionId?.() ?? null,
-              turnCount,
-              toolName: registration.canonicalName,
-              toolCallId: tc.id,
-              toolInput: input,
-              toolSuccess: result.success,
-              ...(result.success ? {} : { error: new Error(result.error ?? result.output) }),
-            });
-
-            conversation.push({
-              role: "tool",
-              content: output,
-              toolCallId: tc.id,
-              toolName: registration.canonicalName,
-              metadata: {
-                success: result.success,
-                durationMs,
-                input,
-                truncated: result.truncated ?? false,
-                summary: result.summary,
-                debug: result.debug,
-                toolCallId: tc.id,
-                canonicalToolName: registration.canonicalName,
-                qualifiedToolName: registration.qualifiedName,
-                requestedToolName: tc.name,
-                category: registration.category,
-                ...(result.error ? { error: result.error } : {}),
-                ...(result.data !== undefined ? { data: result.data } : {}),
-              },
-            });
-            yield emitStreamEvent("tool_result", {
-              tool: registration.canonicalName,
-              success: result.success,
-              input,
-              output,
-              durationMs,
-              truncated: result.truncated ?? false,
-              summary: result.summary,
-              toolCallId: tc.id,
-              qualifiedToolName: registration.qualifiedName,
-              requestedToolName: tc.name,
-              category: registration.category,
-              ...(result.error ? { error: result.error } : {}),
-              ...(result.data !== undefined ? { data: result.data } : {}),
-            });
-          } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
-            await this.fireLifecycleEvent("tool:after", {
-              sessionId: this.options.getSessionId?.() ?? null,
-              turnCount,
-              toolName: registration.canonicalName,
-              toolCallId: tc.id,
-              toolInput: input,
-              toolSuccess: false,
-              error: err instanceof Error ? err : new Error(message),
-            });
-            await this.fireErrorLifecycleEvent(message, {
-              sessionId: this.options.getSessionId?.() ?? null,
-              turnCount,
-              toolName: registration.canonicalName,
-              toolCallId: tc.id,
-              toolInput: input,
-              error: err instanceof Error ? err : new Error(message),
-            });
-            conversation.push({
-              role: "tool",
-              content: `Tool error: ${message}`,
-              toolCallId: tc.id,
-              toolName: registration.canonicalName,
-              metadata: {
-                success: false,
-                input,
-                error: message,
-                toolCallId: tc.id,
-                canonicalToolName: registration.canonicalName,
-                qualifiedToolName: registration.qualifiedName,
-                requestedToolName: tc.name,
-              },
-            });
-            yield emitStreamEvent("tool_result", {
-              tool: registration.canonicalName,
-              success: false,
-              input,
-              output: `Tool error: ${message}`,
-              error: message,
-              toolCallId: tc.id,
-              qualifiedToolName: registration.qualifiedName,
-              requestedToolName: tc.name,
-            });
-          }
+          conversation.push(outcome.message);
         }
         // Continue loop for next turn
         continue;
@@ -1290,6 +712,379 @@ export class QueryEngine {
         : null;
 
     return candidate;
+  }
+
+  private async executeToolCall(
+    toolCall: PendingToolCall,
+    turnCount: number,
+    mode: EngineExecutionMode,
+  ): Promise<ToolCallExecutionOutcome> {
+    const rawInput = this.normalizeToolInput(toolCall.input);
+    const registration = this.toolRegistry.getRegistration(toolCall.name);
+
+    if (!registration) {
+      const errorMsg = `Unknown tool: ${toolCall.name}`;
+      await this.fireErrorLifecycleEvent(errorMsg, {
+        sessionId: this.options.getSessionId?.() ?? null,
+        turnCount,
+        toolName: toolCall.name,
+        toolCallId: toolCall.id,
+        toolInput: rawInput,
+      });
+
+      return {
+        message: {
+          role: "tool",
+          content: errorMsg,
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+        },
+        events: [emitStreamEvent("error", { tool: toolCall.name, message: errorMsg })],
+      };
+    }
+
+    const tool = registration.tool;
+    const toolContext = this.createToolContext();
+    const normalizedInput = tool.normalizeInput?.(rawInput, toolContext) ?? rawInput;
+
+    const denial = await this.resolveToolCallApproval({
+      tool,
+      toolCall,
+      registration,
+      toolContext,
+      normalizedInput,
+      turnCount,
+    });
+    if (denial) {
+      return denial;
+    }
+
+    if (mode === "process") {
+      this.options.onToolExecute?.(registration.canonicalName, normalizedInput);
+    }
+
+    const events = [emitStreamEvent("tool_call", {
+      tool: registration.canonicalName,
+      requestedToolName: toolCall.name,
+      qualifiedToolName: registration.qualifiedName,
+      category: registration.category,
+      input: normalizedInput,
+      toolCallId: toolCall.id,
+    })];
+
+    await this.fireLifecycleEvent("tool:before", {
+      sessionId: this.options.getSessionId?.() ?? null,
+      turnCount,
+      toolName: registration.canonicalName,
+      toolCallId: toolCall.id,
+      toolInput: normalizedInput,
+    });
+
+    try {
+      const startedAt = Date.now();
+      const result = await tool.execute(normalizedInput, toolContext);
+      const durationMs = Date.now() - startedAt;
+      const outputBase = result.success ? result.output : (result.error ?? result.output);
+      const output = result.truncated ? `${outputBase}\n[Output truncated]` : outputBase;
+      const askUserRequest = this.extractAskUserQuestionRequest(result.data, normalizedInput);
+
+      if (askUserRequest && this.options.resolveQuestion) {
+        const answer = await this.options.resolveQuestion(askUserRequest);
+        await this.fireLifecycleEvent("tool:after", {
+          sessionId: this.options.getSessionId?.() ?? null,
+          turnCount,
+          toolName: registration.canonicalName,
+          toolCallId: toolCall.id,
+          toolInput: normalizedInput,
+          toolSuccess: true,
+        });
+
+        return {
+          message: {
+            role: "tool",
+            content: answer,
+            toolCallId: toolCall.id,
+            toolName: registration.canonicalName,
+            metadata: {
+              success: true,
+              durationMs,
+              input: normalizedInput,
+              question: askUserRequest.question,
+              answer,
+              options: askUserRequest.options,
+              allowFreeform: askUserRequest.allowFreeform,
+              toolCallId: toolCall.id,
+              canonicalToolName: registration.canonicalName,
+              qualifiedToolName: registration.qualifiedName,
+              requestedToolName: toolCall.name,
+            },
+          },
+          events: [
+            ...events,
+            emitStreamEvent("tool_result", {
+              tool: registration.canonicalName,
+              success: true,
+              input: normalizedInput,
+              answer,
+              question: askUserRequest.question,
+              toolCallId: toolCall.id,
+            }),
+          ],
+        };
+      }
+
+      await this.fireLifecycleEvent("tool:after", {
+        sessionId: this.options.getSessionId?.() ?? null,
+        turnCount,
+        toolName: registration.canonicalName,
+        toolCallId: toolCall.id,
+        toolInput: normalizedInput,
+        toolSuccess: result.success,
+        ...(result.success ? {} : { error: new Error(result.error ?? result.output) }),
+      });
+
+      return {
+        message: {
+          role: "tool",
+          content: output,
+          toolCallId: toolCall.id,
+          toolName: registration.canonicalName,
+          metadata: {
+            success: result.success,
+            durationMs,
+            input: normalizedInput,
+            truncated: result.truncated ?? false,
+            summary: result.summary,
+            debug: result.debug,
+            toolCallId: toolCall.id,
+            canonicalToolName: registration.canonicalName,
+            qualifiedToolName: registration.qualifiedName,
+            requestedToolName: toolCall.name,
+            category: registration.category,
+            ...(result.error ? { error: result.error } : {}),
+            ...(result.data !== undefined ? { data: result.data } : {}),
+          },
+        },
+        events: [
+          ...events,
+          emitStreamEvent("tool_result", {
+            tool: registration.canonicalName,
+            success: result.success,
+            input: normalizedInput,
+            output,
+            durationMs,
+            truncated: result.truncated ?? false,
+            summary: result.summary,
+            toolCallId: toolCall.id,
+            qualifiedToolName: registration.qualifiedName,
+            requestedToolName: toolCall.name,
+            category: registration.category,
+            ...(result.error ? { error: result.error } : {}),
+            ...(result.data !== undefined ? { data: result.data } : {}),
+          }),
+        ],
+      };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      const error = err instanceof Error ? err : new Error(message);
+
+      await this.fireLifecycleEvent("tool:after", {
+        sessionId: this.options.getSessionId?.() ?? null,
+        turnCount,
+        toolName: registration.canonicalName,
+        toolCallId: toolCall.id,
+        toolInput: normalizedInput,
+        toolSuccess: false,
+        error,
+      });
+      await this.fireErrorLifecycleEvent(message, {
+        sessionId: this.options.getSessionId?.() ?? null,
+        turnCount,
+        toolName: registration.canonicalName,
+        toolCallId: toolCall.id,
+        toolInput: normalizedInput,
+        error,
+      });
+
+      const output = mode === "process"
+        ? `Tool execution error: ${message}`
+        : `Tool error: ${message}`;
+
+      return {
+        message: {
+          role: "tool",
+          content: output,
+          toolCallId: toolCall.id,
+          toolName: registration.canonicalName,
+          metadata: {
+            success: false,
+            input: normalizedInput,
+            error: message,
+            toolCallId: toolCall.id,
+            canonicalToolName: registration.canonicalName,
+            qualifiedToolName: registration.qualifiedName,
+            requestedToolName: toolCall.name,
+          },
+        },
+        events: [
+          ...events,
+          emitStreamEvent("tool_result", {
+            tool: registration.canonicalName,
+            success: false,
+            input: normalizedInput,
+            output,
+            error: message,
+            toolCallId: toolCall.id,
+            qualifiedToolName: registration.qualifiedName,
+            requestedToolName: toolCall.name,
+          }),
+        ],
+      };
+    }
+  }
+
+  private async resolveToolCallApproval(params: {
+    tool: Tool;
+    toolCall: PendingToolCall;
+    registration: NonNullable<ReturnType<ToolRegistry["getRegistration"]>>;
+    toolContext: ToolContext;
+    normalizedInput: unknown;
+    turnCount: number;
+  }): Promise<ToolCallExecutionOutcome | null> {
+    const approvalRequest = this.getApprovalRequest(
+      params.tool,
+      params.registration.canonicalName,
+      params.normalizedInput,
+      params.toolContext,
+    );
+    const needsApproval = Boolean(approvalRequest);
+
+    if (!approvalRequest) {
+      return null;
+    }
+
+    if (this.options.permissionManager) {
+      let permissionResult = await this.options.permissionManager.checkPermission({
+        toolName: params.registration.canonicalName,
+        toolArgs: approvalRequest.toolArgs,
+        riskLevel: approvalRequest.riskLevel ?? "high",
+        reason: approvalRequest.reason,
+        sessionId: this.options.getSessionId?.() ?? null,
+        toolCallId: params.toolCall.id,
+      });
+
+      if (permissionResult.decision === "ask") {
+        const pendingApproval = this.options.permissionManager.createPendingApproval({
+          sessionId: this.options.getSessionId?.() ?? null,
+          toolCallId: params.toolCall.id,
+          toolName: params.registration.canonicalName,
+          toolArgs: approvalRequest.toolArgs,
+          approvalMessage: approvalRequest.approvalMessage,
+        });
+
+        if (this.options.resolvePermission) {
+          const userDecision = await this.options.resolvePermission({
+            toolName: params.registration.canonicalName,
+            toolArgs: approvalRequest.toolArgs,
+            approvalMessage: approvalRequest.approvalMessage,
+          });
+          if (pendingApproval) {
+            this.options.permissionManager.resolvePendingApproval(pendingApproval.id, userDecision);
+          }
+          permissionResult = {
+            decision: userDecision,
+            persisted: userDecision === "allow-always",
+            reason: "User decision",
+          };
+        } else {
+          if (pendingApproval) {
+            this.options.permissionManager.resolvePendingApproval(pendingApproval.id, "deny");
+          }
+          permissionResult = { decision: "deny", reason: "No interactive approval available" };
+        }
+      }
+
+      if (permissionResult.decision === "deny") {
+        await this.fireLifecycleEvent("tool:after", {
+          sessionId: this.options.getSessionId?.() ?? null,
+          turnCount: params.turnCount,
+          toolName: params.registration.canonicalName,
+          toolCallId: params.toolCall.id,
+          toolInput: params.normalizedInput,
+          toolSuccess: false,
+          error: new Error(permissionResult.reason ?? "Permission denied"),
+        });
+
+        return {
+          message: {
+            role: "tool",
+            content: `Tool execution denied: ${permissionResult.reason ?? "Permission denied"}`,
+            toolCallId: params.toolCall.id,
+            toolName: params.registration.canonicalName,
+            metadata: {
+              success: false,
+              input: params.normalizedInput,
+              error: permissionResult.reason ?? "Permission denied",
+              toolCallId: params.toolCall.id,
+              canonicalToolName: params.registration.canonicalName,
+              qualifiedToolName: params.registration.qualifiedName,
+              requestedToolName: params.toolCall.name,
+              approvalMessage: approvalRequest.approvalMessage,
+            },
+          },
+          events: [emitStreamEvent("permission_denied", {
+            tool: params.registration.canonicalName,
+            input: params.normalizedInput,
+            reason: permissionResult.reason,
+            approvalMessage: approvalRequest.approvalMessage,
+          })],
+        };
+      }
+
+      this.options.permissionManager.recordDecision(
+        params.registration.canonicalName,
+        permissionResult.decision,
+        permissionResult.persisted ?? false,
+      );
+      return null;
+    }
+
+    if (!needsApproval) {
+      return null;
+    }
+
+    await this.fireLifecycleEvent("tool:after", {
+      sessionId: this.options.getSessionId?.() ?? null,
+      turnCount: params.turnCount,
+      toolName: params.registration.canonicalName,
+      toolCallId: params.toolCall.id,
+      toolInput: params.normalizedInput,
+      toolSuccess: false,
+      error: new Error("No permission manager configured"),
+    });
+
+    return {
+      message: {
+        role: "tool",
+        content: "Tool execution denied (no permission manager configured)",
+        toolCallId: params.toolCall.id,
+        toolName: params.registration.canonicalName,
+        metadata: {
+          success: false,
+          input: params.normalizedInput,
+          error: "No permission manager configured",
+          toolCallId: params.toolCall.id,
+          canonicalToolName: params.registration.canonicalName,
+          qualifiedToolName: params.registration.qualifiedName,
+          requestedToolName: params.toolCall.name,
+        },
+      },
+      events: [emitStreamEvent("permission_denied", {
+        tool: params.registration.canonicalName,
+        input: params.normalizedInput,
+        reason: "No permission manager configured",
+      })],
+    };
   }
 }
 

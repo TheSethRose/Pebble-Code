@@ -869,4 +869,88 @@ describe("QueryEngine integration flows", () => {
       "error:tool exploded",
     ]);
   });
+
+  test("shared tool-call handling preserves process and stream error wording", async () => {
+    const explodingTool: Tool = {
+      name: "ExplodingTool",
+      description: "always throws",
+      inputSchema: z.object({}),
+      async execute() {
+        throw new Error("boom");
+      },
+    };
+
+    const processProvider = new ScriptedProvider((_messages, callNumber) => {
+      if (callNumber === 1) {
+        return {
+          text: "",
+          toolCalls: [{ id: "explode-process", name: "ExplodingTool", input: {} }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      }
+
+      return {
+        text: "done",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    });
+
+    const processEngine = new QueryEngine({
+      provider: processProvider,
+      tools: [explodingTool],
+    });
+
+    const processResult = await processEngine.process([{ role: "user", content: "explode" }]);
+    expect(processResult.success).toBe(true);
+    expect(processResult.messages.at(-2)).toMatchObject({
+      role: "tool",
+      toolName: "ExplodingTool",
+      content: "Tool execution error: boom",
+    });
+
+    const streamProvider = new StubProvider(
+      {
+        text: "unused",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 0, outputTokens: 0 },
+      },
+      [
+        {
+          toolCall: {
+            id: "explode-stream",
+            name: "ExplodingTool",
+            input: {},
+          },
+          done: false,
+        },
+        {
+          done: true,
+          metadata: { stopReason: "tool_use" },
+        },
+      ],
+    );
+
+    const streamEngine = new QueryEngine({
+      provider: streamProvider,
+      tools: [explodingTool],
+    });
+
+    const streamEvents: Array<{ type: string; data: unknown }> = [];
+    for await (const event of streamEngine.stream([{ role: "user", content: "explode" }])) {
+      streamEvents.push({ type: event.type, data: event.data });
+    }
+
+    expect(streamEvents).toContainEqual({
+      type: "tool_result",
+      data: expect.objectContaining({
+        tool: "ExplodingTool",
+        success: false,
+        output: "Tool error: boom",
+      }),
+    });
+  });
 });

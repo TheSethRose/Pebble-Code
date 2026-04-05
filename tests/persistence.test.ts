@@ -187,9 +187,14 @@ describe("Compaction", () => {
       const compacted = compactSessionIfNeeded(store, session.id, 1);
       expect(compacted).not.toBeNull();
       expect(compacted!.messages.length).toBeLessThan(30);
-      expect(compacted!.messages.some((message) => message.content.startsWith("[Summary of"))).toBe(true);
+      expect(compacted!.messages.some((message) => message.content.startsWith("[Compacted transcript summary]"))).toBe(true);
       expect(compacted!.metadata?.compactionCount).toBe(1);
       expect(compacted!.metadata?.compactThreshold).toBe(1);
+      expect(compacted!.metadata?.lastCompactionArtifact).toMatchObject({
+        kind: "compaction-artifact",
+        compactedMessageCount: expect.any(Number),
+        generatedAt: expect.any(String),
+      });
     } finally {
       rmSync(sessionsDir, { recursive: true, force: true });
     }

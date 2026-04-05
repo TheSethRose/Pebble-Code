@@ -84,7 +84,7 @@ export function compactTranscriptWithArtifact(
     role: "system",
     content: formatCompactionArtifact(artifact),
     timestamp: artifact.generatedAt,
-    metadata: artifact,
+    metadata: artifact as unknown as Record<string, unknown>,
   };
 
   return {
@@ -174,3 +174,5 @@ function formatCompactionArtifact(artifact: CompactionArtifact): string {
     ...artifact.bullets.map((bullet) => `- ${bullet}`),
   ].join("\n");
 }
+
+export { estimateTokens } from "./tokenEstimation.js";

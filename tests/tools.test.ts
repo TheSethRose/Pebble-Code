@@ -897,10 +897,22 @@ describe("capability tool implementations", () => {
     initializeGitRepo(projectDir);
     writeFileSync(join(projectDir, "tracked.txt"), "base\n", "utf-8");
     commitAll(projectDir, "initial");
+    const sessionStore = createProjectSessionStore(projectDir);
+    sessionStore.createSession("session-123");
 
     const createTool = new OrchestrateTool();
     const getTool = new OrchestrateTool();
     const removeTool = new OrchestrateTool();
+    const statusTool = new OrchestrateTool();
+
+    const status = await statusTool.execute(
+      { action: "worktree_status" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(status.success).toBe(true);
+    expect(status.output).toContain("Worktrees available");
+    expect(status.output).toContain(join(projectDir, ".pebble", "worktrees"));
 
     const created = await createTool.execute(
       { action: "worktree_create", session_id: "session-123", branch: "session-123-worktree" },
@@ -913,6 +925,19 @@ describe("capability tool implementations", () => {
       : "";
     expect(worktreePath).toContain(join(projectDir, ".pebble", "worktrees", "session-123"));
     expect(existsSync(worktreePath)).toBe(true);
+    const listedWorktrees = Bun.spawnSync({
+      cmd: ["git", "worktree", "list", "--porcelain"],
+      cwd: projectDir,
+      stdout: "pipe",
+      stderr: "pipe",
+    }).stdout.toString("utf-8");
+    expect(listedWorktrees).toContain(worktreePath);
+    expect(sessionStore.loadTranscript("session-123")?.metadata).toMatchObject({
+      worktree: {
+        path: worktreePath,
+        branch: "session-123-worktree",
+      },
+    });
 
     const loaded = await getTool.execute(
       { action: "worktree_get", session_id: "session-123" },
@@ -921,6 +946,10 @@ describe("capability tool implementations", () => {
 
     expect(loaded.success).toBe(true);
     expect(loaded.output).toBe(worktreePath);
+    expect(loaded.data).toMatchObject({
+      worktreePath,
+      branch: "session-123-worktree",
+    });
 
     const removed = await removeTool.execute(
       { action: "worktree_remove", session_id: "session-123" },
@@ -936,8 +965,11 @@ describe("capability tool implementations", () => {
     );
 
     expect(afterRemove.success).toBe(true);
-    expect(afterRemove.output).toBe("(not loaded in current process)");
+    expect(afterRemove.output).toBe("No worktree registered for session-123.");
     expect(readFileSync(join(projectDir, ".pebble", "worktrees", "registry.json"), "utf-8")).toContain('"worktrees": []');
+    expect(sessionStore.loadTranscript("session-123")?.metadata).toMatchObject({
+      worktree: null,
+    });
   });
 });
 

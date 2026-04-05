@@ -346,6 +346,7 @@ export default {
     expect(exitCode).toBe(0);
     expect(stderr.some((line) => line.includes("Background sessions:"))).toBe(false);
     expect(stderr.some((line) => line.includes("Worktree root:"))).toBe(true);
+    expect(stderr.some((line) => line.includes("Worktree support:"))).toBe(true);
   });
 
   test("executes a real end-to-end runtime tool flow through headless mode", async () => {

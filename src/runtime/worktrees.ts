@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 export interface WorktreeConfig {
+  /** Git repository root the worktree commands should run against */
+  repoRoot: string;
   /** Base directory for worktrees */
   worktreeDir: string;
   /** Branch to create worktrees from */
@@ -13,7 +15,7 @@ export interface WorktreeConfig {
   stateFile: string;
 }
 
-interface PersistedWorktreeRecord {
+export interface PersistedWorktreeRecord {
   sessionId: string;
   worktreePath: string;
   branch: string;
@@ -24,6 +26,16 @@ interface PersistedWorktreeState {
   worktrees: PersistedWorktreeRecord[];
 }
 
+export interface WorktreeAvailability {
+  available: boolean;
+  repoRoot: string;
+  worktreeDir: string;
+  stateFile: string;
+  gitRoot?: string;
+  baseRef?: string;
+  reason?: string;
+}
+
 /**
  * Manage git worktrees for isolated development contexts.
  */
@@ -32,20 +44,66 @@ export class WorktreeManager {
   private config: WorktreeConfig;
 
   constructor(config: Partial<WorktreeConfig> = {}) {
+    const repoRoot = resolve(config.repoRoot ?? process.cwd());
+    const worktreeDir = config.worktreeDir
+      ? (isAbsolute(config.worktreeDir) ? config.worktreeDir : resolve(repoRoot, config.worktreeDir))
+      : resolve(repoRoot, ".pebble", "worktrees");
+
     this.config = {
-      worktreeDir: config.worktreeDir ?? ".pebble/worktrees",
+      repoRoot,
+      worktreeDir,
       branch: config.branch ?? "main",
       autoClean: config.autoClean ?? true,
-      stateFile: config.stateFile ?? join(config.worktreeDir ?? ".pebble/worktrees", "registry.json"),
+      stateFile: config.stateFile
+        ? (isAbsolute(config.stateFile) ? config.stateFile : resolve(repoRoot, config.stateFile))
+        : join(worktreeDir, "registry.json"),
     };
     this.ensureDir();
     this.loadState();
+  }
+
+  getAvailability(): WorktreeAvailability {
+    const baseAvailability = {
+      repoRoot: this.config.repoRoot,
+      worktreeDir: this.config.worktreeDir,
+      stateFile: this.config.stateFile,
+    } satisfies Omit<WorktreeAvailability, "available">;
+
+    try {
+      const gitRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+        cwd: this.config.repoRoot,
+        stdio: "pipe",
+      }).toString("utf-8").trim();
+
+      execFileSync("git", ["worktree", "list", "--porcelain"], {
+        cwd: this.config.repoRoot,
+        stdio: "pipe",
+      });
+
+      return {
+        available: true,
+        ...baseAvailability,
+        gitRoot,
+        baseRef: this.resolveBaseRef(),
+      };
+    } catch (error) {
+      return {
+        available: false,
+        ...baseAvailability,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   /**
    * Create a new worktree for a session.
    */
   createWorktree(sessionId: string, branch?: string): string {
+    const availability = this.getAvailability();
+    if (!availability.available) {
+      throw new Error(availability.reason ?? "Git worktrees are not available for this repository");
+    }
+
     const existing = this.worktrees.get(sessionId);
     if (existing && existsSync(existing.worktreePath)) {
       return existing.worktreePath;
@@ -66,7 +124,8 @@ export class WorktreeManager {
     }
 
     try {
-      execFileSync("git", ["worktree", "add", worktreePath, "-b", targetBranch], {
+      execFileSync("git", ["worktree", "add", "-b", targetBranch, worktreePath, this.resolveBaseRef()], {
+        cwd: this.config.repoRoot,
         stdio: "pipe",
       });
       this.worktrees.set(sessionId, {
@@ -78,6 +137,25 @@ export class WorktreeManager {
       this.saveState();
       return worktreePath;
     } catch (error) {
+      if (error instanceof Error && error.message.includes("already exists")) {
+        try {
+          execFileSync("git", ["worktree", "add", worktreePath, targetBranch], {
+            cwd: this.config.repoRoot,
+            stdio: "pipe",
+          });
+          this.worktrees.set(sessionId, {
+            sessionId,
+            worktreePath,
+            branch: targetBranch,
+            createdAt: existing?.createdAt ?? new Date().toISOString(),
+          });
+          this.saveState();
+          return worktreePath;
+        } catch {
+          // fall through to the wrapped error below
+        }
+      }
+
       throw new Error(
         `Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -100,7 +178,10 @@ export class WorktreeManager {
     }
 
     try {
-      execFileSync("git", ["worktree", "remove", worktree.worktreePath], { stdio: "pipe" });
+      execFileSync("git", ["worktree", "remove", worktree.worktreePath], {
+        cwd: this.config.repoRoot,
+        stdio: "pipe",
+      });
       this.worktrees.delete(sessionId);
       this.saveState();
     } catch (error) {
@@ -108,10 +189,7 @@ export class WorktreeManager {
     }
   }
 
-  /**
-   * Get worktree path for a session.
-   */
-  getWorktreePath(sessionId: string): string | undefined {
+  getWorktree(sessionId: string): PersistedWorktreeRecord | undefined {
     const record = this.worktrees.get(sessionId);
     if (!record) {
       return undefined;
@@ -123,7 +201,14 @@ export class WorktreeManager {
       return undefined;
     }
 
-    return record.worktreePath;
+    return record;
+  }
+
+  /**
+   * Get worktree path for a session.
+   */
+  getWorktreePath(sessionId: string): string | undefined {
+    return this.getWorktree(sessionId)?.worktreePath;
   }
 
   /**
@@ -139,6 +224,23 @@ export class WorktreeManager {
     if (!existsSync(this.config.worktreeDir)) {
       mkdirSync(this.config.worktreeDir, { recursive: true });
     }
+  }
+
+  private resolveBaseRef(): string {
+    const preferred = this.config.branch.trim();
+    if (preferred.length > 0) {
+      try {
+        execFileSync("git", ["rev-parse", "--verify", preferred], {
+          cwd: this.config.repoRoot,
+          stdio: "pipe",
+        });
+        return preferred;
+      } catch {
+        // Fall back to HEAD when the configured branch does not exist.
+      }
+    }
+
+    return "HEAD";
   }
 
   private loadState(): void {

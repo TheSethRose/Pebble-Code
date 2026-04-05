@@ -11,6 +11,7 @@ import { BUILD_INFO, getVersionString } from "../build/buildInfo.js";
 import { getFeatureSummary } from "../build/featureFlags.js";
 import { buildRuntimeConfig } from "./config.js";
 import { PermissionManager } from "./permissionManager.js";
+import { WorktreeManager } from "./worktrees.js";
 import { createHookRegistry, type HookContext, type HookRegistry } from "./hooks.js";
 import { formatInstructions, loadPromptFiles, formatPromptFiles } from "./instructions.js";
 import {
@@ -123,9 +124,14 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
   const systemPrompt = mergeRuntimeInstructions(promptContent, instructions, integrations.skills);
 
   if (shouldLogStartup) {
+    const worktreeManager = new WorktreeManager({ repoRoot: config.trust.projectRoot });
+    const worktreeAvailability = worktreeManager.getAvailability();
     console.error(`Provider: ${resolvedProvider.providerLabel} (${resolvedProvider.model})`);
     console.error(`Extensions: ${integrations.extensions.length} plugin(s), ${integrations.skills.length} skill(s), ${integrations.mcpServers.length} MCP server(s), ${integrations.providers.length} provider(s)`);
     console.error(`Worktree root: ${join(config.trust.projectRoot, ".pebble", "worktrees")}`);
+    console.error(
+      `Worktree support: ${worktreeAvailability.available ? "available" : `unavailable (${worktreeAvailability.reason ?? "unknown reason"})`}`,
+    );
   }
 
   // Phase 6: Start the appropriate mode

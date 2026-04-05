@@ -39,7 +39,7 @@ export function createUserReplayEvent(text: string) {
  * Create a stream event wrapper.
  */
 export function createStreamEvent(
-  eventType: string,
+  eventType: StreamEvent["type"],
   data: unknown
 ) {
   return {
@@ -83,3 +83,5 @@ export function createInitEvent(
     timestamp: Date.now(),
   };
 }
+
+import type { StreamEvent } from "./types.js";

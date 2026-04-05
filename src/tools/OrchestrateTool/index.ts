@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { WorktreeManager } from "../../runtime/worktrees.js";
+import { createProjectSessionStore } from "../../persistence/runtimeSessions.js";
 import type { Tool, ToolApprovalRequest, ToolContext, ToolResult } from "../Tool.js";
 import { truncateText } from "../shared/common.js";
 
@@ -18,6 +19,9 @@ const OrchestrateInputSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("worktree_get"),
     session_id: z.string(),
+  }),
+  z.object({
+    action: z.literal("worktree_status"),
   }),
   z.object({
     action: z.literal("worktree_remove"),
@@ -55,30 +59,75 @@ export class OrchestrateTool implements Tool {
       }
 
       case "worktree_create": {
-        const manager = new WorktreeManager({ worktreeDir: join(context.cwd, ".pebble", "worktrees") });
+        const manager = createWorktreeManager(context.cwd);
+        const availability = manager.getAvailability();
+        if (!availability.available) {
+          return {
+            success: false,
+            output: "",
+            error: availability.reason ?? "Git worktrees are not available for this repository.",
+          };
+        }
+
         const worktreePath = manager.createWorktree(parsed.data.session_id, parsed.data.branch);
+        const worktree = manager.getWorktree(parsed.data.session_id);
+        updateSessionWorktreeLink(context.cwd, parsed.data.session_id, worktreePath, worktree?.branch ?? parsed.data.branch ?? null);
         return {
           success: true,
-          output: `Created worktree ${worktreePath}`,
-          data: { worktreePath },
+          output: [
+            `Created worktree ${worktreePath}`,
+            worktree?.branch ? `Branch: ${worktree.branch}` : undefined,
+            availability.baseRef ? `Base ref: ${availability.baseRef}` : undefined,
+          ].filter(Boolean).join("\n"),
+          data: {
+            worktreePath,
+            branch: worktree?.branch ?? parsed.data.branch ?? null,
+            baseRef: availability.baseRef,
+            repoRoot: availability.repoRoot,
+          },
           summary: `Created worktree for ${parsed.data.session_id}`,
         };
       }
 
       case "worktree_get": {
-        const manager = new WorktreeManager({ worktreeDir: join(context.cwd, ".pebble", "worktrees") });
-        const worktreePath = manager.getWorktreePath(parsed.data.session_id) ?? "(not loaded in current process)";
+        const manager = createWorktreeManager(context.cwd);
+        const worktree = manager.getWorktree(parsed.data.session_id);
+        const worktreePath = worktree?.worktreePath ?? `No worktree registered for ${parsed.data.session_id}.`;
         return {
           success: true,
           output: worktreePath,
-          data: { worktreePath },
+          data: worktree
+            ? {
+                worktreePath: worktree.worktreePath,
+                branch: worktree.branch,
+                createdAt: worktree.createdAt,
+              }
+            : { worktreePath: null },
           summary: `Looked up worktree for ${parsed.data.session_id}`,
         };
       }
 
+      case "worktree_status": {
+        const manager = createWorktreeManager(context.cwd);
+        const availability = manager.getAvailability();
+        return {
+          success: availability.available,
+          output: availability.available
+            ? [
+                `Worktrees available for ${availability.gitRoot}`,
+                `Worktree root: ${availability.worktreeDir}`,
+                availability.baseRef ? `Base ref: ${availability.baseRef}` : undefined,
+              ].filter(Boolean).join("\n")
+            : `Worktrees unavailable: ${availability.reason ?? "unknown reason"}`,
+          data: availability,
+          summary: availability.available ? "Worktree support available" : "Worktree support unavailable",
+        };
+      }
+
       case "worktree_remove": {
-        const manager = new WorktreeManager({ worktreeDir: join(context.cwd, ".pebble", "worktrees") });
+        const manager = createWorktreeManager(context.cwd);
         manager.removeWorktree(parsed.data.session_id);
+        updateSessionWorktreeLink(context.cwd, parsed.data.session_id, null, null);
         return {
           success: true,
           output: `Removed worktree for ${parsed.data.session_id}`,
@@ -118,6 +167,7 @@ export class OrchestrateTool implements Tool {
     switch (parsed.data.action) {
       case "run_verification":
       case "plan_status":
+      case "worktree_status":
         return null;
       default:
         return {
@@ -129,6 +179,35 @@ export class OrchestrateTool implements Tool {
         };
     }
   }
+}
+
+function createWorktreeManager(cwd: string): WorktreeManager {
+  return new WorktreeManager({
+    repoRoot: cwd,
+    worktreeDir: join(cwd, ".pebble", "worktrees"),
+  });
+}
+
+function updateSessionWorktreeLink(
+  cwd: string,
+  sessionId: string,
+  worktreePath: string | null,
+  branch: string | null,
+): void {
+  const sessionStore = createProjectSessionStore(cwd);
+  if (!sessionStore.loadTranscript(sessionId)) {
+    return;
+  }
+
+  sessionStore.updateMetadata(sessionId, {
+    worktree: worktreePath
+      ? {
+          path: worktreePath,
+          ...(branch ? { branch } : {}),
+          linkedAt: new Date().toISOString(),
+        }
+      : null,
+  });
 }
 
 function runVerificationCommand(
