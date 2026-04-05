@@ -12,6 +12,7 @@ export interface CommandSuggestion {
 interface PromptInputProps {
   isProcessing: boolean;
   disabled?: boolean;
+  suspendInputCapture?: boolean;
   onSubmit: (value: string) => void;
   onChange?: (value: string) => void;
   inputKey?: number;
@@ -49,6 +50,7 @@ function renderVoiceLevels(levels: number[]): string {
 export function PromptInput({
   isProcessing,
   disabled = false,
+  suspendInputCapture = false,
   onSubmit,
   onChange,
   inputKey = 0,
@@ -66,6 +68,7 @@ export function PromptInput({
   voiceAudioLevels = [],
   voiceError = null,
 }: PromptInputProps) {
+  const isInputSuspended = suspendInputCapture && !disabled;
   const statusLabel = disabled ? statusText || "Waiting for input…" : isProcessing ? statusText || "Working…" : "Ready";
   const promptGlyph = voiceState === "recording" ? "●" : isProcessing || voiceState === "processing" ? "…" : "❯";
   const sessionLabel = sessionId ? sessionId.slice(0, 8) : "new session";
@@ -151,6 +154,10 @@ export function PromptInput({
         </Text>
         {disabled ? (
           <Text color="#aaaaaa">Interactive prompt is temporarily paused above.</Text>
+        ) : isInputSuspended ? (
+          <Text color={defaultValue ? "white" : "#666666"}>
+            {defaultValue || "Ask Pebble anything…"}
+          </Text>
         ) : (
           <TextInput
             key={`${isProcessing ? "busy" : "idle"}-${inputKey}`}

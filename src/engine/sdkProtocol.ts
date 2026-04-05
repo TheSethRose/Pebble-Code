@@ -8,13 +8,11 @@
  * with stderr reserved for human-readable logs.
  */
 
-import type { StreamEvent, ResultEnvelope, Message } from "./types.js";
+import type { StreamEvent } from "./types.js";
 import {
   createResultEnvelope,
   createUserReplayEvent,
   createStreamEvent,
-  createRetryEvent,
-  createProgressEvent,
   createPermissionDenialEvent,
   createInitEvent,
 } from "./results.js";
@@ -26,8 +24,6 @@ export type SdkEvent =
   | InitEvent
   | UserReplayEvent
   | StreamEventWrapper
-  | RetryEvent
-  | ProgressEvent
   | PermissionDeniedEvent
   | ResultEvent;
 
@@ -50,22 +46,6 @@ export interface StreamEventWrapper {
   type: "stream_event";
   event: string;
   data: unknown;
-  timestamp: number;
-}
-
-export interface RetryEvent {
-  type: "retry";
-  reason: string;
-  attempt: number;
-  maxAttempts: number;
-  timestamp: number;
-}
-
-export interface ProgressEvent {
-  type: "progress";
-  message: string;
-  progress?: number;
-  total?: number;
   timestamp: number;
 }
 
@@ -108,28 +88,11 @@ export function serializeSdkEvent(event: SdkEvent): string {
   return JSON.stringify(event);
 }
 
-/**
- * Convert engine messages to SDK events.
- */
-export function messagesToSdkEvents(
-  messages: Message[],
-  sessionId: string
-): SdkEvent[] {
-  return messages.map((msg) => ({
-    type: "stream_event" as const,
-    event: msg.role,
-    data: { content: msg.content, metadata: msg.metadata },
-    timestamp: Date.now(),
-  }));
-}
-
 // Re-export factory functions for convenience
 export {
   createResultEnvelope,
   createUserReplayEvent,
   createStreamEvent,
-  createRetryEvent,
-  createProgressEvent,
   createPermissionDenialEvent,
   createInitEvent,
 };

@@ -5,8 +5,6 @@
  * consumers can parse deterministically.
  */
 
-import type { EngineState } from "./types.js";
-
 /**
  * Create a result envelope for headless output.
  */
@@ -48,40 +46,6 @@ export function createStreamEvent(
     type: "stream_event" as const,
     event: eventType,
     data,
-    timestamp: Date.now(),
-  };
-}
-
-/**
- * Create a retry event.
- */
-export function createRetryEvent(
-  reason: string,
-  attempt: number,
-  maxAttempts: number
-) {
-  return {
-    type: "retry" as const,
-    reason,
-    attempt,
-    maxAttempts,
-    timestamp: Date.now(),
-  };
-}
-
-/**
- * Create a progress event.
- */
-export function createProgressEvent(
-  message: string,
-  progress?: number,
-  total?: number
-) {
-  return {
-    type: "progress" as const,
-    message,
-    progress,
-    total,
     timestamp: Date.now(),
   };
 }

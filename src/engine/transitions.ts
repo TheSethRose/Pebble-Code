@@ -20,30 +20,3 @@ export function emitStreamEvent(
     timestamp: Date.now(),
   };
 }
-
-/**
- * Type guard: check if a value is a StreamEvent.
- */
-export function isStreamEvent(value: unknown): value is StreamEvent {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "type" in value &&
-    "data" in value &&
-    "timestamp" in value
-  );
-}
-
-/**
- * Valid event types for documentation/validation.
- */
-export const EVENT_TYPES = [
-  "text_delta",
-  "tool_call",
-  "tool_result",
-  "progress",
-  "error",
-  "done",
-  "retry",
-  "permission_denied",
-] as const;

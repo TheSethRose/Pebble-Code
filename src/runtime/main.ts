@@ -8,11 +8,11 @@
 
 import { join } from "node:path";
 import { BUILD_INFO, getVersionString } from "../build/buildInfo.js";
-import { getFeatureSummary, isFeatureEnabled } from "../build/featureFlags.js";
+import { getFeatureSummary } from "../build/featureFlags.js";
 import { buildRuntimeConfig } from "./config.js";
 import { PermissionManager } from "./permissionManager.js";
 import { createHookRegistry, type HookContext, type HookRegistry } from "./hooks.js";
-import { loadRepositoryInstructions, formatInstructions, loadPromptFiles, formatPromptFiles } from "./instructions.js";
+import { formatInstructions, loadPromptFiles, formatPromptFiles } from "./instructions.js";
 import {
   createProjectSessionStore,
   createOrResumeSession,
@@ -31,11 +31,9 @@ import {
   type RuntimeIntegrations,
 } from "../extensions/loaders.js";
 import type { Command } from "../commands/types.js";
-import type { Message, StreamEvent, EngineState } from "../engine/types.js";
+import type { StreamEvent, EngineState } from "../engine/types.js";
 import type { Tool } from "../tools/Tool.js";
 import { resolveRuntimeProvider, type RuntimeProviderResolution } from "../providers/runtime.js";
-import { BackgroundSessionManager } from "./backgroundSessions.js";
-import { WorktreeManager } from "./worktrees.js";
 import { createHeadlessReporter, type HeadlessFormat } from "./reporters.js";
 
 export type { HeadlessFormat } from "./reporters.js";
@@ -109,14 +107,8 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
   const hookRegistry = createHookRegistry(integrations.extensions);
   const systemPrompt = mergeRuntimeInstructions(promptContent, instructions, integrations.skills);
 
-  const backgroundSessionManager = new BackgroundSessionManager(join(config.trust.projectRoot, ".pebble", "background-sessions"));
-  const worktreeManager = new WorktreeManager({
-    worktreeDir: join(config.trust.projectRoot, ".pebble", "worktrees"),
-  });
-  const backgroundSessions = backgroundSessionManager.listSessions();
   console.error(`Provider: ${resolvedProvider.providerLabel} (${resolvedProvider.model})`);
   console.error(`Extensions: ${integrations.extensions.length} plugin(s), ${integrations.skills.length} skill(s), ${integrations.mcpServers.length} MCP server(s), ${integrations.providers.length} provider(s)`);
-  console.error(`Background sessions: ${backgroundSessions.length}`);
   console.error(`Worktree root: ${join(config.trust.projectRoot, ".pebble", "worktrees")}`);
 
   // Phase 6: Start the appropriate mode

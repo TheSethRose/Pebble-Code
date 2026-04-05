@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, basename } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
 /**
  * Repository-level instructions (AGENTS.md-first behavior).
@@ -114,25 +114,3 @@ export function formatInstructions(files: InstructionFile[]): string {
   return `# Repository Instructions\n\n${sections.join("\n\n---\n\n")}`;
 }
 
-/**
- * Scaffold default prompt files into .pebble/prompts/ if the directory doesn't exist.
- * Returns the path to the prompts directory.
- */
-export function scaffoldPromptFiles(projectRoot: string): string {
-  const promptDir = join(projectRoot, ".pebble", "prompts");
-
-  if (existsSync(promptDir)) {
-    return promptDir;
-  }
-
-  mkdirSync(promptDir, { recursive: true });
-
-  for (const file of DEFAULT_PROMPT_FILES) {
-    const bundledPath = join(projectRoot, ".pebble", "prompts", file);
-    if (!existsSync(bundledPath)) {
-      writeFileSync(bundledPath, `# ${basename(file, ".md")}\n\n<!-- Customize this file to change agent behavior -->\n`, "utf-8");
-    }
-  }
-
-  return promptDir;
-}

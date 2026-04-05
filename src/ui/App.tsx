@@ -1452,6 +1452,7 @@ export function App({
         <PromptInput
           isProcessing={state.isProcessing}
           disabled={Boolean(state.pendingPermission || state.pendingQuestion)}
+          suspendInputCapture={voice.state !== "idle"}
           onSubmit={handleSubmit}
           onChange={(val) => {
             setInputValue(val);

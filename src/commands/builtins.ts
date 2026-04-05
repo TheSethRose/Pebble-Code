@@ -41,7 +41,7 @@ import { runGitHubCopilotDeviceLogin } from "../providers/githubCopilot.js";
  * Register all built-in commands.
  */
 export function registerBuiltinCommands(registry: CommandRegistry): void {
-  registry.register(createHelpCommand(registry));
+  registry.register(createHelpCommand());
   registry.register(createClearCommand());
   registry.register(createExitCommand());
   registry.register(createLoginCommand());
@@ -121,7 +121,7 @@ function createConfigUpdatedResult(output: string, settingsPath: string): Comman
   };
 }
 
-function createHelpCommand(registry: CommandRegistry): Command {
+function createHelpCommand(): Command {
   return {
     name: "help",
     aliases: ["h", "?"],

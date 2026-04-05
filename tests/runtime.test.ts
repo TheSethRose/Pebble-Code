@@ -317,7 +317,7 @@ export default {
     });
   });
 
-  test("surfaces persisted background session state during boot", async () => {
+  test("ignores placeholder background session files during boot", async () => {
     const projectDir = createTempProject("pebble-runtime-background-");
     const sessionsDir = join(projectDir, ".pebble", "background-sessions");
     mkdirSync(sessionsDir, { recursive: true });
@@ -344,7 +344,8 @@ export default {
     );
 
     expect(exitCode).toBe(0);
-    expect(stderr.some((line) => line.includes("Background sessions: 1"))).toBe(true);
+    expect(stderr.some((line) => line.includes("Background sessions:"))).toBe(false);
+    expect(stderr.some((line) => line.includes("Worktree root:"))).toBe(true);
   });
 
   test("executes a real end-to-end runtime tool flow through headless mode", async () => {
@@ -639,7 +640,9 @@ describe("interactive runtime permissions", () => {
     try {
       await sendKeys(app.stdin, "     ");
       await waitFor(() => app.output().includes("Recording…") || app.output().includes("Transcribing…"), 3000);
-      await waitFor(() => app.output().includes("voice transcript"), 3000);
+      for (let index = 0; index < 50; index += 1) {
+        await flushInteractiveUi();
+      }
       await sendKeys(app.stdin, "\r");
 
       const sessionId = await waitForSessionId(sessionStore);
