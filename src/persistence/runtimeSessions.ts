@@ -15,6 +15,7 @@ import { buildSessionMemory, isSessionMemoryStale } from "./memory.js";
 import { SessionStore, type SessionTranscript, type TranscriptMessage } from "./sessionStore.js";
 import type { DisplayMessage } from "../ui/types.js";
 import { estimateTokens } from "./tokenEstimation.js";
+import { buildMessageContentWithAttachments } from "../engine/messageAttachments.js";
 
 /**
  * Runtime-facing session helpers that keep transcript persistence, session
@@ -356,7 +357,13 @@ export function transcriptToConversation(
     .filter((message) => isConversationRole(message.role))
     .map((message) => ({
       role: message.role,
-      content: message.content,
+      content: buildMessageContentWithAttachments(
+        message.content,
+        message.attachments,
+        message.metadata,
+      ),
+      ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+      ...(message.metadata ? { metadata: message.metadata } : {}),
       ...(message.toolCall?.name ? { toolName: message.toolCall.name } : {}),
     }));
 
@@ -392,6 +399,7 @@ export function engineMessageToTranscriptMessage(message: Message): TranscriptMe
     role: message.role,
     content: message.content,
     timestamp: new Date().toISOString(),
+    ...(message.attachments?.length ? { attachments: message.attachments } : {}),
     metadata,
     ...(message.toolName
       ? {

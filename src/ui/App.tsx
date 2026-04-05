@@ -211,6 +211,7 @@ export function App({
   const [historyIndex, setHistoryIndex] = React.useState(-1);
   const [showKeybindings, setShowKeybindings] = React.useState(false);
   const [transcriptScrollOffset, setTranscriptScrollOffset] = React.useState(0);
+  const [stagedPasteCount, setStagedPasteCount] = React.useState(0);
   const [blinkPhase, setBlinkPhase] = React.useState(true);
   const [voiceWarmup, setVoiceWarmup] = React.useState(false);
   const [voiceError, setVoiceError] = React.useState<string | null>(null);
@@ -460,6 +461,7 @@ export function App({
     (value: string, updateQuery = false) => {
       setInputValue(value);
       setInputDefaultValue(value);
+      setStagedPasteCount(0);
       if (updateQuery) setSuggestionQuery(value);
       setInputKey((k) => k + 1);
     },
@@ -471,6 +473,7 @@ export function App({
     setInputDefaultValue("");
     setSuggestionQuery("");
     setSuggestionIndex(0);
+    setStagedPasteCount(0);
     setInputKey((k) => k + 1);
   }, []);
 
@@ -644,12 +647,22 @@ export function App({
     const listCtx = { cwd: context.cwd, headless: false, config: runtimeConfig };
     return registry
       .list(listCtx)
-      .filter(
-        (c) =>
-          c.name.startsWith(query) ||
-          (c.aliases ?? []).some((a) => a.startsWith(query)),
-      )
-      .map((c) => ({ name: c.name, description: c.description }));
+      .flatMap((command) => {
+        const aliases = command.aliases ?? [];
+        const matchingAliases = aliases.filter((alias) => alias.startsWith(query));
+        const matchesName = command.name.startsWith(query);
+
+        if (!matchesName && matchingAliases.length === 0) {
+          return [];
+        }
+
+        return [{
+          name: command.name,
+          description: command.description,
+          aliases,
+          insertText: matchesName ? command.name : matchingAliases[0],
+        }];
+      });
   }, [suggestionQuery, registry, context.cwd, runtimeConfig]);
 
   // Reset selection to top whenever the suggestion list changes (e.g. user types more).
@@ -938,7 +951,7 @@ export function App({
           setSuggestionIndex((i) => {
             const next = Math.max(0, i - 1);
             const selected = suggestions[next];
-            if (selected) setInputText(`/${selected.name}`);
+            if (selected) setInputText(`/${selected.insertText ?? selected.name}`);
             return next;
           });
           return;
@@ -947,14 +960,14 @@ export function App({
           setSuggestionIndex((i) => {
             const next = Math.min(suggestions.length - 1, i + 1);
             const selected = suggestions[next];
-            if (selected) setInputText(`/${selected.name}`);
+            if (selected) setInputText(`/${selected.insertText ?? selected.name}`);
             return next;
           });
           return;
         }
         if (key.tab) {
           const selected = suggestions[suggestionIndex];
-          if (selected) setInputText(`/${selected.name} `, true);
+          if (selected) setInputText(`/${selected.insertText ?? selected.name} `, true);
           return;
         }
       }
@@ -1550,6 +1563,8 @@ export function App({
           voiceWarmingUp={voiceWarmup}
           voiceAudioLevels={voice.audioLevels}
           voiceError={voiceError}
+          stagedPasteCount={stagedPasteCount}
+          onPasteStateChange={setStagedPasteCount}
         />
       </Box>
 

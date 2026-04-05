@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import {
   appendBackgroundRunLog,
@@ -19,13 +19,15 @@ if (!recordPath) {
   process.exit(1);
 }
 
-const initialRecord = loadBackgroundRunRecord(recordPath);
+const resolvedRecordPath = recordPath;
+
+const initialRecord = loadBackgroundRunRecord(resolvedRecordPath);
 if (!initialRecord) {
-  console.error(`Background run record not found: ${recordPath}`);
+  console.error(`Background run record not found: ${resolvedRecordPath}`);
   process.exit(1);
 }
 
-let currentRecord = saveBackgroundRunRecord(recordPath, {
+let currentRecord = saveBackgroundRunRecord(resolvedRecordPath, {
   ...initialRecord,
   status: "running",
   workerPid: process.pid,
@@ -107,7 +109,7 @@ function finalizeRecord(params: {
   summary: string;
   error?: string;
 }): void {
-  currentRecord = saveBackgroundRunRecord(recordPath, {
+  currentRecord = saveBackgroundRunRecord(resolvedRecordPath, {
     ...params.record,
     status: params.status,
     exitCode: params.exitCode,

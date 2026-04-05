@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { SessionMemory } from "./memory.js";
+import type { Attachment } from "../engine/types.js";
 
 /**
  * A single message in a transcript.
@@ -9,6 +10,7 @@ export interface TranscriptMessage {
   role: "user" | "assistant" | "system" | "tool";
   content: string;
   timestamp: string;
+  attachments?: Attachment[];
   metadata?: Record<string, unknown>;
   toolCall?: {
     name: string;

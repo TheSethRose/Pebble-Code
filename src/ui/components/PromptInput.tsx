@@ -1,12 +1,14 @@
 import React from "react";
 import { Box, Text } from "ink";
-import { TextInput } from "@inkjs/ui";
+import { PromptComposerInput } from "./PromptComposerInput.js";
 
 const IS_MAC = process.platform === "darwin";
 
 export interface CommandSuggestion {
   name: string;
   description: string;
+  aliases?: string[];
+  insertText?: string;
 }
 
 interface PromptInputProps {
@@ -29,6 +31,8 @@ interface PromptInputProps {
   voiceWarmingUp?: boolean;
   voiceAudioLevels?: number[];
   voiceError?: string | null;
+  stagedPasteCount?: number;
+  onPasteStateChange?: (count: number) => void;
 }
 
 function renderVoiceLevels(levels: number[]): string {
@@ -67,6 +71,8 @@ export function PromptInput({
   voiceWarmingUp = false,
   voiceAudioLevels = [],
   voiceError = null,
+  stagedPasteCount = 0,
+  onPasteStateChange,
 }: PromptInputProps) {
   const isInputSuspended = suspendInputCapture && !disabled;
   const statusLabel = disabled ? statusText || "Waiting for input…" : isProcessing ? statusText || "Working…" : "Ready";
@@ -81,6 +87,8 @@ export function PromptInput({
     ? "Pebble is waiting for your answer…"
     : isProcessing
       ? statusText || "Working…"
+      : stagedPasteCount > 0
+        ? `${stagedPasteCount} pasted block${stagedPasteCount === 1 ? "" : "s"} staged`
       : "Ask Pebble anything…";
   const actionHint = voiceState === "recording"
     ? "Release Space to transcribe"
@@ -88,13 +96,15 @@ export function PromptInput({
       ? "Pebble will insert the transcript when ready"
       : disabled
     ? "Answer above to continue"
+    : stagedPasteCount > 0
+      ? "Enter sends the full pasted content"
     : "Enter sends · / shows commands";
   const actionColor = voiceState === "recording"
     ? "red"
     : voiceState === "processing" || disabled || isProcessing
       ? "yellow"
       : "cyan";
-  const showActionRow = disabled || isProcessing || voiceState !== "idle" || Boolean(voiceError);
+  const showActionRow = disabled || isProcessing || voiceState !== "idle" || Boolean(voiceError) || stagedPasteCount > 0;
   const footerStatusLabel = isProcessing && !disabled ? "" : statusLabel;
   const footerVoiceHint = voiceEnabled
     ? voiceState === "recording"
@@ -113,13 +123,18 @@ export function PromptInput({
           {suggestions.map((s, i) => {
             const isSelected = i === selectedSuggestionIndex;
             return (
-              <Box key={s.name}>
+              <Box key={`${s.name}:${s.insertText ?? s.name}`}>
                 <Text color={isSelected ? "cyan" : "#aaaaaa"}>
                   {isSelected ? "▶ " : "  "}
                 </Text>
                 <Text color={isSelected ? "cyan" : "white"} bold={isSelected}>
                   {("/" + s.name).padEnd(14)}
                 </Text>
+                {s.aliases && s.aliases.length > 0 ? (
+                  <Text dimColor={!isSelected} color={isSelected ? "cyan" : "#aaaaaa"}>
+                    {s.aliases.map((alias) => `/${alias}`).join(", ")}{"  "}
+                  </Text>
+                ) : null}
                 <Text dimColor={!isSelected} color={isSelected ? "cyan" : undefined}>
                   {s.description}
                 </Text>
@@ -159,11 +174,13 @@ export function PromptInput({
             {defaultValue || "Ask Pebble anything…"}
           </Text>
         ) : (
-          <TextInput
+          <PromptComposerInput
             key={`${isProcessing ? "busy" : "idle"}-${inputKey}`}
             defaultValue={defaultValue}
+            isDisabled={disabled}
             onSubmit={onSubmit}
             onChange={onChange}
+            onPasteStateChange={onPasteStateChange}
             placeholder={isProcessing ? "" : "Ask Pebble anything…"}
           />
         )}

@@ -74,6 +74,40 @@ describe("PromptInput", () => {
     expect(flat).toContain("Recording…");
     expect(flat).toContain("Release Space to transcribe");
   });
+
+  test("renders slash command aliases in the popup", () => {
+    const flat = normalizeWhitespace(flattenText(
+      PromptInput({
+        isProcessing: false,
+        onSubmit: () => {},
+        width: 80,
+        suggestions: [{
+          name: "clear",
+          aliases: ["cls", "new"],
+          description: "Clear the conversation",
+          insertText: "new",
+        }],
+      }),
+    ));
+
+    expect(flat).toContain("/clear");
+    expect(flat).toContain("/new");
+    expect(flat).toContain("Clear the conversation");
+  });
+
+  test("shows staged paste status when pasted content is queued", () => {
+    const flat = normalizeWhitespace(flattenText(
+      PromptInput({
+        isProcessing: false,
+        onSubmit: () => {},
+        width: 80,
+        stagedPasteCount: 2,
+      }),
+    ));
+
+    expect(flat).toContain("2 pasted blocks staged");
+    expect(flat).toContain("Enter sends the full pasted content");
+  });
 });
 
 function normalizeWhitespace(value: string): string {

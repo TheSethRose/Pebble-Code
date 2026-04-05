@@ -1,4 +1,5 @@
 import type { TranscriptMessage } from "./sessionStore.js";
+import { buildMessageContentWithAttachments } from "../engine/messageAttachments.js";
 
 /**
  * Estimate token count for a message list.
@@ -6,6 +7,13 @@ import type { TranscriptMessage } from "./sessionStore.js";
  */
 export function estimateTokens(messages: TranscriptMessage[]): number {
   return Math.ceil(
-    messages.reduce((sum, message) => sum + message.content.length, 0) / 4,
+    messages.reduce(
+      (sum, message) => sum + buildMessageContentWithAttachments(
+        message.content,
+        message.attachments,
+        message.metadata,
+      ).length,
+      0,
+    ) / 4,
   );
 }
