@@ -891,6 +891,54 @@ describe("capability tool implementations", () => {
     expect(result.output).toContain("task_plan.md");
     expect(result.output).toContain("- [x] done");
   });
+
+  test("OrchestrateTool persists worktree metadata across tool instances", async () => {
+    const projectDir = createTempProject("pebble-tools-orchestrate-worktree-");
+    initializeGitRepo(projectDir);
+    writeFileSync(join(projectDir, "tracked.txt"), "base\n", "utf-8");
+    commitAll(projectDir, "initial");
+
+    const createTool = new OrchestrateTool();
+    const getTool = new OrchestrateTool();
+    const removeTool = new OrchestrateTool();
+
+    const created = await createTool.execute(
+      { action: "worktree_create", session_id: "session-123", branch: "session-123-worktree" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(created.success).toBe(true);
+    const worktreePath = created.data && typeof created.data === "object" && "worktreePath" in created.data
+      ? String(created.data.worktreePath)
+      : "";
+    expect(worktreePath).toContain(join(projectDir, ".pebble", "worktrees", "session-123"));
+    expect(existsSync(worktreePath)).toBe(true);
+
+    const loaded = await getTool.execute(
+      { action: "worktree_get", session_id: "session-123" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(loaded.success).toBe(true);
+    expect(loaded.output).toBe(worktreePath);
+
+    const removed = await removeTool.execute(
+      { action: "worktree_remove", session_id: "session-123" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(removed.success).toBe(true);
+    expect(existsSync(worktreePath)).toBe(false);
+
+    const afterRemove = await new OrchestrateTool().execute(
+      { action: "worktree_get", session_id: "session-123" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(afterRemove.success).toBe(true);
+    expect(afterRemove.output).toBe("(not loaded in current process)");
+    expect(readFileSync(join(projectDir, ".pebble", "worktrees", "registry.json"), "utf-8")).toContain('"worktrees": []');
+  });
 });
 
 describe("persisted approvals", () => {

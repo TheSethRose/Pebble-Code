@@ -2,10 +2,20 @@ import { join } from "node:path";
 import type { Message } from "../engine/types.js";
 import type { PermissionManager } from "../runtime/permissionManager.js";
 import { findProjectRoot } from "../runtime/trust.js";
-import { compactTranscript, estimateTokens } from "./compaction.js";
+import { compactTranscriptWithArtifact, type CompactionArtifact } from "./compaction.js";
 import { buildSessionMemory, isSessionMemoryStale } from "./memory.js";
 import { SessionStore, type SessionTranscript, type TranscriptMessage } from "./sessionStore.js";
 import type { DisplayMessage } from "../ui/types.js";
+import { estimateTokens } from "./tokenEstimation.js";
+
+export interface SessionCompactionOutcome {
+  transcript: SessionTranscript;
+  compacted: boolean;
+  previousMessageCount: number;
+  nextMessageCount: number;
+  artifact?: CompactionArtifact;
+  reason: "threshold" | "manual";
+}
 
 export function getSessionsDir(cwd: string): string {
   const projectRoot = findProjectRoot(cwd) ?? cwd;
@@ -68,25 +78,73 @@ export function compactSessionIfNeeded(
   sessionId: string,
   compactThreshold?: number,
 ): SessionTranscript | null {
-  if (!compactThreshold || compactThreshold <= 0) {
-    return store.loadTranscript(sessionId);
-  }
+  return compactSession(store, sessionId, {
+    compactThreshold,
+    force: false,
+    reason: "threshold",
+  })?.transcript ?? null;
+}
+
+export function compactSession(
+  store: SessionStore,
+  sessionId: string,
+  options: {
+    compactThreshold?: number;
+    force?: boolean;
+    reason?: "threshold" | "manual";
+  } = {},
+): SessionCompactionOutcome | null {
+  const reason = options.reason ?? "threshold";
 
   const transcript = store.loadTranscript(sessionId);
   if (!transcript) {
     return null;
   }
 
-  if (estimateTokens(transcript.messages) < compactThreshold) {
-    return transcript;
+  const previousMessageCount = transcript.messages.length;
+  const shouldCompact = options.force === true
+    || (options.compactThreshold !== undefined
+      && options.compactThreshold > 0
+      && estimateTokens(transcript.messages) >= options.compactThreshold);
+
+  if (!shouldCompact) {
+    return {
+      transcript,
+      compacted: false,
+      previousMessageCount,
+      nextMessageCount: previousMessageCount,
+      reason,
+    };
   }
 
-  return store.replaceMessages(sessionId, compactTranscript(transcript.messages), {
+  const result = compactTranscriptWithArtifact(transcript.messages);
+  if (!result.compacted) {
+    return {
+      transcript,
+      compacted: false,
+      previousMessageCount,
+      nextMessageCount: previousMessageCount,
+      reason,
+    };
+  }
+
+  const updatedTranscript = store.replaceMessages(sessionId, result.messages, {
     compactionCount: Number(transcript.metadata?.compactionCount ?? 0) + 1,
     lastCompactedAt: new Date().toISOString(),
     previousMessageCount: transcript.messages.length,
-    compactThreshold,
+    compactThreshold: options.compactThreshold,
+    lastCompactionReason: reason,
+    lastCompactionArtifact: result.artifact,
   });
+
+  return {
+    transcript: updatedTranscript,
+    compacted: true,
+    previousMessageCount,
+    nextMessageCount: updatedTranscript.messages.length,
+    artifact: result.artifact,
+    reason,
+  };
 }
 
 export function ensureFreshSessionMemory(
@@ -111,7 +169,7 @@ export function transcriptToConversation(
 ): Message[] {
   const sourceMessages =
     compactThreshold && estimateTokens(transcript.messages) >= compactThreshold
-      ? compactTranscript(transcript.messages)
+      ? compactTranscriptWithArtifact(transcript.messages).messages
       : transcript.messages;
 
   const conversation = sourceMessages

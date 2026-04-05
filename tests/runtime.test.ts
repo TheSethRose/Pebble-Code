@@ -210,7 +210,7 @@ describe("headless runtime", () => {
     const compacted = store.loadTranscript(session.id);
     expect(compacted).not.toBeNull();
     expect(compacted?.messages.length).toBeLessThan(32);
-    expect(compacted?.messages.some((message) => message.content.startsWith("[Summary of"))).toBe(true);
+    expect(compacted?.messages.some((message) => message.content.startsWith("[Compacted transcript summary]"))).toBe(true);
     expect(compacted?.metadata?.compactionCount).toBeGreaterThan(0);
   });
 

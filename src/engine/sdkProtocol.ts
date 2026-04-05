@@ -27,6 +27,32 @@ export type SdkEvent =
   | PermissionDeniedEvent
   | ResultEvent;
 
+const SDK_EVENT_TYPES = new Set<SdkEvent["type"]>([
+  "init",
+  "user_replay",
+  "stream_event",
+  "permission_denied",
+  "result",
+]);
+
+const RESULT_STATUSES = new Set<ResultEvent["status"]>([
+  "success",
+  "error",
+  "interrupted",
+  "max_turns",
+  "not_implemented",
+]);
+
+const STREAM_EVENT_TYPES = new Set<StreamEvent["type"]>([
+  "text_delta",
+  "tool_call",
+  "tool_result",
+  "progress",
+  "error",
+  "done",
+  "permission_denied",
+]);
+
 export interface InitEvent {
   type: "init";
   sessionId: string;
@@ -44,7 +70,7 @@ export interface UserReplayEvent {
 
 export interface StreamEventWrapper {
   type: "stream_event";
-  event: string;
+  event: StreamEvent["type"];
   data: unknown;
   timestamp: number;
 }
@@ -72,10 +98,11 @@ export interface ResultEvent {
 export function parseSdkEvent(line: string): SdkEvent | null {
   try {
     const parsed = JSON.parse(line);
-    if (parsed && typeof parsed.type === "string") {
-      return parsed as SdkEvent;
+    if (!isSdkEvent(parsed)) {
+      return null;
     }
-    return null;
+
+    return parsed;
   } catch {
     return null;
   }
@@ -86,6 +113,43 @@ export function parseSdkEvent(line: string): SdkEvent | null {
  */
 export function serializeSdkEvent(event: SdkEvent): string {
   return JSON.stringify(event);
+}
+
+function isSdkEvent(value: unknown): value is SdkEvent {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<SdkEvent> & Record<string, unknown>;
+  if (typeof candidate.type !== "string" || !SDK_EVENT_TYPES.has(candidate.type as SdkEvent["type"])) {
+    return false;
+  }
+
+  if (typeof candidate.timestamp !== "number") {
+    return false;
+  }
+
+  switch (candidate.type) {
+    case "init":
+      return typeof candidate.sessionId === "string"
+        && typeof candidate.model === "string"
+        && typeof candidate.provider === "string"
+        && typeof candidate.cwd === "string";
+    case "user_replay":
+      return typeof candidate.text === "string";
+    case "stream_event":
+      return typeof candidate.event === "string"
+        && STREAM_EVENT_TYPES.has(candidate.event as StreamEvent["type"])
+        && "data" in candidate;
+    case "permission_denied":
+      return typeof candidate.tool === "string"
+        && typeof candidate.reason === "string";
+    case "result":
+      return typeof candidate.message === "string"
+        && (candidate.sessionId === null || typeof candidate.sessionId === "string")
+        && typeof candidate.status === "string"
+        && RESULT_STATUSES.has(candidate.status as ResultEvent["status"]);
+  }
 }
 
 // Re-export factory functions for convenience

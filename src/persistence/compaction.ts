@@ -1,4 +1,6 @@
 import type { TranscriptMessage } from "./sessionStore";
+import { buildMessageSummaryArtifact, type MessageSummaryArtifact } from "./summaryArtifacts.js";
+import { estimateTokens } from "./tokenEstimation.js";
 
 /**
  * Token budget tracking for sessions.
@@ -22,11 +24,24 @@ export interface CompactionBoundary {
   preserveSystem: boolean;
 }
 
-const DEFAULT_BOUNDARY: CompactionBoundary = {
+export const DEFAULT_BOUNDARY: CompactionBoundary = {
   keepRecent: 20,
   summarizeBefore: 10,
   preserveSystem: true,
 };
+
+export interface CompactionArtifact extends MessageSummaryArtifact {
+  kind: "compaction-artifact";
+  generatedAt: string;
+  compactedMessageCount: number;
+  preservedRecentCount: number;
+}
+
+export interface TranscriptCompactionResult {
+  messages: TranscriptMessage[];
+  compacted: boolean;
+  artifact?: CompactionArtifact;
+}
 
 /**
  * Compact a transcript to fit within token limits.
@@ -36,8 +51,18 @@ export function compactTranscript(
   messages: TranscriptMessage[],
   boundary: CompactionBoundary = DEFAULT_BOUNDARY,
 ): TranscriptMessage[] {
+  return compactTranscriptWithArtifact(messages, boundary).messages;
+}
+
+export function compactTranscriptWithArtifact(
+  messages: TranscriptMessage[],
+  boundary: CompactionBoundary = DEFAULT_BOUNDARY,
+): TranscriptCompactionResult {
   if (messages.length <= boundary.keepRecent) {
-    return messages;
+    return {
+      messages,
+      compacted: false,
+    };
   }
 
   // Preserve system messages
@@ -54,23 +79,19 @@ export function compactTranscript(
     messages.length - boundary.keepRecent,
   );
 
+  const artifact = buildCompactionArtifact(olderMessages, boundary.keepRecent);
   const summary: TranscriptMessage = {
     role: "system",
-    content: `[Summary of ${olderMessages.length} previous messages]`,
-    timestamp: new Date().toISOString(),
+    content: formatCompactionArtifact(artifact),
+    timestamp: artifact.generatedAt,
+    metadata: artifact,
   };
 
-  return [...systemMessages, summary, ...recentMessages];
-}
-
-/**
- * Estimate token count for a message list.
- * Rough approximation: ~4 chars per token.
- */
-export function estimateTokens(messages: TranscriptMessage[]): number {
-  return Math.ceil(
-    messages.reduce((sum, m) => sum + m.content.length, 0) / 4,
-  );
+  return {
+    messages: [...systemMessages, summary, ...recentMessages],
+    compacted: true,
+    artifact,
+  };
 }
 
 /**
@@ -124,4 +145,32 @@ export class TokenTracker {
       estimatedCost: 0,
     };
   }
+}
+
+function buildCompactionArtifact(
+  compactedMessages: TranscriptMessage[],
+  preservedRecentCount: number,
+): CompactionArtifact {
+  const summaryArtifact = buildMessageSummaryArtifact(compactedMessages);
+  return {
+    kind: "compaction-artifact",
+    generatedAt: new Date().toISOString(),
+    compactedMessageCount: compactedMessages.length,
+    preservedRecentCount,
+    ...summaryArtifact,
+  };
+}
+
+function formatCompactionArtifact(artifact: CompactionArtifact): string {
+  return [
+    "[Compacted transcript summary]",
+    `Compacted earlier messages: ${artifact.compactedMessageCount}`,
+    `Estimated tokens: ${artifact.tokenEstimate}`,
+    "",
+    "Summary:",
+    artifact.summary,
+    "",
+    "Highlights:",
+    ...artifact.bullets.map((bullet) => `- ${bullet}`),
+  ].join("\n");
 }

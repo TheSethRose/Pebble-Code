@@ -80,6 +80,7 @@ describe("Command Registry", () => {
     expect(registry.find("model")).toBeDefined();
     expect(registry.find("resume")).toBeDefined();
     expect(registry.find("memory")).toBeDefined();
+    expect(registry.find("compact")).toBeDefined();
     expect(registry.find("plan")).toBeDefined();
     expect(registry.find("review")).toBeDefined();
     expect(registry.find("permissions")).toBeDefined();
@@ -238,6 +239,37 @@ describe("Command Registry", () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain("Cleared session memory");
     expect(store.loadTranscript(session.id)?.memory).toBeUndefined();
+  });
+
+  test("/compact creates a real compaction artifact for the active session", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempDir("pebble-command-compact-");
+    mkdirSync(tempDir, { recursive: true });
+
+    const store = new SessionStore(tempDir);
+    const session = store.createSession("compact-test");
+    for (let index = 0; index < 30; index += 1) {
+      store.appendMessage(session.id, {
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `Message ${index}`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const result = await registry.execute("compact", "", createCommandContext({
+      sessionStore: store,
+      sessionId: session.id,
+    }));
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Compacted session compact-test");
+    expect(result.output).toContain("Summary:");
+
+    const compacted = store.loadTranscript(session.id);
+    expect(compacted?.messages.some((message) => message.content.startsWith("[Compacted transcript summary]"))).toBe(true);
+    expect(compacted?.metadata?.lastCompactionReason).toBe("manual");
   });
 
   test("/login persists an OpenRouter API key in ~/.pebble settings", async () => {

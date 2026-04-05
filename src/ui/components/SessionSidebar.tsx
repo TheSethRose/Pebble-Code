@@ -124,8 +124,8 @@ export function SessionSidebar({
       {/* New Chat entry (index 0) */}
       <SidebarSelectableRow mouseEnabled={mouseEnabled} onSelect={() => onSelect(null, 0)}>
         <Text
-          color={isNewChatSelected ? "black" : isNewChatActive ? "green" : "white"}
-          backgroundColor={isNewChatSelected ? "green" : undefined}
+          color={isNewChatSelected ? "white" : isNewChatActive ? "green" : "white"}
+          backgroundColor={isNewChatSelected ? "#333333" : undefined}
           bold={isNewChatSelected || isNewChatActive}
         >
           {buildSidebarRow("◈ New Chat", width)}
@@ -152,8 +152,8 @@ export function SessionSidebar({
                 onSelect={() => onSelect(s.id, rowIndex)}
               >
                 <Text
-                  color={isCursor ? "black" : isActive ? "green" : "#aaaaaa"}
-                  backgroundColor={isCursor ? "green" : undefined}
+                  color={isCursor ? "white" : isActive ? "#4ade80" : "#aaaaaa"}
+                  backgroundColor={isCursor ? "#4a4a4a" : undefined}
                   bold={isCursor || isActive}
                 >
                   {buildSidebarRow(label, labelWidth, prefix)}

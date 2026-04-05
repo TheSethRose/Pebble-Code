@@ -57,6 +57,45 @@ describe("SDK entrypoint surface", () => {
     expect(typeof entrypoint.QueryEngine).toBe("function");
   });
 
+  test("SDK event parser accepts real event envelopes and rejects invalid ones", async () => {
+    const entrypoint = await import("../index");
+
+    const streamEvent = entrypoint.parseSdkEvent(JSON.stringify({
+      type: "stream_event",
+      event: "progress",
+      data: { turn: 1 },
+      timestamp: Date.now(),
+    }));
+    const invalidType = entrypoint.parseSdkEvent(JSON.stringify({
+      type: "mystery",
+      timestamp: Date.now(),
+    }));
+    const invalidStreamEvent = entrypoint.parseSdkEvent(JSON.stringify({
+      type: "stream_event",
+      event: "mystery",
+      data: {},
+      timestamp: Date.now(),
+    }));
+
+    expect(streamEvent).toMatchObject({ type: "stream_event", event: "progress" });
+    expect(invalidType).toBeNull();
+    expect(invalidStreamEvent).toBeNull();
+  });
+
+  test("SDK event serializer round-trips the documented result envelope", async () => {
+    const entrypoint = await import("../index");
+    const event = {
+      type: "result" as const,
+      status: "success" as const,
+      message: "done",
+      sessionId: "session-123",
+      timestamp: Date.now(),
+    };
+
+    const serialized = entrypoint.serializeSdkEvent(event);
+    expect(entrypoint.parseSdkEvent(serialized)).toEqual(event);
+  });
+
   test("package metadata points imports at the SDK entrypoint instead of the CLI", () => {
     const packageJson = JSON.parse(
       readFileSync(join(import.meta.dir, "..", "package.json"), "utf-8"),
