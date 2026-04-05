@@ -290,14 +290,14 @@ describe("capability tool registry and alias resolution", () => {
     const registry = new ToolRegistry();
     registry.registerMany(createMvpTools());
 
-    expect(registry.get("FileRead")?.name).toBe("WorkspaceRead");
+    expect(registry.get("WorkspaceInspect")?.name).toBe("WorkspaceRead");
     expect(registry.get("ApplyPatch")?.name).toBe("WorkspaceEdit");
     expect(registry.get("AskUserQuestion")?.name).toBe("UserInteraction");
     expect(registry.get("WebFetch")?.name).toBe("Web");
     expect(registry.get("ExecutionSubagent")?.name).toBe("Orchestrate");
   });
 
-  test("QueryEngine can satisfy a legacy FileRead tool call through WorkspaceRead", async () => {
+  test("QueryEngine can satisfy a legacy WorkspaceInspect tool call through WorkspaceRead", async () => {
     const projectDir = createTempProject("pebble-tools-workspace-read-");
     writeFileSync(join(projectDir, "notes.txt"), "hello from alias\n", "utf-8");
 
@@ -305,7 +305,7 @@ describe("capability tool registry and alias resolution", () => {
       if (callNumber === 1) {
         return {
           text: "Reading the file.",
-          toolCalls: [{ id: "alias-read", name: "FileRead", input: { action: "read_file", file_path: "notes.txt" } }],
+          toolCalls: [{ id: "alias-read", name: "WorkspaceInspect", input: { action: "read_file", file_path: "notes.txt" } }],
           stopReason: "tool_use",
           usage: { inputTokens: 3, outputTokens: 3 },
         };
@@ -337,7 +337,7 @@ describe("capability tool registry and alias resolution", () => {
       role: "tool",
       toolName: "WorkspaceRead",
       metadata: {
-        requestedToolName: "FileRead",
+        requestedToolName: "WorkspaceInspect",
       },
     });
   });
