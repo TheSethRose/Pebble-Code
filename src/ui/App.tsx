@@ -234,6 +234,7 @@ export function App({
   const sessionIdRef = React.useRef<string | null>(null);
   const hookSessionIdRef = React.useRef<string | null>(null);
   const ctrlCTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeQueryAbortControllerRef = React.useRef<AbortController | null>(null);
   const previousTranscriptLineCountRef = React.useRef(0);
   const inputValueRef = React.useRef("");
   const selectedContextAttachmentsRef = React.useRef<ContextAttachmentIndexEntry[]>([]);
@@ -323,6 +324,40 @@ export function App({
     () => createContextAttachmentIndex(context.cwd),
     [context.cwd],
   );
+
+  const clearCtrlCTimer = React.useCallback(() => {
+    if (ctrlCTimerRef.current) {
+      clearTimeout(ctrlCTimerRef.current);
+      ctrlCTimerRef.current = null;
+    }
+  }, []);
+
+  const armCtrlCExit = React.useCallback(() => {
+    setCtrlCOnce(true);
+    clearCtrlCTimer();
+    ctrlCTimerRef.current = setTimeout(() => {
+      ctrlCTimerRef.current = null;
+      setCtrlCOnce(false);
+    }, 2000);
+  }, [clearCtrlCTimer]);
+
+  const cancelActiveQuery = React.useCallback(() => {
+    const controller = activeQueryAbortControllerRef.current;
+    if (!controller || controller.signal.aborted) {
+      return false;
+    }
+
+    controller.abort();
+    setState((prev) => (
+      prev.isProcessing
+        ? {
+            ...prev,
+            statusText: "Stopping…",
+          }
+        : prev
+    ));
+    return true;
+  }, []);
 
   const activeComposerQuery = React.useMemo(
     () => getActiveComposerQuery(createComposerState(inputValue)),
@@ -752,7 +787,7 @@ export function App({
   // ------------------------------------------------------------------
   // Engine initialisation
   // ------------------------------------------------------------------
-  const rebuildEngine = React.useCallback((activeRuntimeConfig: Record<string, unknown>) => {
+  const createEngine = React.useCallback((activeRuntimeConfig: Record<string, unknown>, signal?: AbortSignal) => {
     const settings = loadSettingsForCwd(context.cwd);
     const resolvedProvider = resolveRuntimeProvider(
       settings,
@@ -807,11 +842,12 @@ export function App({
       });
     };
 
-    engineRef.current = new QueryEngine({
+    return new QueryEngine({
       provider: resolvedProvider.provider,
       tools,
       maxTurns,
       systemPrompt: context.systemPrompt,
+      signal,
       permissionManager,
       cwd: context.cwd,
       shellCompactionMode: settings.shellCompactionMode,
@@ -839,6 +875,10 @@ export function App({
     sessionStore,
   ]);
 
+  const rebuildEngine = React.useCallback((activeRuntimeConfig: Record<string, unknown>) => {
+    engineRef.current = createEngine(activeRuntimeConfig);
+  }, [createEngine]);
+
   const refreshRuntimeConfig = React.useCallback(() => {
     const nextRuntimeConfig = loadCommandConfig(context.cwd, runtimeConfig, context.extensionProviders);
     setRuntimeConfig(nextRuntimeConfig);
@@ -854,12 +894,15 @@ export function App({
 
   React.useEffect(() => {
     return () => {
+      clearCtrlCTimer();
+      activeQueryAbortControllerRef.current?.abort();
+      activeQueryAbortControllerRef.current = null;
       if (context.hookRegistry && hookSessionIdRef.current) {
         void context.hookRegistry.fire("session:end", { sessionId: hookSessionIdRef.current });
         hookSessionIdRef.current = null;
       }
     };
-  }, [context.hookRegistry]);
+  }, [clearCtrlCTimer, context.hookRegistry]);
 
   // ------------------------------------------------------------------
   // Session resume — only when launched with --resume/--continue
@@ -1098,17 +1141,35 @@ export function App({
       }
 
       if (key.ctrl && _input === "c") {
-        if (inputValue.length > 0) {
+        const hadInput = inputValue.length > 0;
+        if (state.isProcessing) {
+          if (hadInput) {
+            clearInput();
+          }
+
+          if (ctrlCOnce) {
+            clearCtrlCTimer();
+            process.exit(0);
+            return;
+          }
+
+          cancelActiveQuery();
+          armCtrlCExit();
+          return;
+        }
+
+        if (hadInput) {
           clearInput();
           return;
         }
+
         if (ctrlCOnce) {
-          if (ctrlCTimerRef.current) clearTimeout(ctrlCTimerRef.current);
+          clearCtrlCTimer();
           process.exit(0);
           return;
         }
-        setCtrlCOnce(true);
-        ctrlCTimerRef.current = setTimeout(() => setCtrlCOnce(false), 2000);
+
+        armCtrlCExit();
       }
     },
     { isActive: !showSettings && !showKeybindings && !state.pendingPermission && !state.pendingQuestion },
@@ -1256,22 +1317,10 @@ export function App({
       }
 
       // ---- Regular prompt ----------------------------------------
-      if (!engineRef.current) {
-        rebuildEngine(runtimeConfig);
-      }
-
-      if (!engineRef.current) {
-        setState((prev) => ({
-          ...prev,
-          messages: [
-            ...prev.messages,
-            { role: "user", content: trimmed },
-            { role: "assistant", content: "Engine not initialized." },
-          ],
-          error: "Engine not initialized.",
-        }));
-        return;
-      }
+      const queryAbortController = new AbortController();
+      activeQueryAbortControllerRef.current = queryAbortController;
+      const engine = createEngine(runtimeConfig, queryAbortController.signal);
+      engineRef.current = engine;
 
       // Lazily create a fresh session on the first real prompt.
       // Never auto-resume the latest session — that requires an explicit /resume.
@@ -1347,7 +1396,7 @@ export function App({
           await context.hookRegistry.fire("turn:before", { sessionId: sessionIdRef.current });
         }
 
-        const iterator = engineRef.current.stream(conversation)[Symbol.asyncIterator]();
+        const iterator = engine.stream(conversation)[Symbol.asyncIterator]();
         let result: Awaited<ReturnType<QueryEngine["process"]>> | null = null;
 
         while (true) {
@@ -1379,10 +1428,12 @@ export function App({
             sessionIdRef.current,
             buildCompactionPolicy(sessionIdRef.current),
           );
-          sessionStore.updateStatus(
-            sessionIdRef.current,
-            result.success ? "completed" : result.state === "interrupted" ? "interrupted" : "error",
-          );
+          if (sessionStore.loadTranscript(sessionIdRef.current)) {
+            sessionStore.updateStatus(
+              sessionIdRef.current,
+              result.success ? "completed" : result.state === "interrupted" ? "interrupted" : "error",
+            );
+          }
         }
 
         // Rebuild display from persisted transcript so it stays in sync.
@@ -1406,7 +1457,7 @@ export function App({
         }));
         refreshSessions();
       } catch (err) {
-        if (sessionStore && sessionIdRef.current) {
+        if (sessionStore && sessionIdRef.current && sessionStore.loadTranscript(sessionIdRef.current)) {
           sessionStore.updateStatus(sessionIdRef.current, "error");
         }
         const msg = err instanceof Error ? err.message : String(err);
@@ -1424,6 +1475,11 @@ export function App({
           statusText: "",
         }));
         refreshSessions();
+      } finally {
+        if (activeQueryAbortControllerRef.current === queryAbortController) {
+          activeQueryAbortControllerRef.current = null;
+        }
+        engineRef.current = createEngine(runtimeConfig);
       }
     },
     // state.messages intentionally omitted — we only need it for the fallback
@@ -1433,8 +1489,8 @@ export function App({
       activeComposerQuery,
       buildCompactionPolicy,
       context,
+      createEngine,
       insertSelectedContextAttachment,
-      rebuildEngine,
       reconcilePendingApprovals,
       refreshRuntimeConfig,
       refreshSessions,

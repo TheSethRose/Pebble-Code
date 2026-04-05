@@ -844,6 +844,39 @@ describe("interactive runtime permissions", () => {
     }
   });
 
+  test("single Ctrl+C interrupts an in-flight interactive response", async () => {
+    const projectDir = createTempProject("pebble-runtime-interactive-interrupt-", {
+      settings: {
+        provider: "interruptible-scripted",
+        fullscreenRenderer: false,
+      },
+    });
+
+    const sessionStore = createProjectSessionStore(projectDir);
+    const provider = new InterruptibleInteractiveProvider();
+    const app = mountInteractiveApp({
+      cwd: projectDir,
+      sessionStore,
+      extensionProviders: [provider],
+    });
+
+    try {
+      await submitPrompt(app.stdin, "start a long response");
+      const sessionId = await waitForSessionId(sessionStore);
+
+      await waitFor(() => provider.started);
+      await sendKeys(app.stdin, "\u0003");
+
+      await waitFor(() => provider.wasAborted);
+      await waitFor(() => sessionStore.loadTranscript(sessionId)?.status === "interrupted");
+
+      expect(sessionStore.loadTranscript(sessionId)?.status).toBe("interrupted");
+      expect(app.output()).not.toContain("Provider error:");
+    } finally {
+      app.cleanup();
+    }
+  });
+
   test("captures a held spacebar voice transcript into the prompt", async () => {
     const projectDir = createTempProject("pebble-runtime-interactive-voice-", {
       settings: {
@@ -1040,6 +1073,68 @@ class InteractiveScriptedProvider implements Provider {
   }
 }
 
+class InterruptibleInteractiveProvider implements Provider {
+  readonly id = "interruptible-scripted";
+  readonly name = "Interruptible Interactive Provider";
+  readonly model = "interruptible-scripted-model";
+
+  started = false;
+  wasAborted = false;
+
+  getCapabilities(): ProviderCapabilities {
+    return {
+      streaming: true,
+      toolUse: false,
+      systemPrompt: true,
+      multimodal: false,
+      maxContextTokens: 8192,
+      maxOutputTokens: 1024,
+      parallelToolCalls: false,
+    };
+  }
+
+  async complete(): Promise<never> {
+    throw new Error("InterruptibleInteractiveProvider only supports streaming");
+  }
+
+  async *stream(messages: Message[], options?: ProviderOptions): AsyncIterable<StreamChunk> {
+    const lastMessage = messages.at(-1);
+    if (lastMessage?.role !== "user") {
+      return;
+    }
+
+    this.started = true;
+
+    yield {
+      textDelta: "Working on it…",
+      done: false,
+      metadata: {
+        usage: { inputTokens: 1, outputTokens: 1 },
+      },
+    };
+
+    await waitForAbortSignal(options?.abortSignal, 2_000);
+
+    if (options?.abortSignal?.aborted) {
+      this.wasAborted = true;
+      throw new Error("Aborted");
+    }
+
+    yield {
+      textDelta: " still going",
+      done: true,
+      metadata: {
+        stopReason: "end_turn",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      },
+    };
+  }
+
+  isConfigured(): boolean {
+    return true;
+  }
+}
+
 function parseEditPlan(prompt: string): { previousValue: string; nextValue: string } {
   const match = prompt.match(/change\s+(\S+)\s+to\s+(\S+)/i);
   if (!match) {
@@ -1181,6 +1276,27 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void
 
 async function flushInteractiveUi(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 25));
+}
+
+async function waitForAbortSignal(signal?: AbortSignal, timeoutMs = 1_000): Promise<void> {
+  if (!signal || signal.aborted) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, timeoutMs);
+
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function writeHookOrderExtension(

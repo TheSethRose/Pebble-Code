@@ -59,7 +59,7 @@ describe("TranscriptView", () => {
     });
     const flat = flattenText(element);
 
-    expect(flat).toContain("██████╗");
+    expect(flat).toContain("|  _ \\ ___| |__ | |__ | | ___");
     expect(flat).toContain("qwen/qwen3.6-plus:free · OpenRouter • new session");
     expect(flat).toContain("Use /help if you want commands.");
     expect(flat).not.toContain("Ask Pebble anything — a few strong starting points:");

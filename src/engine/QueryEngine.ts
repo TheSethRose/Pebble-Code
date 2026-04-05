@@ -382,6 +382,17 @@ export class QueryEngine {
           abortSignal: this.options.signal,
         });
       } catch (err: unknown) {
+        if (this.options.signal?.aborted) {
+          this.emit("done", { reason: "aborted" });
+          return {
+            messages: conversation,
+            state: "interrupted",
+            success: false,
+            error: "Query was interrupted",
+            usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+          };
+        }
+
         const message = err instanceof Error ? err.message : String(err);
         this.emit("error", { message });
         await this.fireErrorLifecycleEvent(message, {
@@ -539,6 +550,28 @@ export class QueryEngine {
           }
         }
       } catch (err: unknown) {
+        if (this.options.signal?.aborted) {
+          if (fullText.length > 0 || toolCalls.length > 0) {
+            conversation.push({
+              role: "assistant",
+              content: fullText,
+              metadata: { toolCalls },
+            });
+          }
+
+          yield emitStreamEvent("done", {
+            reason: "aborted",
+            usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+          });
+          return {
+            messages: conversation,
+            state: "interrupted",
+            success: false,
+            error: "Query was interrupted",
+            usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+          };
+        }
+
         const message = err instanceof Error ? err.message : String(err);
         yield emitStreamEvent("error", { message });
         await this.fireErrorLifecycleEvent(message, {
@@ -550,6 +583,28 @@ export class QueryEngine {
           state: "error",
           success: false,
           error: `Provider error: ${message}`,
+          usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+        };
+      }
+
+      if (this.options.signal?.aborted) {
+        if (fullText.length > 0 || toolCalls.length > 0) {
+          conversation.push({
+            role: "assistant",
+            content: fullText,
+            metadata: { toolCalls },
+          });
+        }
+
+        yield emitStreamEvent("done", {
+          reason: "aborted",
+          usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+        });
+        return {
+          messages: conversation,
+          state: "interrupted",
+          success: false,
+          error: "Query was interrupted",
           usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
         };
       }

@@ -40,11 +40,6 @@ const binaryExtensions = new Set([
 const ignoredDirectories = new Set([
   ".git",
   "node_modules",
-  ".pebble",
-  "dist",
-  "dist-debug",
-  "coverage",
-  "private/context",
 ]);
 
 export function createContextAttachmentIndex(cwd: string): ContextAttachmentIndex {

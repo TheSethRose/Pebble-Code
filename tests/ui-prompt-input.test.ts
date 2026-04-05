@@ -114,7 +114,8 @@ describe("PromptInput", () => {
     ));
 
     expect(flat).toContain("@src/ui/App.tsx");
-    expect(flat).toContain("workspace file");
+    expect(flat).not.toContain("workspace file");
+    expect(flat).not.toContain("workspace");
   });
 
   test("shows empty file picker copy without a duplicate attachment summary", () => {

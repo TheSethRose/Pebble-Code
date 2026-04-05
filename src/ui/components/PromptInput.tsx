@@ -150,17 +150,12 @@ export function PromptInput({
             const isSelected = i === selectedSuggestionIndex;
             if (suggestion.kind === "file") {
               return (
-                <Box key={suggestion.key} flexDirection="column" marginBottom={1}>
-                  <Box>
-                    <Text color={isSelected ? "green" : "#aaaaaa"}>
-                      {isSelected ? "▶ " : "  "}
-                    </Text>
-                    <Text color={isSelected ? "green" : "white"} bold={isSelected}>
-                      {truncateLabel(`@${suggestion.displayPath}`, suggestionLabelWidth)}
-                    </Text>
-                  </Box>
+                <Box key={suggestion.key}>
                   <Text color={isSelected ? "green" : "#aaaaaa"}>
-                    {suggestion.description} · {suggestion.source}
+                    {isSelected ? "▶ " : "  "}
+                  </Text>
+                  <Text color={isSelected ? "green" : "white"} bold={isSelected}>
+                    {truncateLabel(`@${suggestion.displayPath}`, suggestionLabelWidth)}
                   </Text>
                 </Box>
               );
