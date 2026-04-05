@@ -108,8 +108,9 @@ RUNTIME OPTIONS
 
 SLASH COMMANDS (interactive mode)
   /help               Show available commands
-  /clear              Clear the current session
+  /clear, /new        Clear the current session
   /exit               Exit the REPL
+  /init               Inspect and seed project defaults
   /login              Save provider credentials
   /model              Change the model
   /config             Show current configuration

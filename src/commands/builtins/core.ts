@@ -1,4 +1,5 @@
 import type { Command, CommandResult } from "../types.js";
+import { ensureProjectInit, formatInitFlowReport } from "../../runtime/initFlow.js";
 
 export function createHelpCommand(): Command {
   return {
@@ -21,7 +22,7 @@ export function createHelpCommand(): Command {
 export function createClearCommand(): Command {
   return {
     name: "clear",
-    aliases: ["cls"],
+    aliases: ["cls", "new"],
     description: "Clear the conversation",
     type: "local",
     usage: "/clear",
@@ -56,6 +57,28 @@ export function createConfigCommand(): Command {
     modes: ["interactive"],
     execute: (_args, _ctx): CommandResult => {
       return { success: true, output: "", data: { action: "open-settings", defaultTab: "config" } };
+    },
+  };
+}
+
+export function createInitCommand(): Command {
+  return {
+    name: "init",
+    aliases: ["setup"],
+    description: "Inspect and seed safe Pebble project defaults",
+    type: "local",
+    usage: "/init [status]",
+    modes: ["interactive"],
+    execute: (args, ctx): CommandResult => {
+      const mode = args.trim().toLowerCase();
+      const report = ensureProjectInit(ctx.cwd, ctx, {
+        writeProjectSettings: mode !== "status",
+      });
+
+      return {
+        success: true,
+        output: formatInitFlowReport(report),
+      };
     },
   };
 }

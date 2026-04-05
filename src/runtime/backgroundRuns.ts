@@ -176,12 +176,12 @@ export class BackgroundRunManager {
     saveBackgroundRunRecord(recordPath, record);
     const workerPid = this.spawnWorker(recordPath);
 
-    return updateBackgroundRunRecord(recordPath, (current) => ({
-      ...current,
+    return {
+      ...record,
       workerPid,
       updatedAt: new Date().toISOString(),
       summary: "Background agent run dispatched.",
-    }));
+    };
   }
 
   startVerificationRun(options: StartBackgroundVerificationRunOptions): BackgroundRunRecord {
@@ -207,12 +207,12 @@ export class BackgroundRunManager {
     saveBackgroundRunRecord(recordPath, record);
     const workerPid = this.spawnWorker(recordPath);
 
-    return updateBackgroundRunRecord(recordPath, (current) => ({
-      ...current,
+    return {
+      ...record,
       workerPid,
       updatedAt: new Date().toISOString(),
       summary: "Background verification dispatched.",
-    }));
+    };
   }
 
   getRun(runId: string): BackgroundRunRecord | null {

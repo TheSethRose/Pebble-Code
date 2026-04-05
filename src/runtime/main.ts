@@ -21,6 +21,7 @@ import {
   cleanupDeletedSessionWorktrees,
   createProjectSessionStore,
   createOrResumeSession,
+  type SessionCompactionOutcome,
   resolveInteractiveStartupSessionId,
   compactSessionIfNeeded,
   transcriptToConversation,
@@ -462,7 +463,7 @@ function buildSessionCompactionPolicy(
           preparedOnly: false,
         });
       },
-      onAfterCompact: (outcome) => {
+      onAfterCompact: (outcome: SessionCompactionOutcome) => {
         const artifact = outcome.artifact;
         void hookRegistry.fire("session:compact:after", {
           tokenEstimate: artifact?.tokenEstimate,

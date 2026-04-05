@@ -14,11 +14,13 @@ import { getSettingsPath, loadSettingsForCwd } from "../runtime/config.js";
 import { getDefaultExtensionDirs } from "../extensions/loaders.js";
 import type { Message, StreamEvent } from "../engine/types.js";
 import {
+  assessSessionCompaction,
   compactSessionIfNeeded,
   deleteSessionWithRuntimeCleanup,
   ensureFreshSessionMemory,
   engineMessageToTranscriptMessage,
   failPendingApprovalsForResume,
+  type SessionCompactionOutcome,
   transcriptToConversation,
   transcriptToDisplayMessages,
 } from "../persistence/runtimeSessions.js";
@@ -64,7 +66,10 @@ function loadCommandConfig(
     apiKeyConfigured: resolved.apiKeyConfigured,
     apiKeySource: resolved.apiKeySource,
     compactThreshold: settings.compactThreshold,
+    compactPrepareThreshold: settings.compactPrepareThreshold,
+    compactionInstructions: settings.compactionInstructions,
     shellCompactionMode: settings.shellCompactionMode,
+    providerCompactionMarkers: settings.providerCompactionMarkers,
     worktreeStartupMode: settings.worktreeStartupMode,
     fullscreenRenderer: settings.fullscreenRenderer,
     voiceEnabled: isFeatureEnabled("voiceMode") && settings.voiceEnabled,
@@ -228,6 +233,77 @@ export function App({
   const trimVoiceSpacesOnIdleRef = React.useRef(false);
   const sessionStore = context.sessionStore ?? null;
   const extensionDirs = context.extensionDirs ?? getDefaultExtensionDirs(context.cwd);
+  const buildCompactionPolicy = React.useCallback((sessionId: string | null) => ({
+    compactThreshold: getCompactThreshold(runtimeConfig.compactThreshold),
+    compactPrepareThreshold: getCompactThreshold(runtimeConfig.compactPrepareThreshold),
+    instructions: typeof runtimeConfig.compactionInstructions === "string"
+      ? runtimeConfig.compactionInstructions
+      : undefined,
+    providerContext: {
+      markersEnabled: runtimeConfig.providerCompactionMarkers === true,
+      providerId: typeof runtimeConfig.provider === "string" ? runtimeConfig.provider : undefined,
+      model: typeof runtimeConfig.model === "string" ? runtimeConfig.model : undefined,
+    },
+    hooks: {
+      onPrepare: (assessment: ReturnType<typeof assessSessionCompaction>) => {
+        if (!context.hookRegistry || !sessionId) {
+          return;
+        }
+
+        void context.hookRegistry.fire("session:compact:prepare", {
+          sessionId,
+          tokenEstimate: assessment.tokenEstimate,
+          compactThreshold: assessment.compactThreshold,
+          compactPrepareThreshold: assessment.compactPrepareThreshold,
+          compactionReason: assessment.reason,
+          compactionInstructions: typeof runtimeConfig.compactionInstructions === "string"
+            ? runtimeConfig.compactionInstructions
+            : undefined,
+          providerId: typeof runtimeConfig.provider === "string" ? runtimeConfig.provider : undefined,
+          model: typeof runtimeConfig.model === "string" ? runtimeConfig.model : undefined,
+          preparedOnly: true,
+        });
+      },
+      onBeforeCompact: (assessment: ReturnType<typeof assessSessionCompaction>) => {
+        if (!context.hookRegistry || !sessionId) {
+          return;
+        }
+
+        void context.hookRegistry.fire("session:compact:before", {
+          sessionId,
+          tokenEstimate: assessment.tokenEstimate,
+          compactThreshold: assessment.compactThreshold,
+          compactPrepareThreshold: assessment.compactPrepareThreshold,
+          compactionReason: assessment.reason,
+          compactionInstructions: typeof runtimeConfig.compactionInstructions === "string"
+            ? runtimeConfig.compactionInstructions
+            : undefined,
+          providerId: typeof runtimeConfig.provider === "string" ? runtimeConfig.provider : undefined,
+          model: typeof runtimeConfig.model === "string" ? runtimeConfig.model : undefined,
+          preparedOnly: false,
+        });
+      },
+      onAfterCompact: (outcome: SessionCompactionOutcome) => {
+        if (!context.hookRegistry || !sessionId) {
+          return;
+        }
+
+        void context.hookRegistry.fire("session:compact:after", {
+          sessionId,
+          tokenEstimate: outcome.artifact?.tokenEstimate,
+          compactThreshold: getCompactThreshold(runtimeConfig.compactThreshold),
+          compactPrepareThreshold: getCompactThreshold(runtimeConfig.compactPrepareThreshold),
+          compactionReason: outcome.reason,
+          compactionInstructions: typeof runtimeConfig.compactionInstructions === "string"
+            ? runtimeConfig.compactionInstructions
+            : undefined,
+          providerId: typeof runtimeConfig.provider === "string" ? runtimeConfig.provider : undefined,
+          model: typeof runtimeConfig.model === "string" ? runtimeConfig.model : undefined,
+          preparedOnly: false,
+        });
+      },
+    },
+  }), [context.hookRegistry, runtimeConfig]);
 
   inputValueRef.current = inputValue;
 
@@ -703,7 +779,7 @@ export function App({
     const transcript = compactSessionIfNeeded(
       sessionStore,
       context.sessionId,
-      getCompactThreshold(runtimeConfig.compactThreshold),
+      buildCompactionPolicy(context.sessionId),
     ) ?? sessionStore.loadTranscript(context.sessionId);
     if (!transcript) return;
 
@@ -1101,7 +1177,7 @@ export function App({
         compactSessionIfNeeded(
           sessionStore,
           sessionIdRef.current,
-          getCompactThreshold(runtimeConfig.compactThreshold),
+          buildCompactionPolicy(sessionIdRef.current),
         );
       }
 
@@ -1115,7 +1191,7 @@ export function App({
           transcript
             ? transcriptToConversation(
                 transcript,
-                getCompactThreshold(runtimeConfig.compactThreshold),
+                buildCompactionPolicy(sessionIdRef.current),
               )
             : [{ role: "user", content: trimmed }]
         ) as Message[];
@@ -1166,7 +1242,7 @@ export function App({
           compactSessionIfNeeded(
             sessionStore,
             sessionIdRef.current,
-            getCompactThreshold(runtimeConfig.compactThreshold),
+            buildCompactionPolicy(sessionIdRef.current),
           );
           sessionStore.updateStatus(
             sessionIdRef.current,

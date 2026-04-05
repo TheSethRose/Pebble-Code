@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { PassThrough } from "node:stream";
 import { render } from "ink";
 import { run, setStartReplForTesting } from "../src/runtime/main";
+import { BackgroundRunManager } from "../src/runtime/backgroundRuns";
 import { buildSessionMemory } from "../src/persistence/memory";
 import {
   createProjectSessionStore,
@@ -56,6 +57,26 @@ function initializeGitRepo(projectDir: string): void {
 function commitAll(projectDir: string, message: string): void {
   Bun.spawnSync({ cmd: ["git", "add", "."], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
   Bun.spawnSync({ cmd: ["git", "commit", "-m", message, "--quiet"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+}
+
+async function waitForBackgroundRun(
+  manager: BackgroundRunManager,
+  runId: string,
+  predicate: (run: Record<string, unknown>) => boolean,
+  timeoutMs = 8_000,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const run = manager.getRun(runId) as Record<string, unknown> | null;
+    if (run && predicate(run)) {
+      return run;
+    }
+
+    await Bun.sleep(100);
+  }
+
+  throw new Error(`Timed out waiting for background run ${runId}`);
 }
 
 async function captureConsole<T>(callback: () => Promise<T>): Promise<{
@@ -227,6 +248,94 @@ describe("headless runtime", () => {
     expect(compacted?.messages.length).toBeLessThan(32);
     expect(compacted?.messages.some((message) => message.content.startsWith("[Compacted transcript summary]"))).toBe(true);
     expect(compacted?.metadata?.compactionCount).toBeGreaterThan(0);
+  });
+
+  test("surfaces persisted background run counts during runtime boot", async () => {
+    const projectDir = createTempProject("pebble-runtime-background-summary-");
+    const manager = new BackgroundRunManager(projectDir);
+    const started = manager.startAgentRun({
+      prompt: "Summarize current project setup",
+      initiatedBy: "runtime-test",
+    });
+
+    await waitForBackgroundRun(manager, started.id, (run) => run.status === "completed");
+
+    const { result: exitCode, stderr } = await withProviderKeysUnset(() =>
+      captureConsole(() =>
+        run({
+          headless: true,
+          prompt: "hello",
+          cwd: projectDir,
+          format: "json",
+        }),
+      ),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stderr.some((line) => line.includes("Background runs: 1 total"))).toBe(true);
+  });
+
+  test("fires compaction hooks and persists provider markers when transcript compaction runs", async () => {
+    const projectDir = createTempProject("pebble-runtime-compaction-hooks-", {
+      settings: {
+        compactThreshold: 1,
+        compactPrepareThreshold: 1,
+        compactionInstructions: "Preserve action items and next steps.",
+        providerCompactionMarkers: true,
+      },
+    });
+    const extensionsDir = join(projectDir, "extensions");
+    mkdirSync(extensionsDir, { recursive: true });
+    const hookLogPath = join(projectDir, "compaction-hooks.log");
+
+    writeFileSync(
+      join(extensionsDir, "compaction-hooks.ts"),
+      [
+        'import { appendFileSync } from "node:fs";',
+        `const hookLogPath = ${JSON.stringify(hookLogPath)};`,
+        "export default {",
+        '  metadata: { id: "compaction-hooks", name: "Compaction Hooks", version: "0.0.0" },',
+        "  hooks: {",
+        '    async onPreCompact(context) { appendFileSync(hookLogPath, `pre:${String(context.preparedOnly)}:${String(context.providerId)}\\n`, "utf-8"); },',
+        '    async onPostCompact(context) { appendFileSync(hookLogPath, `post:${String(context.providerId)}:${String(context.model)}\\n`, "utf-8"); },',
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const store = createProjectSessionStore(projectDir);
+    const session = store.createSession("compaction-hook-session");
+    for (let index = 0; index < 30; index += 1) {
+      store.appendMessage(session.id, {
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `Compaction hook message ${index}`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const { result: exitCode } = await withProviderKeysUnset(() =>
+      captureConsole(() =>
+        run({
+          headless: true,
+          prompt: "continue",
+          cwd: projectDir,
+          resume: session.id,
+          format: "json",
+        }),
+      ),
+    );
+
+    expect(exitCode).toBe(0);
+    const compacted = store.loadTranscript(session.id);
+    expect(compacted?.metadata?.lastProviderCompactionMarker).toMatchObject({
+      providerId: "openrouter",
+      instructionsApplied: true,
+    });
+    expect(compacted?.metadata?.lastCompactionInstructions).toBe("Preserve action items and next steps.");
+    expect(readFileSync(hookLogPath, "utf-8")).toContain("pre:false:openrouter");
+    expect(readFileSync(hookLogPath, "utf-8")).toContain("post:openrouter:");
   });
 
   test("loads extension providers, skill instructions, and MCP configs during boot", async () => {

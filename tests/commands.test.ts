@@ -75,6 +75,7 @@ describe("Command Registry", () => {
     expect(registry.find("exit")).toBeDefined();
     expect(registry.find("clear")).toBeDefined();
     expect(registry.find("config")).toBeDefined();
+    expect(registry.find("init")).toBeDefined();
     expect(registry.find("login")).toBeDefined();
     expect(registry.find("logout")).toBeDefined();
     expect(registry.find("model")).toBeDefined();
@@ -94,6 +95,7 @@ describe("Command Registry", () => {
     expect(registry.find("h")).toBeDefined();
     expect(registry.find("quit")).toBeDefined();
     expect(registry.find("cls")).toBeDefined();
+    expect(registry.find("new")).toBeDefined();
     expect(registry.find("m")).toBeDefined();
     expect(registry.find("signout")).toBeDefined();
   });
@@ -125,6 +127,38 @@ describe("Command Registry", () => {
     });
     expect(result.success).toBe(true);
     expect(result.data?.action).toBe("show-keybindings");
+  });
+
+  test("executes /new as an alias for /clear", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const result = await registry.execute("new", "", {
+      ...createCommandContext(),
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toBe("");
+    expect(result.data?.action).toBe("clear");
+  });
+
+  test("/init writes safe project defaults without copying secrets", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const projectDir = createTempProjectDir("pebble-command-init-");
+    const result = await registry.execute("init", "", createCommandContext({ cwd: projectDir }));
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Pebble init for");
+    expect(result.output).toContain("Created project settings");
+    expect(existsSync(getProjectSettingsPath(projectDir))).toBe(true);
+
+    const projectSettings = JSON.parse(readFileSync(getProjectSettingsPath(projectDir), "utf-8")) as Record<string, unknown>;
+    expect(projectSettings.permissionMode).toBe("always-ask");
+    expect(projectSettings.provider).toBeTruthy();
+    expect(projectSettings.apiKey).toBeUndefined();
+    expect(projectSettings.providerAuth).toBeUndefined();
   });
 
   test("executes exit command", async () => {
@@ -270,6 +304,49 @@ describe("Command Registry", () => {
     const compacted = store.loadTranscript(session.id);
     expect(compacted?.messages.some((message) => message.content.startsWith("[Compacted transcript summary]"))).toBe(true);
     expect(compacted?.metadata?.lastCompactionReason).toBe("manual");
+  });
+
+  test("/compact can apply compaction instructions and provider markers", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempDir("pebble-command-compact-policy-");
+    mkdirSync(tempDir, { recursive: true });
+
+    const store = new SessionStore(tempDir);
+    const session = store.createSession("compact-policy-test");
+    for (let index = 0; index < 30; index += 1) {
+      store.appendMessage(session.id, {
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `Compaction message ${index}`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const result = await registry.execute("compact", "", createCommandContext({
+      sessionStore: store,
+      sessionId: session.id,
+      config: {
+        compactThreshold: 1,
+        compactPrepareThreshold: 1,
+        compactionInstructions: "Keep action items and unfinished tasks visible.",
+        providerCompactionMarkers: true,
+        provider: "openrouter",
+        model: "openai/gpt-4.1",
+      },
+    }));
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Instructions: Keep action items and unfinished tasks visible.");
+    expect(result.output).toContain("Context marker: openrouter / openai/gpt-4.1");
+
+    const compacted = store.loadTranscript(session.id);
+    expect(compacted?.metadata?.lastCompactionInstructions).toBe("Keep action items and unfinished tasks visible.");
+    expect(compacted?.metadata?.lastProviderCompactionMarker).toMatchObject({
+      providerId: "openrouter",
+      model: "openai/gpt-4.1",
+      instructionsApplied: true,
+    });
   });
 
   test("/login persists an OpenRouter API key in ~/.pebble settings", async () => {

@@ -44,6 +44,34 @@ function commitAll(projectDir: string, message: string): void {
   Bun.spawnSync({ cmd: ["git", "commit", "-m", message, "--quiet"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
 }
 
+async function waitForBackgroundRun(
+  projectDir: string,
+  runId: string,
+  predicate: (run: Record<string, unknown>) => boolean,
+  timeoutMs = 8_000,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+  const tool = new OrchestrateTool();
+
+  while (Date.now() < deadline) {
+    const result = await tool.execute(
+      { action: "background_get", run_id: runId },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    if (result.success && result.data && typeof result.data === "object") {
+      const run = result.data as Record<string, unknown>;
+      if (predicate(run)) {
+        return run;
+      }
+    }
+
+    await Bun.sleep(100);
+  }
+
+  throw new Error(`Timed out waiting for background run ${runId}`);
+}
+
 afterEach(() => {
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -890,6 +918,98 @@ describe("capability tool implementations", () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain("task_plan.md");
     expect(result.output).toContain("- [x] done");
+  });
+
+  test("OrchestrateTool can start and inspect detached background agent runs", async () => {
+    const projectDir = createTempProject("pebble-tools-orchestrate-background-agent-");
+    const tool = new OrchestrateTool();
+
+    const started = await tool.execute(
+      { action: "background_start", task: "agent", prompt: "Summarize the project status" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(started.success).toBe(true);
+    expect(started.data).toMatchObject({ task: "agent" });
+    const runId = started.data && typeof started.data === "object" && "id" in started.data
+      ? String(started.data.id)
+      : "";
+    expect(runId).toMatch(/^bg-/);
+
+    const listed = await tool.execute(
+      { action: "background_list" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+    expect(listed.success).toBe(true);
+    expect(listed.output).toContain(runId);
+
+    const finished = await waitForBackgroundRun(
+      projectDir,
+      runId,
+      (run) => run.status === "completed",
+    );
+
+    expect(finished.sessionId).toBeTruthy();
+    expect(typeof finished.logPath).toBe("string");
+    expect(existsSync(String(finished.logPath))).toBe(true);
+    expect(readFileSync(String(finished.logPath), "utf-8")).toContain('"type":"result"');
+  });
+
+  test("OrchestrateTool can stop a detached background verification run", async () => {
+    const projectDir = createTempProject("pebble-tools-orchestrate-background-stop-");
+    mkdirSync(join(projectDir, "scripts"), { recursive: true });
+    writeFileSync(
+      join(projectDir, "package.json"),
+      JSON.stringify({
+        name: "pebble-tools-orchestrate-background-stop",
+        scripts: {
+          build: "bun run scripts/wait.ts",
+        },
+      }, null, 2),
+      "utf-8",
+    );
+    writeFileSync(
+      join(projectDir, "scripts", "wait.ts"),
+      [
+        'console.log("waiting");',
+        'await new Promise((resolve) => setTimeout(resolve, 5000));',
+        'console.log("finished");',
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const tool = new OrchestrateTool();
+    const started = await tool.execute(
+      { action: "background_start", task: "verification", commands: ["build"] },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(started.success).toBe(true);
+    const runId = started.data && typeof started.data === "object" && "id" in started.data
+      ? String(started.data.id)
+      : "";
+
+    await waitForBackgroundRun(
+      projectDir,
+      runId,
+      (run) => run.status === "running" || run.status === "stopped",
+    );
+
+    const stopResult = await tool.execute(
+      { action: "background_stop", run_id: runId },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+    expect(stopResult.success).toBe(true);
+
+    const stopped = await waitForBackgroundRun(
+      projectDir,
+      runId,
+      (run) => run.status === "stopped",
+    );
+
+    expect(stopped.summary).toBeTruthy();
+    expect(readFileSync(String(stopped.logPath), "utf-8")).toContain("Stop requested");
   });
 
   test("OrchestrateTool persists worktree metadata across tool instances", async () => {

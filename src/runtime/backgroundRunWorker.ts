@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
 import {
   appendBackgroundRunLog,
@@ -37,7 +37,7 @@ let currentRecord = saveBackgroundRunRecord(recordPath, {
 appendBackgroundRunLog(currentRecord.logPath, `== Background ${currentRecord.task} run ${currentRecord.id} ==`);
 
 let stopRequested = false;
-let activeChild: ChildProcessWithoutNullStreams | null = null;
+let activeChild: ChildProcess | null = null;
 const abortController = new AbortController();
 
 const requestStop = (signalName: string) => {
@@ -123,10 +123,15 @@ function finalizeRecord(params: {
 
 async function runAgentTask(record: BackgroundRunRecord, signal: AbortSignal): Promise<number> {
   const { run } = await import("./main.js");
+  const prompt = record.prompt;
+  if (!prompt) {
+    throw new Error("Background agent runs require a prompt.");
+  }
+
   appendBackgroundRunLog(record.logPath, `[worker] Starting headless Pebble run for session ${record.sessionId ?? "(new session)"}.`);
   return run({
     headless: true,
-    prompt: record.prompt,
+    prompt,
     resume: record.sessionId,
     cwd: record.cwd,
     provider: record.provider,
@@ -139,7 +144,7 @@ async function runAgentTask(record: BackgroundRunRecord, signal: AbortSignal): P
 async function runVerificationTask(
   record: BackgroundRunRecord,
   signal: AbortSignal,
-  setActiveChild: (child: ChildProcessWithoutNullStreams | null) => void,
+  setActiveChild: (child: ChildProcess | null) => void,
 ): Promise<number> {
   let lastExitCode = 0;
 
@@ -164,7 +169,7 @@ function runLoggedCommand(
   cwd: string,
   logPath: string,
   signal: AbortSignal,
-  setActiveChild: (child: ChildProcessWithoutNullStreams | null) => void,
+  setActiveChild: (child: ChildProcess | null) => void,
 ): Promise<number> {
   return new Promise((resolve, reject) => {
     const child = spawn(command[0]!, command.slice(1), {

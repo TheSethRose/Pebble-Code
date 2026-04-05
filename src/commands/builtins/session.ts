@@ -82,8 +82,12 @@ export function createMemoryCommand(): Command {
       }
 
       const compactThreshold = Number(ctx.config.compactThreshold ?? 0);
+      const compactPrepareThreshold = Number(ctx.config.compactPrepareThreshold ?? 0);
       const tokenEstimate = estimateTokens(transcript.messages);
       const projectedCompaction = compactThreshold > 0 && tokenEstimate >= compactThreshold;
+      const projectedPrepare = !projectedCompaction
+        && compactPrepareThreshold > 0
+        && tokenEstimate >= compactPrepareThreshold;
       const shouldRefresh = action === "refresh" || isSessionMemoryStale(transcript.memory, transcript);
       const memory = shouldRefresh
         ? store.updateMemory(transcript.id, buildSessionMemory(transcript)).memory
@@ -105,8 +109,12 @@ export function createMemoryCommand(): Command {
           "Compaction status:",
           `Messages in transcript: ${transcript.messages.length}`,
           `Estimated tokens in transcript: ${tokenEstimate}`,
+          `Prepare threshold: ${compactPrepareThreshold || "auto / not configured"}`,
           `Compaction threshold: ${compactThreshold || "not configured"}`,
+          `Prepare threshold reached: ${projectedPrepare ? "yes" : "no"}`,
           `Compaction needed: ${projectedCompaction ? "yes" : "no"}`,
+          `Compaction instructions: ${typeof ctx.config.compactionInstructions === "string" && ctx.config.compactionInstructions.trim() ? "configured" : "none"}`,
+          `Provider compaction markers: ${ctx.config.providerCompactionMarkers === true ? "enabled" : "disabled"}`,
           `Updated: ${transcript.updatedAt}`,
         ].filter(Boolean).join("\n"),
       };
@@ -136,7 +144,11 @@ export function createCompactCommand(): Command {
       }
 
       const store = getSessionStore(ctx);
-      const outcome = compactSession(store, transcript.id, { force: true, reason: "manual" });
+      const outcome = compactSession(store, transcript.id, {
+        ...buildCommandCompactionPolicy(ctx),
+        force: true,
+        reason: "manual",
+      });
       if (!outcome) {
         return {
           success: false,
@@ -164,6 +176,10 @@ export function createCompactCommand(): Command {
           `Messages: ${outcome.previousMessageCount} -> ${outcome.nextMessageCount}`,
           `Artifact generated: ${outcome.artifact.generatedAt}`,
           `Compacted messages: ${outcome.artifact.compactedMessageCount}`,
+          outcome.artifact.instructions ? `Instructions: ${outcome.artifact.instructions}` : undefined,
+          outcome.artifact.providerMarker
+            ? `Context marker: ${outcome.artifact.providerMarker.providerId ?? "provider"}${outcome.artifact.providerMarker.model ? ` / ${outcome.artifact.providerMarker.model}` : ""}`
+            : undefined,
           "",
           "Summary:",
           outcome.artifact.summary,
@@ -174,6 +190,36 @@ export function createCompactCommand(): Command {
       };
     },
   };
+}
+
+function buildCommandCompactionPolicy(ctx: { config: Record<string, unknown> }) {
+  return {
+    compactThreshold: toPositiveNumber(ctx.config.compactThreshold),
+    compactPrepareThreshold: toPositiveNumber(ctx.config.compactPrepareThreshold),
+    instructions: typeof ctx.config.compactionInstructions === "string"
+      ? ctx.config.compactionInstructions
+      : undefined,
+    providerContext: {
+      markersEnabled: ctx.config.providerCompactionMarkers === true,
+      providerId: typeof ctx.config.provider === "string" ? ctx.config.provider : undefined,
+      model: typeof ctx.config.model === "string" ? ctx.config.model : undefined,
+    },
+  };
+}
+
+function toPositiveNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return undefined;
 }
 
 export function createPlanCommand(): Command {

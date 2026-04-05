@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { BackgroundRunManager } from "../../runtime/backgroundRuns.js";
 import { WorktreeManager } from "../../runtime/worktrees.js";
 import { createProjectSessionStore } from "../../persistence/runtimeSessions.js";
 import type { Tool, ToolApprovalRequest, ToolContext, ToolResult } from "../Tool.js";
@@ -9,7 +10,27 @@ import { truncateText } from "../shared/common.js";
 const OrchestrateInputSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("run_verification"),
-    commands: z.array(z.enum(["test", "typecheck", "build"])) .optional(),
+    commands: z.array(z.enum(["test", "typecheck", "build"])).optional(),
+  }),
+  z.object({
+    action: z.literal("background_start"),
+    task: z.enum(["agent", "verification"]),
+    prompt: z.string().optional(),
+    session_id: z.string().optional(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+    commands: z.array(z.enum(["test", "typecheck", "build"])).optional(),
+  }),
+  z.object({
+    action: z.literal("background_get"),
+    run_id: z.string(),
+  }),
+  z.object({
+    action: z.literal("background_list"),
+  }),
+  z.object({
+    action: z.literal("background_stop"),
+    run_id: z.string(),
   }),
   z.object({
     action: z.literal("worktree_create"),
@@ -35,7 +56,7 @@ const OrchestrateInputSchema = z.discriminatedUnion("action", [
 export class OrchestrateTool implements Tool {
   name = "Orchestrate";
   aliases = ["SearchSubagent", "ExecutionSubagent", "Agent", "TaskRunner", "WorktreeFlow"];
-  description = "Coordinate verification runs, partial worktree workflows, and planning-file status from one orchestration surface.";
+  description = "Coordinate verification runs, detached background agent tasks, worktree workflows, and planning-file status from one orchestration surface.";
   category = "orchestrate" as const;
   capability = "orchestrate" as const;
   inputSchema = OrchestrateInputSchema;
@@ -55,6 +76,104 @@ export class OrchestrateTool implements Tool {
           output: results.map((result) => `${result.command}\n${result.output}`).join("\n\n---\n\n"),
           data: { results },
           summary: `Ran ${results.length} verification command(s)`,
+        };
+      }
+
+      case "background_start": {
+        const manager = new BackgroundRunManager(context.cwd);
+        if (parsed.data.task === "agent") {
+          if (!parsed.data.prompt?.trim()) {
+            return {
+              success: false,
+              output: "",
+              error: "background_start task=agent requires a prompt.",
+            };
+          }
+
+          const run = manager.startAgentRun({
+            prompt: parsed.data.prompt,
+            sessionId: parsed.data.session_id,
+            parentSessionId: context.runtime?.sessionId ?? null,
+            provider: parsed.data.provider,
+            model: parsed.data.model,
+            initiatedBy: this.name,
+          });
+
+          return {
+            success: true,
+            output: formatBackgroundRun(run),
+            data: run,
+            summary: `Started background agent run ${run.id}`,
+          };
+        }
+
+        const run = manager.startVerificationRun({
+          commands: parsed.data.commands ?? ["test", "typecheck", "build"],
+          parentSessionId: context.runtime?.sessionId ?? null,
+          initiatedBy: this.name,
+        });
+
+        return {
+          success: true,
+          output: formatBackgroundRun(run),
+          data: run,
+          summary: `Started background verification ${run.id}`,
+        };
+      }
+
+      case "background_get": {
+        const manager = new BackgroundRunManager(context.cwd);
+        const run = manager.getRun(parsed.data.run_id);
+        if (!run) {
+          return {
+            success: false,
+            output: "",
+            error: `Background run not found: ${parsed.data.run_id}`,
+          };
+        }
+
+        return {
+          success: true,
+          output: formatBackgroundRun(run, true),
+          data: run,
+          summary: `Loaded background run ${run.id}`,
+        };
+      }
+
+      case "background_list": {
+        const manager = new BackgroundRunManager(context.cwd);
+        const runs = manager.listRuns();
+        const summary = manager.getSummary();
+        return {
+          success: true,
+          output: runs.length === 0
+            ? "No background runs recorded for this project yet."
+            : [
+                `Background runs: ${summary.total} total (${summary.active} active, ${summary.completed} completed, ${summary.failed} failed, ${summary.stopped} stopped)`,
+                "",
+                ...runs.map((run) => formatBackgroundRun(run)),
+              ].join("\n\n"),
+          data: { runs, summary },
+          summary: `Loaded ${runs.length} background run(s)`,
+        };
+      }
+
+      case "background_stop": {
+        const manager = new BackgroundRunManager(context.cwd);
+        const run = manager.stopRun(parsed.data.run_id);
+        if (!run) {
+          return {
+            success: false,
+            output: "",
+            error: `Background run not found: ${parsed.data.run_id}`,
+          };
+        }
+
+        return {
+          success: true,
+          output: formatBackgroundRun(run, true),
+          data: run,
+          summary: `Stop requested for background run ${run.id}`,
         };
       }
 
@@ -168,6 +287,8 @@ export class OrchestrateTool implements Tool {
       case "run_verification":
       case "plan_status":
       case "worktree_status":
+      case "background_get":
+      case "background_list":
         return null;
       default:
         return {
@@ -179,6 +300,36 @@ export class OrchestrateTool implements Tool {
         };
     }
   }
+}
+
+function formatBackgroundRun(
+  run: {
+    id: string;
+    task: string;
+    status: string;
+    sessionId?: string;
+    commands?: string[];
+    provider?: string;
+    model?: string;
+    logPath: string;
+    recordPath: string;
+    summary?: string;
+    finishedAt?: string;
+    updatedAt: string;
+  },
+  includePaths = false,
+): string {
+  return [
+    `${run.id} · ${run.task} · ${run.status}`,
+    run.sessionId ? `Session: ${run.sessionId}` : undefined,
+    run.commands?.length ? `Commands: ${run.commands.join(", ")}` : undefined,
+    run.provider ? `Provider: ${run.provider}` : undefined,
+    run.model ? `Model: ${run.model}` : undefined,
+    run.summary ? `Summary: ${run.summary}` : undefined,
+    `Updated: ${run.finishedAt ?? run.updatedAt}`,
+    includePaths ? `Log: ${run.logPath}` : undefined,
+    includePaths ? `Record: ${run.recordPath}` : undefined,
+  ].filter(Boolean).join("\n");
 }
 
 function createWorktreeManager(cwd: string): WorktreeManager {
