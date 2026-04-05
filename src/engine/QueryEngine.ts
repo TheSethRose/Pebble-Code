@@ -15,6 +15,12 @@ import { emitStreamEvent } from "./transitions.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import type { PermissionManager } from "../runtime/permissionManager.js";
 import type { PermissionDecision } from "../runtime/permissions.js";
+import {
+  logToolError,
+  categorizeToolError,
+  extractRecoveryHints,
+  buildRecoveryErrorMessage,
+} from "../tools/toolErrorLogger.js";
 
 export function normalizeProviderToolInputSchema(schema: Record<string, unknown>): Record<string, unknown> {
   const anyOf = Array.isArray(schema.anyOf) ? schema.anyOf : undefined;
@@ -723,7 +729,19 @@ export class QueryEngine {
     const registration = this.toolRegistry.getRegistration(toolCall.name);
 
     if (!registration) {
-      const errorMsg = `Unknown tool: ${toolCall.name}`;
+      const availableTools = this.toolRegistry.getToolNames().join(", ");
+      const errorMsg = `Unknown tool: ${toolCall.name}. Available tools: ${availableTools}.`;
+      await logToolError({
+        timestamp: new Date().toISOString(),
+        sessionId: this.options.getSessionId?.() ?? null,
+        turnCount,
+        toolName: toolCall.name,
+        toolCallId: toolCall.id,
+        inputAttempt: rawInput,
+        errorMessage: errorMsg,
+        errorCategory: "not_found",
+        recoveryHints: [`The tool "${toolCall.name}" does not exist. Choose from: ${availableTools}`],
+      });
       await this.fireErrorLifecycleEvent(errorMsg, {
         sessionId: this.options.getSessionId?.() ?? null,
         turnCount,
@@ -784,7 +802,64 @@ export class QueryEngine {
       const startedAt = Date.now();
       const result = await tool.execute(normalizedInput, toolContext);
       const durationMs = Date.now() - startedAt;
-      const outputBase = result.success ? result.output : (result.error ?? result.output);
+
+      // If the tool failed, log the error and enhance the message with recovery guidance
+      if (!result.success) {
+        const category = categorizeToolError(result.error ?? result.output);
+        const hints = extractRecoveryHints(result.error ?? result.output, registration.canonicalName);
+        const enrichedMessage = buildRecoveryErrorMessage(registration.canonicalName, result.error ?? result.output, category, hints);
+
+        await logToolError({
+          timestamp: new Date().toISOString(),
+          sessionId: this.options.getSessionId?.() ?? null,
+          turnCount,
+          toolName: registration.canonicalName,
+          toolCallId: toolCall.id,
+          inputAttempt: normalizedInput,
+          errorMessage: result.error ?? result.output,
+          errorCategory: category,
+          recoveryHints: hints,
+        });
+
+        return {
+          message: {
+            role: "tool",
+            content: enrichedMessage,
+            toolCallId: toolCall.id,
+            toolName: registration.canonicalName,
+            metadata: {
+              success: false,
+              durationMs,
+              input: normalizedInput,
+              errorCategory: category,
+              recoveryHints: hints,
+              toolCallId: toolCall.id,
+              canonicalToolName: registration.canonicalName,
+              qualifiedToolName: registration.qualifiedName,
+              requestedToolName: toolCall.name,
+              category: registration.category,
+            },
+          },
+          events: [
+            ...events,
+            emitStreamEvent("tool_result", {
+              tool: registration.canonicalName,
+              success: false,
+              input: normalizedInput,
+              output: enrichedMessage,
+              durationMs,
+              errorCategory: category,
+              recoveryHints: hints,
+              toolCallId: toolCall.id,
+              qualifiedToolName: registration.qualifiedName,
+              requestedToolName: toolCall.name,
+              category: registration.category,
+            }),
+          ],
+        };
+      }
+
+      const outputBase = result.output;
       const output = result.truncated ? `${outputBase}\n[Output truncated]` : outputBase;
       const askUserRequest = this.extractAskUserQuestionRequest(result.data, normalizedInput);
 
@@ -887,6 +962,24 @@ export class QueryEngine {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       const error = err instanceof Error ? err : new Error(message);
+      const category = categorizeToolError(message);
+      const hints = extractRecoveryHints(message, registration.canonicalName);
+
+      await logToolError({
+        timestamp: new Date().toISOString(),
+        sessionId: this.options.getSessionId?.() ?? null,
+        turnCount,
+        toolName: registration.canonicalName,
+        toolCallId: toolCall.id,
+        inputAttempt: normalizedInput,
+        errorMessage: message,
+        errorCategory: category,
+        recoveryHints: hints,
+      });
+
+      const outputMessage = hints.length > 0
+        ? buildRecoveryErrorMessage(registration.canonicalName, message, category, hints)
+        : message;
 
       await this.fireLifecycleEvent("tool:after", {
         sessionId: this.options.getSessionId?.() ?? null,
@@ -907,8 +1000,8 @@ export class QueryEngine {
       });
 
       const output = mode === "process"
-        ? `Tool execution error: ${message}`
-        : `Tool error: ${message}`;
+        ? `Tool execution error: ${outputMessage}`
+        : `Tool error: ${outputMessage}`;
 
       return {
         message: {

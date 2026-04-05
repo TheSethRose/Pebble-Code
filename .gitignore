@@ -75,4 +75,5 @@ progress.md
 .pebble/sessions/
 .pebble/test-command-memory/
 .pebble/test-command-sessions/
+.pebble-tool-errors.jsonl
 dist-debug/
