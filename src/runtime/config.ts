@@ -39,6 +39,7 @@ export interface ProviderCredentialSettings {
 }
 
 export type ProviderCredentialMap = Record<string, ProviderCredentialSettings>;
+export type ShellCompactionMode = "off" | "auto" | "aggressive";
 
 /**
  * Global settings loaded from config files.
@@ -54,6 +55,7 @@ export interface Settings {
   maxTurns?: number;
   telemetryEnabled: boolean;
   compactThreshold?: number;
+  shellCompactionMode?: ShellCompactionMode;
   fullscreenRenderer?: boolean;
 }
 
@@ -62,6 +64,7 @@ const DEFAULT_SETTINGS: Settings = {
   provider: OPENROUTER_PROVIDER_ID,
   telemetryEnabled: false,
   maxTurns: 50,
+  shellCompactionMode: "auto",
   fullscreenRenderer: true,
 };
 

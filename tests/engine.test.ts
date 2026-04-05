@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { z } from "zod";
@@ -227,6 +227,109 @@ describe("QueryEngine provider error handling", () => {
 });
 
 describe("QueryEngine integration flows", () => {
+  test("stream normalizes bare string WorkspaceRead tool inputs before tool_call events", async () => {
+    const projectDir = createTempDir("pebble-engine-stream-workspace-read-string-");
+    mkdirSync(join(projectDir, "skills"), { recursive: true });
+    writeFileSync(join(projectDir, "skills", "guide.md"), "hello\n", "utf-8");
+
+    const provider = new StubProvider(
+      {
+        text: "unused",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 0, outputTokens: 0 },
+      },
+      [
+        {
+          toolCall: {
+            id: "workspace-read-stream-1",
+            name: "WorkspaceRead",
+            input: "skills",
+          },
+          done: false,
+        },
+        {
+          done: true,
+          metadata: { stopReason: "tool_use" },
+        },
+      ],
+    );
+
+    const engine = new QueryEngine({
+      provider,
+      tools: [new WorkspaceReadTool()],
+      cwd: projectDir,
+    });
+
+    const events = [] as Array<{ type: string; data: unknown }>;
+    for await (const event of engine.stream([{ role: "user", content: "Inspect the skills folder" }])) {
+      events.push({ type: event.type, data: event.data });
+    }
+
+    const toolCallEvent = events.find((event) => event.type === "tool_call");
+    expect(toolCallEvent).toBeDefined();
+    expect(toolCallEvent?.data).toMatchObject({
+      tool: "WorkspaceRead",
+      input: {
+        action: "project_structure",
+        path: "skills",
+      },
+      toolCallId: "workspace-read-stream-1",
+    });
+  });
+
+  test("normalizes bare string WorkspaceRead tool inputs before execution", async () => {
+    const projectDir = createTempDir("pebble-engine-workspace-read-string-");
+    mkdirSync(join(projectDir, "skills"), { recursive: true });
+    writeFileSync(join(projectDir, "skills", "guide.md"), "hello\n", "utf-8");
+
+    const provider = new ScriptedProvider((messages, callNumber) => {
+      if (callNumber === 1) {
+        return {
+          text: "I'll inspect the skills directory.",
+          toolCalls: [
+            {
+              id: "workspace-read-1",
+              name: "WorkspaceRead",
+              input: "skills",
+            },
+          ],
+          stopReason: "tool_use",
+          usage: { inputTokens: 4, outputTokens: 3 },
+        };
+      }
+
+      expect(messages.at(-1)).toMatchObject({
+        role: "tool",
+        toolName: "WorkspaceRead",
+        metadata: {
+          success: true,
+          input: {
+            action: "project_structure",
+            path: "skills",
+          },
+        },
+      });
+
+      return {
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 2, outputTokens: 1 },
+      };
+    });
+
+    const engine = new QueryEngine({
+      provider,
+      tools: [new WorkspaceReadTool()],
+      cwd: projectDir,
+    });
+
+    const result = await engine.process([{ role: "user", content: "Inspect the skills folder" }]);
+
+    expect(result.success).toBe(true);
+  });
+
   test("completes a real multi-turn FileRead/FileEdit workflow", async () => {
     const projectDir = createTempDir("pebble-engine-tool-loop-");
     const targetFile = join(projectDir, "notes.txt");

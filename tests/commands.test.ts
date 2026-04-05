@@ -10,6 +10,7 @@ import {
   getProjectSettingsPath,
   getSettingsPath,
   loadSettingsForCwd,
+  saveSettingsForCwd,
 } from "../src/runtime/config";
 
 const tempDirs: string[] = [];
@@ -623,6 +624,7 @@ describe("Command Registry", () => {
         model: "openrouter/project-default",
         maxTurns: 12,
         telemetryEnabled: true,
+        shellCompactionMode: "aggressive",
       }, null, 2),
       "utf-8",
     );
@@ -632,6 +634,7 @@ describe("Command Registry", () => {
     expect(loaded.model).toBe("openrouter/project-default");
     expect(loaded.maxTurns).toBe(12);
     expect(loaded.telemetryEnabled).toBe(true);
+    expect(loaded.shellCompactionMode).toBe("aggressive");
   });
 
   test("saves only user overrides to ~/.pebble when repo defaults exist", async () => {
@@ -649,6 +652,7 @@ describe("Command Registry", () => {
         baseUrl: "https://openrouter.ai/api/v1",
         maxTurns: 22,
         telemetryEnabled: false,
+        shellCompactionMode: "auto",
         fullscreenRenderer: true,
       }, null, 2),
       "utf-8",
@@ -673,6 +677,29 @@ describe("Command Registry", () => {
     expect(loaded.apiKey).toBe("sk-or-v1-test-key");
     expect(loaded.model).toBe("openrouter/project-default");
     expect(loaded.maxTurns).toBe(22);
+    expect(loaded.shellCompactionMode).toBe("auto");
+  });
+
+  test("saveSettingsForCwd persists a shell compaction override when it differs from project defaults", () => {
+    const tempDir = createTempProjectDir("pebble-command-shell-compaction-override-");
+    const projectSettingsPath = getProjectSettingsPath(tempDir);
+    mkdirSync(join(tempDir, ".pebble"), { recursive: true });
+    writeFileSync(
+      projectSettingsPath,
+      JSON.stringify({
+        shellCompactionMode: "auto",
+      }, null, 2),
+      "utf-8",
+    );
+
+    const savedPath = saveSettingsForCwd(tempDir, {
+      ...loadSettingsForCwd(tempDir),
+      shellCompactionMode: "off",
+    });
+    const saved = JSON.parse(readFileSync(savedPath, "utf-8")) as Record<string, unknown>;
+
+    expect(saved.shellCompactionMode).toBe("off");
+    expect(loadSettingsForCwd(tempDir).shellCompactionMode).toBe("off");
   });
 
   test("/config opens the settings UI", async () => {

@@ -23,6 +23,7 @@ export interface QueryOptions {
   onEvent?: (event: StreamEvent) => void;
   permissionManager?: PermissionManager;
   cwd?: string;
+  shellCompactionMode?: "off" | "auto" | "aggressive";
   sessionStore?: SessionStore;
   getSessionId?: () => string | null;
   extensionDirs?: string[];
@@ -48,6 +49,7 @@ export async function query(
     onEvent: options.onEvent,
     permissionManager: options.permissionManager,
     cwd: options.cwd,
+    shellCompactionMode: options.shellCompactionMode,
     sessionStore: options.sessionStore,
     getSessionId: options.getSessionId,
     extensionDirs: options.extensionDirs,
@@ -76,6 +78,7 @@ export async function *streamQuery(
     onEvent: options.onEvent,
     permissionManager: options.permissionManager,
     cwd: options.cwd,
+    shellCompactionMode: options.shellCompactionMode,
     sessionStore: options.sessionStore,
     getSessionId: options.getSessionId,
     extensionDirs: options.extensionDirs,

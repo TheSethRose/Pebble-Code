@@ -61,6 +61,7 @@ function loadCommandConfig(
     apiKeyConfigured: resolved.apiKeyConfigured,
     apiKeySource: resolved.apiKeySource,
     compactThreshold: settings.compactThreshold,
+    shellCompactionMode: settings.shellCompactionMode,
     fullscreenRenderer: settings.fullscreenRenderer,
     settingsPath: getSettingsPath(cwd),
   };
@@ -541,6 +542,7 @@ export function App({
       systemPrompt: context.systemPrompt,
       permissionManager,
       cwd: context.cwd,
+      shellCompactionMode: settings.shellCompactionMode,
       sessionStore: sessionStore ?? undefined,
       getSessionId: () => sessionIdRef.current,
       extensionDirs,

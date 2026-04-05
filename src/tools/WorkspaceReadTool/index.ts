@@ -119,13 +119,17 @@ export class WorkspaceReadTool implements Tool {
     "ToolSearch",
     "WorkspaceInspect",
   ];
-  description = "Inspect the workspace through a single read surface. Choose `read_file` for file contents, `list_directory` for immediate children, `project_structure` for a tree overview, `glob` for filename/path matching, `grep` for text search, `tool_search` for discovering tools, `summarize_path` for quick metadata, `git_inspect` for repo state, and `diagnostics` for typecheck/build/test. Prefer repo-relative or absolute paths and JSON-typed booleans/numbers when possible. For high-level overview requests, gather a small number of broad reads first, then answer instead of repeatedly enumerating more directories once you already have enough context.";
+  description = "Inspect the workspace through a single read surface. Choose `read_file` for file contents, `list_directory` for immediate children, `project_structure` for a tree overview, `glob` for filename/path matching, `grep` for text search, `tool_search` for discovering tools, `summarize_path` for quick metadata, `git_inspect` for repo state, and `diagnostics` for typecheck/build/test. Always pass an object with an `action` field rather than a bare string path. Prefer repo-relative or absolute paths and JSON-typed booleans/numbers when possible. For high-level overview requests, gather a small number of broad reads first, then answer instead of repeatedly enumerating more directories once you already have enough context.";
   category = "workspace-read" as const;
   capability = "workspace-read" as const;
   inputSchema = WorkspaceReadInputSchema;
 
+  normalizeInput(input: unknown, context: ToolContext): unknown {
+    return normalizeWorkspaceReadInput(input, context);
+  }
+
   async execute(input: unknown, context: ToolContext): Promise<ToolResult> {
-    const parsed = WorkspaceReadInputSchema.safeParse(input);
+    const parsed = WorkspaceReadInputSchema.safeParse(this.normalizeInput(input, context));
     if (!parsed.success) {
       return { success: false, output: "", error: `Invalid input: ${parsed.error.message}` };
     }
@@ -267,6 +271,7 @@ export class WorkspaceReadTool implements Tool {
           data: {
             command,
             exitCode: result.exitCode,
+            rawOutputPath: result.rawOutputPath,
           },
           debug: result.debug,
           summary: result.summary,
@@ -276,10 +281,45 @@ export class WorkspaceReadTool implements Tool {
   }
 }
 
+function normalizeWorkspaceReadInput(input: unknown, context: ToolContext): unknown {
+  if (typeof input !== "string") {
+    return input;
+  }
+
+  const trimmed = normalizeJsonText(input).trim();
+  if (trimmed.length === 0) {
+    return {
+      action: "project_structure",
+      path: ".",
+    };
+  }
+
+  const resolvedPath = resolveWorkspacePath(trimmed, context.cwd);
+  if (existsSync(resolvedPath)) {
+    const stats = lstatSync(resolvedPath);
+    if (stats.isDirectory()) {
+      return {
+        action: "project_structure",
+        path: trimmed,
+      };
+    }
+
+    return {
+      action: "read_file",
+      file_path: trimmed,
+    };
+  }
+
+  return {
+    action: "summarize_path",
+    path: trimmed,
+  };
+}
+
 function inspectGit(
   mode: "status" | "diff" | "staged-diff" | "changed-files",
   cwd: string,
-): { output: string; data: Record<string, unknown>; summary: string; truncated: boolean; debug: Record<string, unknown> } {
+): { output: string; data: Record<string, unknown>; summary: string; truncated: boolean; debug: Record<string, unknown>; rawOutputPath?: string } {
   const command = mode === "status"
     ? ["git", "status", "--short"]
     : mode === "diff"
@@ -310,12 +350,14 @@ function inspectGit(
     summary: summarized.summary,
     truncated: summarized.truncated,
     debug: summarized.debug,
+    rawOutputPath: summarized.rawOutputPath,
     data: {
       mode,
       command,
       exitCode: result.exitCode,
       stdout,
       stderr,
+      rawOutputPath: summarized.rawOutputPath,
     },
   };
 }
@@ -323,7 +365,7 @@ function inspectGit(
 function runWorkspaceCommand(
   command: "typecheck" | "build" | "test",
   cwd: string,
-): { success: boolean; output: string; error?: string; exitCode: number; summary: string; truncated: boolean; debug: Record<string, unknown> } {
+): { success: boolean; output: string; error?: string; exitCode: number; summary: string; truncated: boolean; debug: Record<string, unknown>; rawOutputPath?: string } {
   const cmd = command === "typecheck"
     ? ["bun", "run", "typecheck"]
     : command === "build"
@@ -354,5 +396,6 @@ function runWorkspaceCommand(
     summary: summarized.summary,
     truncated: summarized.truncated,
     debug: summarized.debug,
+    rawOutputPath: summarized.rawOutputPath,
   };
 }

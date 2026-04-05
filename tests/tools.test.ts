@@ -33,6 +33,17 @@ function createTempProject(prefix: string): string {
   return dir;
 }
 
+function initializeGitRepo(projectDir: string): void {
+  Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync({ cmd: ["git", "config", "user.email", "tests@example.com"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync({ cmd: ["git", "config", "user.name", "Pebble Tests"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+}
+
+function commitAll(projectDir: string, message: string): void {
+  Bun.spawnSync({ cmd: ["git", "add", "."], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync({ cmd: ["git", "commit", "-m", message, "--quiet"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+}
+
 afterEach(() => {
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -410,6 +421,29 @@ describe("capability tool implementations", () => {
     expect(directoryListing.output.split("\n")).toHaveLength(2);
   });
 
+  test("WorkspaceRead coerces bare string path inputs into compatible actions", async () => {
+    const projectDir = createTempProject("pebble-tools-workspace-read-string-shorthand-");
+    mkdirSync(join(projectDir, "skills"), { recursive: true });
+    writeFileSync(join(projectDir, "skills", "guide.md"), "hello\n", "utf-8");
+    writeFileSync(join(projectDir, "notes.txt"), "alpha\n", "utf-8");
+
+    const tool = new WorkspaceReadTool();
+    const directoryResult = await tool.execute(
+      "skills",
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+    const fileResult = await tool.execute(
+      "notes.txt",
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(directoryResult.success).toBe(true);
+    expect(directoryResult.output).toContain("guide.md");
+
+    expect(fileResult.success).toBe(true);
+    expect(fileResult.output).toContain("alpha");
+  });
+
   test("WorkspaceEdit tolerates string boolean and numeric fields for edits", async () => {
     const projectDir = createTempProject("pebble-tools-workspace-edit-coercion-");
     writeFileSync(join(projectDir, "notes.txt"), "alpha\nbeta\n", "utf-8");
@@ -617,7 +651,7 @@ describe("capability tool implementations", () => {
 
   test("ShellTool compacts git status output for common repo inspection", async () => {
     const projectDir = createTempProject("pebble-tools-shell-git-status-");
-    Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+    initializeGitRepo(projectDir);
     writeFileSync(join(projectDir, "demo.txt"), "demo\n", "utf-8");
 
     const tool = new ShellTool();
@@ -656,11 +690,124 @@ describe("capability tool implementations", () => {
     expect(result.success).toBe(false);
     expect(result.summary?.toLowerCase()).toContain("fail");
     expect(result.output).toContain("Full output saved to");
+    expect(result.data).toMatchObject({
+      commandFamily: "test",
+    });
 
     const logPath = result.output.match(/Full output saved to (.+?)\]/)?.[1];
     expect(logPath).toBeTruthy();
+    expect(result.data).toMatchObject({ rawOutputPath: logPath });
     expect(existsSync(logPath!)).toBe(true);
     expect(readFileSync(logPath!, "utf-8")).toContain("Expected: 2");
+  });
+
+  test("ShellTool compacts git diff --name-only output", async () => {
+    const projectDir = createTempProject("pebble-tools-shell-git-diff-name-only-");
+    initializeGitRepo(projectDir);
+    writeFileSync(join(projectDir, "tracked.txt"), "one\n", "utf-8");
+    commitAll(projectDir, "initial");
+    writeFileSync(join(projectDir, "tracked.txt"), "one\ntwo\n", "utf-8");
+
+    const tool = new ShellTool();
+    const result = await tool.execute(
+      { action: "exec", command: "git diff --name-only" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain("Changed files");
+    expect(result.output).toContain("Changed files: 1");
+    expect(result.output).toContain("tracked.txt");
+    expect(result.data).toMatchObject({ commandFamily: "git-diff-name-only" });
+  });
+
+  test("ShellTool compacts git show --stat --oneline output", async () => {
+    const projectDir = createTempProject("pebble-tools-shell-git-show-");
+    initializeGitRepo(projectDir);
+    writeFileSync(join(projectDir, "tracked.txt"), "one\n", "utf-8");
+    commitAll(projectDir, "add tracked file");
+
+    const tool = new ShellTool();
+    const result = await tool.execute(
+      { action: "exec", command: "git show --stat --oneline HEAD" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain("Git show");
+    expect(result.output).toContain("add tracked file");
+    expect(result.output).toContain("tracked.txt");
+    expect(result.data).toMatchObject({ commandFamily: "git-show-stat" });
+  });
+
+  test("ShellTool compacts git stash list output", async () => {
+    const projectDir = createTempProject("pebble-tools-shell-git-stash-");
+    initializeGitRepo(projectDir);
+    writeFileSync(join(projectDir, "tracked.txt"), "one\n", "utf-8");
+    commitAll(projectDir, "initial");
+    writeFileSync(join(projectDir, "tracked.txt"), "changed\n", "utf-8");
+    Bun.spawnSync({ cmd: ["git", "stash", "push", "-m", "saved work", "--quiet"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+
+    const tool = new ShellTool();
+    const result = await tool.execute(
+      { action: "exec", command: "git stash list" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain("Git stashes");
+    expect(result.output).toContain("Stashes: 1");
+    expect(result.output).toContain("stash@{0}");
+    expect(result.data).toMatchObject({ commandFamily: "git-stash-list" });
+  });
+
+  test("ShellTool compacts bun run lint diagnostics", async () => {
+    const projectDir = createTempProject("pebble-tools-shell-lint-");
+    writeFileSync(
+      join(projectDir, "package.json"),
+      JSON.stringify({
+        name: "pebble-tools-shell-lint",
+        scripts: {
+          lint: "printf 'src/index.ts:1:1 error broken\\nsrc/index.ts:2:1 warning noisy\\n' >&2; exit 1",
+        },
+      }, null, 2),
+      "utf-8",
+    );
+
+    const tool = new ShellTool();
+    const result = await tool.execute(
+      { action: "exec", command: "bun run lint" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.summary).toContain("Diagnostics");
+    expect(result.output).toContain("src/index.ts:1:1 error broken");
+    expect(result.output).toContain("src/index.ts:2:1 warning noisy");
+    expect(result.data).toMatchObject({ commandFamily: "diagnostics" });
+  });
+
+  test("ShellTool respects shell compaction mode off", async () => {
+    const projectDir = createTempProject("pebble-tools-shell-compaction-off-");
+    initializeGitRepo(projectDir);
+    writeFileSync(join(projectDir, "tracked.txt"), "one\n", "utf-8");
+    commitAll(projectDir, "initial");
+    writeFileSync(join(projectDir, "tracked.txt"), "one\ntwo\n", "utf-8");
+
+    const tool = new ShellTool();
+    const result = await tool.execute(
+      { action: "exec", command: "git diff --name-only" },
+      {
+        cwd: projectDir,
+        permissionMode: "always-ask",
+        runtime: { shellCompactionMode: "off" },
+      },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.summary).toBe("Executed shell command");
+    expect(result.output.trim()).toBe("tracked.txt");
+    expect(result.data).toMatchObject({ commandFamily: "git-diff-name-only" });
   });
 
   test("WorkspaceRead groups grep matches by file", async () => {

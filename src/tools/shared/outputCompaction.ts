@@ -4,7 +4,12 @@ import { truncateText } from "./common.js";
 
 export type ShellCommandFamily =
   | "git-status"
+  | "git-diff-name-only"
   | "git-diff-stat"
+  | "git-show-stat"
+  | "git-branch-vv"
+  | "git-stash-list"
+  | "git-ls-files"
   | "git-log-oneline"
   | "test"
   | "diagnostics"
@@ -15,7 +20,11 @@ export interface ShellExecutionSummary {
   summary: string;
   truncated: boolean;
   debug: Record<string, unknown>;
+  commandFamily: ShellCommandFamily;
+  rawOutputPath?: string;
 }
+
+type CompactionMode = "off" | "auto" | "aggressive";
 
 export interface GrepMatchGroup {
   file: string;
@@ -72,56 +81,124 @@ export function summarizeShellExecution(params: {
   stderr: string;
   exitCode: number;
   cwd: string;
+  mode?: CompactionMode;
   maxChars?: number;
 }): ShellExecutionSummary {
   const rawOutput = [params.stdout, params.stderr].filter(Boolean).join("\n\n").trim() || "(no output)";
   const family = detectShellCommandFamily(params.command);
+  const mode = params.mode ?? "auto";
   const baseDebug = {
     command: params.command,
     commandFamily: family,
     exitCode: params.exitCode,
+    compactionMode: mode,
   } satisfies Record<string, unknown>;
+
+  if (mode === "off") {
+    const truncated = truncateText(rawOutput, params.maxChars ?? DEFAULT_RAW_OUTPUT_LIMIT);
+    return {
+      output: truncated.text,
+      summary: params.exitCode === 0 ? "Executed shell command" : `Command failed with exit code ${params.exitCode}`,
+      truncated: truncated.truncated,
+      commandFamily: family,
+      debug: {
+        ...baseDebug,
+        compactionApplied: false,
+        rawOutputBytes: rawOutput.length,
+      },
+    };
+  }
 
   switch (family) {
     case "git-status":
       return finalizeShellSummary({
         ...params,
+        mode,
         family,
         rawOutput,
         baseDebug,
-        compacted: compactGitStatus(rawOutput),
+        compacted: compactGitStatus(rawOutput, mode),
+      });
+    case "git-diff-name-only":
+      return finalizeShellSummary({
+        ...params,
+        mode,
+        family,
+        rawOutput,
+        baseDebug,
+        compacted: compactGitFileList(rawOutput, "Changed files", mode),
       });
     case "git-diff-stat":
       return finalizeShellSummary({
         ...params,
+        mode,
         family,
         rawOutput,
         baseDebug,
-        compacted: compactGitDiffStat(rawOutput),
+        compacted: compactGitDiffStat(rawOutput, mode),
+      });
+    case "git-show-stat":
+      return finalizeShellSummary({
+        ...params,
+        mode,
+        family,
+        rawOutput,
+        baseDebug,
+        compacted: compactGitShowStat(rawOutput, mode),
+      });
+    case "git-branch-vv":
+      return finalizeShellSummary({
+        ...params,
+        mode,
+        family,
+        rawOutput,
+        baseDebug,
+        compacted: compactGitBranchVerbose(rawOutput, mode),
+      });
+    case "git-stash-list":
+      return finalizeShellSummary({
+        ...params,
+        mode,
+        family,
+        rawOutput,
+        baseDebug,
+        compacted: compactGitStashList(rawOutput, mode),
+      });
+    case "git-ls-files":
+      return finalizeShellSummary({
+        ...params,
+        mode,
+        family,
+        rawOutput,
+        baseDebug,
+        compacted: compactGitFileList(rawOutput, "Tracked files", mode),
       });
     case "git-log-oneline":
       return finalizeShellSummary({
         ...params,
+        mode,
         family,
         rawOutput,
         baseDebug,
-        compacted: compactGitLogOneline(rawOutput),
+        compacted: compactGitLogOneline(rawOutput, mode),
       });
     case "test":
       return finalizeShellSummary({
         ...params,
+        mode,
         family,
         rawOutput,
         baseDebug,
-        compacted: compactTestOutput(rawOutput, params.exitCode),
+        compacted: compactTestOutput(rawOutput, params.exitCode, mode),
       });
     case "diagnostics":
       return finalizeShellSummary({
         ...params,
+        mode,
         family,
         rawOutput,
         baseDebug,
-        compacted: compactDiagnosticsOutput(rawOutput, params.exitCode),
+        compacted: compactDiagnosticsOutput(rawOutput, params.exitCode, mode),
       });
     case "generic": {
       const truncated = truncateText(rawOutput, params.maxChars ?? DEFAULT_RAW_OUTPUT_LIMIT);
@@ -129,6 +206,7 @@ export function summarizeShellExecution(params: {
         output: truncated.text,
         summary: params.exitCode === 0 ? "Executed shell command" : `Command failed with exit code ${params.exitCode}`,
         truncated: truncated.truncated,
+        commandFamily: family,
         debug: {
           ...baseDebug,
           compactionApplied: false,
@@ -288,7 +366,8 @@ export function persistRawToolOutput(params: {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48) || "output";
-  const filePath = join(dir, `${params.category}-${Date.now()}-${safeIdentifier}.log`);
+  const hash = buildStableOutputHash(`${params.category}:${safeIdentifier}:${params.rawOutput}`);
+  const filePath = join(dir, `${params.category}-${safeIdentifier}-${Date.now()}-${hash}.log`);
   writeFileSync(filePath, params.rawOutput, "utf-8");
   return filePath;
 }
@@ -297,6 +376,7 @@ function finalizeShellSummary(params: {
   command: string;
   cwd: string;
   exitCode: number;
+  mode: CompactionMode;
   maxChars?: number;
   rawOutput: string;
   family: ShellCommandFamily;
@@ -321,6 +401,8 @@ function finalizeShellSummary(params: {
     output,
     summary: params.compacted.summary,
     truncated: wasCompacted,
+    commandFamily: params.family,
+    rawOutputPath,
     debug: {
       ...params.baseDebug,
       ...(params.compacted.debug ?? {}),
@@ -338,6 +420,26 @@ function detectShellCommandFamily(command: string): ShellCommandFamily {
     return "git-status";
   }
 
+  if (/^git diff(?:\s|$)/.test(normalized) && normalized.includes("--name-only")) {
+    return "git-diff-name-only";
+  }
+
+  if (/^git show(?:\s|$)/.test(normalized) && normalized.includes("--stat")) {
+    return "git-show-stat";
+  }
+
+  if (/^git branch(?:\s|$)/.test(normalized) && normalized.includes("--vv")) {
+    return "git-branch-vv";
+  }
+
+  if (/^git stash list(?:\s|$)/.test(normalized)) {
+    return "git-stash-list";
+  }
+
+  if (/^git ls-files(?:\s|$)/.test(normalized)) {
+    return "git-ls-files";
+  }
+
   if (/^git diff(?:\s|$)/.test(normalized)) {
     return "git-diff-stat";
   }
@@ -350,14 +452,14 @@ function detectShellCommandFamily(command: string): ShellCommandFamily {
     return "test";
   }
 
-  if (/^(bun run build|bun run typecheck|tsc(?:\s|$)|eslint(?:\s|$)|biome(?:\s|$)|ruff(?:\s|$)|cargo build(?:\s|$)|cargo clippy(?:\s|$))/.test(normalized)) {
+  if (/^(bun run build|bun run typecheck|bun run lint|tsc(?:\s|$)|eslint(?:\s|$)|biome(?:\s|$)|ruff(?:\s|$)|cargo build(?:\s|$)|cargo check(?:\s|$)|cargo clippy(?:\s|$))/.test(normalized)) {
     return "diagnostics";
   }
 
   return "generic";
 }
 
-function compactGitStatus(rawOutput: string): { output: string; summary: string; debug: Record<string, unknown> } {
+function compactGitStatus(rawOutput: string, mode: CompactionMode): { output: string; summary: string; debug: Record<string, unknown> } {
   const lines = rawOutput.split("\n").map((line) => line.trimEnd()).filter(Boolean);
   if (lines.length === 0) {
     return {
@@ -374,9 +476,16 @@ function compactGitStatus(rawOutput: string): { output: string; summary: string;
   let addedCount = 0;
   let deletedCount = 0;
   let renamedCount = 0;
+  let branchSummary: string | undefined;
+  const fileLines: string[] = [];
 
-  const visibleFiles = lines.slice(0, 12);
   for (const line of lines) {
+    if (line.startsWith("## ")) {
+      branchSummary = line.slice(3).trim();
+      continue;
+    }
+
+    fileLines.push(line);
     const status = line.slice(0, 2);
     if (status === "??") {
       untrackedCount += 1;
@@ -396,7 +505,10 @@ function compactGitStatus(rawOutput: string): { output: string; summary: string;
     if (status.includes("R")) renamedCount += 1;
   }
 
+  const visibleFiles = fileLines.slice(0, getVisibleItemLimit(mode, { auto: 12, aggressive: 8 }));
+
   const summaryBits = [
+    branchSummary ? branchSummary : undefined,
     stagedCount > 0 ? `${stagedCount} staged` : undefined,
     unstagedCount > 0 ? `${unstagedCount} unstaged` : undefined,
     untrackedCount > 0 ? `${untrackedCount} untracked` : undefined,
@@ -409,19 +521,20 @@ function compactGitStatus(rawOutput: string): { output: string; summary: string;
   ].filter((value): value is string => Boolean(value));
 
   const outputLines = [
-    `Files changed: ${lines.length}`,
+    `Files changed: ${fileLines.length}`,
     summaryBits.length > 0 ? `State: ${summaryBits.join(", ")}` : undefined,
     detailBits.length > 0 ? `Kinds: ${detailBits.join(", ")}` : undefined,
     "",
     ...visibleFiles,
-    lines.length > visibleFiles.length ? `... +${lines.length - visibleFiles.length} more` : undefined,
+    fileLines.length > visibleFiles.length ? `... +${fileLines.length - visibleFiles.length} more` : undefined,
   ].filter((line): line is string => Boolean(line));
 
   return {
     output: outputLines.join("\n"),
-    summary: `Git status · ${lines.length} file${lines.length === 1 ? "" : "s"}`,
+    summary: `Git status · ${fileLines.length} file${fileLines.length === 1 ? "" : "s"}`,
     debug: {
-      fileCount: lines.length,
+      fileCount: fileLines.length,
+      branchSummary,
       stagedCount,
       unstagedCount,
       untrackedCount,
@@ -429,10 +542,33 @@ function compactGitStatus(rawOutput: string): { output: string; summary: string;
   };
 }
 
-function compactGitDiffStat(rawOutput: string): { output: string; summary: string } {
+function compactGitFileList(rawOutput: string, label: string, mode: CompactionMode): { output: string; summary: string; debug: Record<string, unknown> } {
+  const files = rawOutput.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (files.length === 0) {
+    return {
+      output: `${label}: 0\nNo files to show.`,
+      summary: `${label} · 0 files`,
+      debug: { fileCount: 0 },
+    };
+  }
+
+  const visible = files.slice(0, getVisibleItemLimit(mode, { auto: 20, aggressive: 10 }));
+  return {
+    output: [
+      `${label}: ${files.length}`,
+      "",
+      ...visible,
+      files.length > visible.length ? `... +${files.length - visible.length} more` : undefined,
+    ].filter((line): line is string => Boolean(line)).join("\n"),
+    summary: `${label} · ${files.length} file${files.length === 1 ? "" : "s"}`,
+    debug: { fileCount: files.length },
+  };
+}
+
+function compactGitDiffStat(rawOutput: string, mode: CompactionMode): { output: string; summary: string } {
   const lines = rawOutput.split("\n").map((line) => line.trimEnd()).filter(Boolean);
   const statLines = lines.filter((line) => line.includes("|") || /files? changed|insertions?\(\+\)|deletions?\(-\)/.test(line));
-  const visible = statLines.slice(0, 12);
+  const visible = statLines.slice(0, getVisibleItemLimit(mode, { auto: 12, aggressive: 8 }));
   const summaryLine = statLines.findLast((line) => /files? changed|insertions?\(\+\)|deletions?\(-\)/.test(line));
 
   return {
@@ -445,9 +581,85 @@ function compactGitDiffStat(rawOutput: string): { output: string; summary: strin
   };
 }
 
-function compactGitLogOneline(rawOutput: string): { output: string; summary: string } {
+function compactGitShowStat(rawOutput: string, mode: CompactionMode): { output: string; summary: string; debug: Record<string, unknown> } {
+  const lines = rawOutput.split("\n").map((line) => line.trimEnd()).filter(Boolean);
+  if (lines.length === 0) {
+    return {
+      output: "No commit details available.",
+      summary: "Git show · no output",
+      debug: { fileCount: 0 },
+    };
+  }
+
+  const subjectLine = lines[0] ?? "git show";
+  const statSummary = lines.findLast((line) => /files? changed|insertions?\(\+\)|deletions?\(-\)/.test(line));
+  const fileLines = lines.filter((line) => line.includes("|"));
+  const visible = fileLines.slice(0, getVisibleItemLimit(mode, { auto: 12, aggressive: 8 }));
+
+  return {
+    output: [
+      subjectLine,
+      statSummary ? "" : undefined,
+      statSummary,
+      visible.length > 0 ? "" : undefined,
+      ...visible,
+      fileLines.length > visible.length ? `... +${fileLines.length - visible.length} more` : undefined,
+    ].filter((line): line is string => Boolean(line)).join("\n"),
+    summary: statSummary ? `Git show · ${subjectLine} · ${statSummary}` : `Git show · ${subjectLine}`,
+    debug: {
+      fileCount: fileLines.length,
+      subjectLine,
+    },
+  };
+}
+
+function compactGitBranchVerbose(rawOutput: string, mode: CompactionMode): { output: string; summary: string; debug: Record<string, unknown> } {
+  const lines = rawOutput.split("\n").map((line) => line.trimEnd()).filter(Boolean);
+  const current = lines.find((line) => line.startsWith("* "))?.slice(2).trim();
+  const visible = lines.slice(0, getVisibleItemLimit(mode, { auto: 12, aggressive: 8 }));
+
+  return {
+    output: [
+      `Branches: ${lines.length}`,
+      current ? `Current: ${current}` : undefined,
+      "",
+      ...visible,
+      lines.length > visible.length ? `... +${lines.length - visible.length} more` : undefined,
+    ].filter((line): line is string => Boolean(line)).join("\n"),
+    summary: current ? `Git branches · ${current}` : `Git branches · ${lines.length} total`,
+    debug: {
+      branchCount: lines.length,
+      currentBranch: current,
+    },
+  };
+}
+
+function compactGitStashList(rawOutput: string, mode: CompactionMode): { output: string; summary: string; debug: Record<string, unknown> } {
+  const entries = rawOutput.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (entries.length === 0) {
+    return {
+      output: "Stashes: 0\nNo stashes saved.",
+      summary: "Git stashes · 0",
+      debug: { stashCount: 0 },
+    };
+  }
+
+  const visible = entries.slice(0, getVisibleItemLimit(mode, { auto: 10, aggressive: 6 }));
+  return {
+    output: [
+      `Stashes: ${entries.length}`,
+      "",
+      ...visible,
+      entries.length > visible.length ? `... +${entries.length - visible.length} more` : undefined,
+    ].filter((line): line is string => Boolean(line)).join("\n"),
+    summary: `Git stashes · ${entries.length}`,
+    debug: { stashCount: entries.length },
+  };
+}
+
+function compactGitLogOneline(rawOutput: string, mode: CompactionMode): { output: string; summary: string } {
   const lines = rawOutput.split("\n").map((line) => line.trim()).filter(Boolean);
-  const visible = lines.slice(0, 10);
+  const visible = lines.slice(0, getVisibleItemLimit(mode, { auto: 10, aggressive: 6 }));
   return {
     output: [
       ...visible,
@@ -457,10 +669,10 @@ function compactGitLogOneline(rawOutput: string): { output: string; summary: str
   };
 }
 
-function compactTestOutput(rawOutput: string, exitCode: number): { output: string; summary: string; debug: Record<string, unknown> } {
+function compactTestOutput(rawOutput: string, exitCode: number, mode: CompactionMode): { output: string; summary: string; debug: Record<string, unknown> } {
   const lines = rawOutput.split("\n").map((line) => line.trimEnd());
-  const summaryLines = uniqueStrings(lines.filter((line) => /(?:\bpass(?:ed)?\b|\bfail(?:ed)?\b|\bskip(?:ped)?\b|\berror(?:s)?\b|test result:|Ran \d+ tests?|\d+ passing|\d+ failing|\d+ failed)/i.test(line))).slice(0, 6);
-  const failureLines = uniqueStrings(lines.filter((line) => /(?:^FAIL\b|^FAILED\b|\berror\b|panic|assert(?:ion)?|Exception|✗|^not ok\b)/i.test(line))).slice(0, 14);
+  const summaryLines = uniqueStrings(lines.filter((line) => /(?:\bpass(?:ed)?\b|\bfail(?:ed)?\b|\bskip(?:ped)?\b|\berror(?:s)?\b|test result:|Ran \d+ tests?|\d+ passing|\d+ failing|\d+ failed)/i.test(line))).slice(0, getVisibleItemLimit(mode, { auto: 6, aggressive: 4 }));
+  const failureLines = uniqueStrings(lines.filter((line) => /(?:^FAIL\b|^FAILED\b|\berror\b|panic|assert(?:ion)?|Exception|✗|^not ok\b)/i.test(line))).slice(0, getVisibleItemLimit(mode, { auto: 14, aggressive: 8 }));
   const outputLines = [
     exitCode === 0 ? "Tests passed." : `Tests failed (exit ${exitCode}).`,
     summaryLines.length > 0 ? "" : undefined,
@@ -481,9 +693,9 @@ function compactTestOutput(rawOutput: string, exitCode: number): { output: strin
   };
 }
 
-function compactDiagnosticsOutput(rawOutput: string, exitCode: number): { output: string; summary: string; debug: Record<string, unknown> } {
+function compactDiagnosticsOutput(rawOutput: string, exitCode: number, mode: CompactionMode): { output: string; summary: string; debug: Record<string, unknown> } {
   const lines = rawOutput.split("\n").map((line) => line.trimEnd());
-  const diagnostics = uniqueStrings(lines.filter((line) => /(?:\berror\b|\bwarning\b|✖|×|^\s*at\s|^\s*-->\s|\.ts\(\d+,\d+\)|:[0-9]+:[0-9]+)/i.test(line))).slice(0, 18);
+  const diagnostics = uniqueStrings(lines.filter((line) => /(?:\berror\b|\bwarning\b|✖|×|^\s*at\s|^\s*-->\s|\.ts\(\d+,\d+\)|:[0-9]+:[0-9]+)/i.test(line))).slice(0, getVisibleItemLimit(mode, { auto: 18, aggressive: 10 }));
   const errorCount = lines.filter((line) => /\berror\b/i.test(line)).length;
   const warningCount = lines.filter((line) => /\bwarning\b/i.test(line)).length;
 
@@ -670,4 +882,17 @@ function uniqueStrings(values: string[]): string[] {
 export function buildCompactOutputIdentifier(input: string): string {
   const trimmed = input.trim();
   return basename(trimmed).replace(/[^a-zA-Z0-9]+/g, "-").slice(0, 48) || "output";
+}
+
+function buildStableOutputHash(input: string): string {
+  let hash = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
+  }
+
+  return hash.toString(36).padStart(7, "0").slice(0, 7);
+}
+
+function getVisibleItemLimit(mode: CompactionMode, limits: { auto: number; aggressive: number }): number {
+  return mode === "aggressive" ? limits.aggressive : limits.auto;
 }

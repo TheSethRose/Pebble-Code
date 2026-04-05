@@ -218,6 +218,8 @@ export interface QueryEngineOptions {
   permissionManager?: PermissionManager;
   /** Working directory for tool execution */
   cwd?: string;
+  /** Shell compaction behavior forwarded to tools */
+  shellCompactionMode?: "off" | "auto" | "aggressive";
   /** Session persistence surface for resumable approvals / memory tools */
   sessionStore?: SessionStore;
   /** Session id getter because interactive sessions are created lazily */
@@ -264,6 +266,7 @@ export class QueryEngine {
     onToolExecute?: (toolName: string, input: unknown) => void;
     permissionManager?: import("../runtime/permissionManager.js").PermissionManager;
     cwd?: string;
+    shellCompactionMode?: "off" | "auto" | "aggressive";
     sessionStore?: SessionStore;
     getSessionId?: () => string | null;
     extensionDirs?: string[];
@@ -289,6 +292,7 @@ export class QueryEngine {
       onToolExecute: options.onToolExecute,
       permissionManager: options.permissionManager,
       cwd: options.cwd,
+      shellCompactionMode: options.shellCompactionMode,
       sessionStore: options.sessionStore,
       getSessionId: options.getSessionId,
       extensionDirs: options.extensionDirs,
@@ -410,9 +414,11 @@ export class QueryEngine {
             continue;
           }
 
-          // Check approval via PermissionManager
           const toolContext = this.createToolContext();
-          const approvalRequest = this.getApprovalRequest(tool, registration.canonicalName, toolInput, toolContext);
+          const normalizedToolInput = tool.normalizeInput?.(toolInput, toolContext) ?? toolInput;
+
+          // Check approval via PermissionManager
+          const approvalRequest = this.getApprovalRequest(tool, registration.canonicalName, normalizedToolInput, toolContext);
           const needsApproval = Boolean(approvalRequest);
             if (approvalRequest && this.options.permissionManager) {
               let permissionResult = await this.options.permissionManager.checkPermission({
@@ -460,7 +466,7 @@ export class QueryEngine {
             if (permissionResult.decision === "deny") {
               this.emit("permission_denied", {
                 tool: registration.canonicalName,
-                input: toolInput,
+                input: normalizedToolInput,
                 reason: permissionResult.reason,
                 approvalMessage: approvalRequest.approvalMessage,
               });
@@ -469,7 +475,7 @@ export class QueryEngine {
                 turnCount,
                 toolName: registration.canonicalName,
                 toolCallId: toolCall.id,
-                toolInput,
+                toolInput: normalizedToolInput,
                 toolSuccess: false,
                 error: new Error(permissionResult.reason ?? "Permission denied"),
               });
@@ -480,7 +486,7 @@ export class QueryEngine {
                 toolName: registration.canonicalName,
                 metadata: {
                   success: false,
-                  input: toolInput,
+                  input: normalizedToolInput,
                   error: permissionResult.reason ?? "Permission denied",
                   toolCallId: toolCall.id,
                   canonicalToolName: registration.canonicalName,
@@ -502,7 +508,7 @@ export class QueryEngine {
             // No permission manager — deny by default
             this.emit("permission_denied", {
               tool: registration.canonicalName,
-              input: toolInput,
+              input: normalizedToolInput,
               reason: "No permission manager configured",
             });
             await this.fireLifecycleEvent("tool:after", {
@@ -510,7 +516,7 @@ export class QueryEngine {
               turnCount,
               toolName: registration.canonicalName,
               toolCallId: toolCall.id,
-              toolInput,
+              toolInput: normalizedToolInput,
               toolSuccess: false,
               error: new Error("No permission manager configured"),
             });
@@ -521,7 +527,7 @@ export class QueryEngine {
               toolName: registration.canonicalName,
               metadata: {
                 success: false,
-                input: toolInput,
+                input: normalizedToolInput,
                 error: "No permission manager configured",
                 toolCallId: toolCall.id,
                 canonicalToolName: registration.canonicalName,
@@ -533,13 +539,13 @@ export class QueryEngine {
           }
 
           // Execute the tool
-          this.options.onToolExecute?.(registration.canonicalName, toolInput);
+          this.options.onToolExecute?.(registration.canonicalName, normalizedToolInput);
           this.emit("tool_call", {
             tool: registration.canonicalName,
             requestedToolName: toolCall.name,
             qualifiedToolName: registration.qualifiedName,
             category: registration.category,
-            input: toolInput,
+            input: normalizedToolInput,
             toolCallId: toolCall.id,
           });
           await this.fireLifecycleEvent("tool:before", {
@@ -547,18 +553,18 @@ export class QueryEngine {
             turnCount,
             toolName: registration.canonicalName,
             toolCallId: toolCall.id,
-            toolInput,
+            toolInput: normalizedToolInput,
           });
 
           try {
             const startedAt = Date.now();
-            const result = await tool.execute(toolInput, toolContext);
+            const result = await tool.execute(normalizedToolInput, toolContext);
 
             const durationMs = Date.now() - startedAt;
             const outputBase = result.success ? result.output : (result.error ?? result.output);
             const output = result.truncated ? `${outputBase}\n[Output truncated]` : outputBase;
 
-            const askUserRequest = this.extractAskUserQuestionRequest(result.data, toolInput);
+            const askUserRequest = this.extractAskUserQuestionRequest(result.data, normalizedToolInput);
 
             if (askUserRequest && this.options.resolveQuestion) {
               const answer = await this.options.resolveQuestion(askUserRequest);
@@ -567,7 +573,7 @@ export class QueryEngine {
                 turnCount,
                 toolName: registration.canonicalName,
                 toolCallId: toolCall.id,
-                toolInput,
+                toolInput: normalizedToolInput,
                 toolSuccess: true,
               });
               conversation.push({
@@ -578,7 +584,7 @@ export class QueryEngine {
                 metadata: {
                   success: true,
                   durationMs,
-                  input: toolInput,
+                  input: normalizedToolInput,
                   question: askUserRequest.question,
                   answer,
                   options: askUserRequest.options,
@@ -593,7 +599,7 @@ export class QueryEngine {
               this.emit("tool_result", {
                 tool: registration.canonicalName,
                 success: true,
-                input: toolInput,
+                input: normalizedToolInput,
                 answer,
                 question: askUserRequest.question,
                 toolCallId: toolCall.id,
@@ -606,7 +612,7 @@ export class QueryEngine {
               turnCount,
               toolName: registration.canonicalName,
               toolCallId: toolCall.id,
-              toolInput,
+              toolInput: normalizedToolInput,
               toolSuccess: result.success,
               ...(result.success ? {} : { error: new Error(result.error ?? result.output) }),
             });
@@ -619,7 +625,7 @@ export class QueryEngine {
               metadata: {
                 success: result.success,
                 durationMs,
-                input: toolInput,
+                input: normalizedToolInput,
                 truncated: result.truncated ?? false,
                 summary: result.summary,
                 debug: result.debug,
@@ -636,7 +642,7 @@ export class QueryEngine {
             this.emit("tool_result", {
               tool: registration.canonicalName,
               success: result.success,
-              input: toolInput,
+              input: normalizedToolInput,
               output,
               durationMs,
               truncated: result.truncated ?? false,
@@ -655,7 +661,7 @@ export class QueryEngine {
               turnCount,
               toolName: registration.canonicalName,
               toolCallId: toolCall.id,
-              toolInput,
+              toolInput: normalizedToolInput,
               toolSuccess: false,
               error: err instanceof Error ? err : new Error(message),
             });
@@ -664,7 +670,7 @@ export class QueryEngine {
               turnCount,
               toolName: registration.canonicalName,
               toolCallId: toolCall.id,
-              toolInput,
+              toolInput: normalizedToolInput,
               error: err instanceof Error ? err : new Error(message),
             });
             conversation.push({
@@ -674,7 +680,7 @@ export class QueryEngine {
               toolName: registration.canonicalName,
               metadata: {
                 success: false,
-                input: toolInput,
+                input: normalizedToolInput,
                 error: message,
                 toolCallId: toolCall.id,
                 canonicalToolName: registration.canonicalName,
@@ -685,7 +691,7 @@ export class QueryEngine {
             this.emit("tool_result", {
               tool: registration.canonicalName,
               success: false,
-              input: toolInput,
+              input: normalizedToolInput,
               output: `Tool execution error: ${message}`,
               error: message,
               toolCallId: toolCall.id,
@@ -780,10 +786,6 @@ export class QueryEngine {
               name: chunk.toolCall.name,
               input: JSON.stringify(chunk.toolCall.input),
             });
-            yield emitStreamEvent("tool_call", {
-              tool: chunk.toolCall.name,
-              input: chunk.toolCall.input,
-            });
           }
 
           // Track token usage from metadata
@@ -866,8 +868,9 @@ export class QueryEngine {
             continue;
           }
 
-          const input = this.normalizeToolInput(tc.input);
           const toolContext = this.createToolContext();
+          const rawInput = this.normalizeToolInput(tc.input);
+          const input = tool.normalizeInput?.(rawInput, toolContext) ?? rawInput;
 
           // Check approval via PermissionManager
           const approvalRequest = this.getApprovalRequest(tool, registration.canonicalName, input, toolContext);
@@ -986,6 +989,14 @@ export class QueryEngine {
           }
 
           try {
+            yield emitStreamEvent("tool_call", {
+              tool: registration.canonicalName,
+              requestedToolName: tc.name,
+              qualifiedToolName: registration.qualifiedName,
+              category: registration.category,
+              input,
+              toolCallId: tc.id,
+            });
             await this.fireLifecycleEvent("tool:before", {
               sessionId: this.options.getSessionId?.() ?? null,
               turnCount,
@@ -1183,6 +1194,7 @@ export class QueryEngine {
         sessionStore: this.options.sessionStore,
         permissionManager: this.options.permissionManager,
         toolRegistry: this.toolRegistry,
+        shellCompactionMode: this.options.shellCompactionMode,
         extensionDirs: this.options.extensionDirs,
         skills: this.options.skills,
         mcpServers: this.options.mcpServers,

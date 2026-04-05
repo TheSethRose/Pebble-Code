@@ -64,6 +64,7 @@ export interface ToolRuntimeContext {
   sessionStore?: SessionStore;
   permissionManager?: PermissionManager;
   toolRegistry?: ToolRegistry;
+  shellCompactionMode?: "off" | "auto" | "aggressive";
   extensionDirs?: string[];
   skills?: Skill[];
   mcpServers?: McpServerConfig[];
@@ -129,6 +130,11 @@ export interface Tool {
   providerDefinitions?: ToolProviderDefinitionOverride[];
   /** Zod schema for tool input */
   inputSchema: z.ZodType;
+  /**
+   * Optional compatibility hook to coerce model/provider-emitted inputs into the
+   * tool's preferred shape before approval checks, UI status rendering, and execution.
+   */
+  normalizeInput?(input: unknown, context: ToolContext): unknown;
   /** Execute the tool */
   execute(input: unknown, context: ToolContext): Promise<ToolResult>;
   /** Build a reusable approval request for risky actions */

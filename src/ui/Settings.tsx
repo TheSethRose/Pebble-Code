@@ -318,6 +318,12 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "api-key", label: "Auth" },
 ];
 
+const SHELL_COMPACTION_OPTIONS: Array<{ label: string; value: string }> = [
+  { label: "Off  (raw/truncated output)", value: "off" },
+  { label: "Auto  (recommended)", value: "auto" },
+  { label: "Aggressive  (shorter summaries)", value: "aggressive" },
+];
+
 function TabBar({
   tabs,
   activeTab,
@@ -351,14 +357,30 @@ function ConfigTab({
   settingsPath,
   projectSettingsPath,
   cwd,
+  onSave,
 }: {
   context: CommandContext;
   settings: Settings;
   settingsPath: string;
   projectSettingsPath: string;
   cwd: string;
+  onSave: (settings: Settings) => void;
 }) {
   const resolved = resolveRuntimeProvider(settings, {}, context.extensionProviders ?? []);
+  const [message, setMessage] = useState("");
+
+  const handleShellCompactionModeChange = useCallback((value: string) => {
+    if (value !== "off" && value !== "auto" && value !== "aggressive") {
+      return;
+    }
+
+    onSave({
+      ...settings,
+      shellCompactionMode: value,
+    });
+    setMessage(`Shell compaction mode set to ${value}`);
+  }, [onSave, settings]);
+
   return (
     <Box flexDirection="column">
       <Text bold color="cyan">Status</Text>
@@ -370,6 +392,7 @@ function ConfigTab({
         <Text>Max turns: {settings.maxTurns ?? 50}</Text>
         <Text>Telemetry: {settings.telemetryEnabled ? "enabled" : "disabled"}</Text>
         <Text>Compact threshold: {settings.compactThreshold ?? "not set"}</Text>
+        <Text>Shell compaction: {settings.shellCompactionMode ?? "auto"}</Text>
         <Text>Fullscreen renderer: {settings.fullscreenRenderer === false ? "disabled" : "enabled"}</Text>
         <Text>Provider: {resolved.providerLabel} ({resolved.providerId})</Text>
         <Text>Model: {resolved.model}</Text>
@@ -381,8 +404,24 @@ function ConfigTab({
             : "not configured"}
         </Text>
       </Box>
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold color="cyan">Shell compaction</Text>
+        <Box marginTop={1}>
+          <Select
+            options={SHELL_COMPACTION_OPTIONS}
+            visibleOptionCount={3}
+            defaultValue={settings.shellCompactionMode ?? "auto"}
+            onChange={handleShellCompactionModeChange}
+          />
+        </Box>
+        {message ? (
+          <Box marginTop={1}>
+            <Text color="green">{message}</Text>
+          </Box>
+        ) : null}
+      </Box>
       <Box marginTop={1}>
-        <Text dimColor>Shift+Tab / Tab to switch sections · Esc to close</Text>
+        <Text dimColor>↑↓ choose mode · Enter save · Shift+Tab / Tab to switch sections · Esc to close</Text>
       </Box>
     </Box>
   );
@@ -1358,6 +1397,7 @@ export function Settings({
             settingsPath={settingsPath}
             projectSettingsPath={projectSettingsPath}
             cwd={context.cwd}
+            onSave={handleSave}
           />
         )}
         {activeTab === "provider" && (

@@ -83,6 +83,7 @@ export class ShellTool implements Tool {
           stderr,
           exitCode: result.exitCode,
           cwd: workingDir,
+          mode: context.runtime?.shellCompactionMode,
         });
 
         return {
@@ -94,6 +95,8 @@ export class ShellTool implements Tool {
             exitCode: result.exitCode,
             cwd: workingDir,
             command: parsed.data.command,
+            commandFamily: compacted.commandFamily,
+            rawOutputPath: compacted.rawOutputPath,
           },
           debug: compacted.debug,
           summary: compacted.summary,

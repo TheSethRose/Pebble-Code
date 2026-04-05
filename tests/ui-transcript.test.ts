@@ -316,8 +316,8 @@ describe("TranscriptView", () => {
       blinkPhase: false,
     }));
 
-    expect(liveSegments.find((segment) => segment.text.includes("working"))?.color).toBe("yellow");
-    expect(dimSegments.find((segment) => segment.text.includes("working"))?.color).toBe("yellow");
+    expect(liveSegments.find((segment) => segment.text.includes("working"))?.color).toBe("white");
+    expect(dimSegments.find((segment) => segment.text.includes("working"))?.color).toBe("white");
     expect(liveSegments.find((segment) => segment.text.includes("●"))?.color).toBe("yellow");
     expect(dimSegments.find((segment) => segment.text.includes("○"))?.color).toBe("gray");
   });
