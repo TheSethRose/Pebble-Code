@@ -35,6 +35,23 @@ export interface CompactionArtifact extends MessageSummaryArtifact {
   generatedAt: string;
   compactedMessageCount: number;
   preservedRecentCount: number;
+  instructions?: string;
+  providerMarker?: ProviderCompactionMarker;
+}
+
+export interface ProviderCompactionMarker {
+  kind: "local-context-management";
+  appliedAt: string;
+  providerId?: string;
+  model?: string;
+  compactThreshold?: number;
+  compactPrepareThreshold?: number;
+  instructionsApplied: boolean;
+}
+
+export interface TranscriptCompactionOptions {
+  instructions?: string;
+  providerMarker?: ProviderCompactionMarker;
 }
 
 export interface TranscriptCompactionResult {
@@ -50,13 +67,15 @@ export interface TranscriptCompactionResult {
 export function compactTranscript(
   messages: TranscriptMessage[],
   boundary: CompactionBoundary = DEFAULT_BOUNDARY,
+  options: TranscriptCompactionOptions = {},
 ): TranscriptMessage[] {
-  return compactTranscriptWithArtifact(messages, boundary).messages;
+  return compactTranscriptWithArtifact(messages, boundary, options).messages;
 }
 
 export function compactTranscriptWithArtifact(
   messages: TranscriptMessage[],
   boundary: CompactionBoundary = DEFAULT_BOUNDARY,
+  options: TranscriptCompactionOptions = {},
 ): TranscriptCompactionResult {
   if (messages.length <= boundary.keepRecent) {
     return {
@@ -79,7 +98,7 @@ export function compactTranscriptWithArtifact(
     messages.length - boundary.keepRecent,
   );
 
-  const artifact = buildCompactionArtifact(olderMessages, boundary.keepRecent);
+  const artifact = buildCompactionArtifact(olderMessages, boundary.keepRecent, options);
   const summary: TranscriptMessage = {
     role: "system",
     content: formatCompactionArtifact(artifact),
@@ -150,13 +169,17 @@ export class TokenTracker {
 function buildCompactionArtifact(
   compactedMessages: TranscriptMessage[],
   preservedRecentCount: number,
+  options: TranscriptCompactionOptions,
 ): CompactionArtifact {
   const summaryArtifact = buildMessageSummaryArtifact(compactedMessages);
+  const instructions = options.instructions?.trim();
   return {
     kind: "compaction-artifact",
     generatedAt: new Date().toISOString(),
     compactedMessageCount: compactedMessages.length,
     preservedRecentCount,
+    ...(instructions ? { instructions } : {}),
+    ...(options.providerMarker ? { providerMarker: options.providerMarker } : {}),
     ...summaryArtifact,
   };
 }
@@ -166,13 +189,17 @@ function formatCompactionArtifact(artifact: CompactionArtifact): string {
     "[Compacted transcript summary]",
     `Compacted earlier messages: ${artifact.compactedMessageCount}`,
     `Estimated tokens: ${artifact.tokenEstimate}`,
+    artifact.instructions ? `Compaction instructions: ${artifact.instructions}` : undefined,
+    artifact.providerMarker
+      ? `Context marker: ${artifact.providerMarker.providerId ?? "provider"}${artifact.providerMarker.model ? ` / ${artifact.providerMarker.model}` : ""}`
+      : undefined,
     "",
     "Summary:",
     artifact.summary,
     "",
     "Highlights:",
     ...artifact.bullets.map((bullet) => `- ${bullet}`),
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 export { estimateTokens } from "./tokenEstimation.js";

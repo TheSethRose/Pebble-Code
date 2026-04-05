@@ -2,10 +2,15 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Message } from "../engine/types.js";
 import type { PermissionManager } from "../runtime/permissionManager.js";
-import type { WorktreeStartupMode } from "../runtime/config.js";
+import { DEFAULT_COMPACT_PREPARE_RATIO, type WorktreeStartupMode } from "../runtime/config.js";
 import { findProjectRoot } from "../runtime/trust.js";
 import { WorktreeManager, type WorktreeCleanupOutcome } from "../runtime/worktrees.js";
-import { compactTranscriptWithArtifact, type CompactionArtifact } from "./compaction.js";
+import {
+  compactTranscriptWithArtifact,
+  type CompactionArtifact,
+  type ProviderCompactionMarker,
+  type TranscriptCompactionOptions,
+} from "./compaction.js";
 import { buildSessionMemory, isSessionMemoryStale } from "./memory.js";
 import { SessionStore, type SessionTranscript, type TranscriptMessage } from "./sessionStore.js";
 import type { DisplayMessage } from "../ui/types.js";
@@ -29,6 +34,32 @@ export interface SessionDeletionOutcome {
   sessionDeleted: boolean;
   worktreeRemoved: boolean;
   worktreePath?: string;
+}
+
+export interface SessionCompactionAssessment {
+  tokenEstimate: number;
+  compactThreshold?: number;
+  compactPrepareThreshold?: number;
+  shouldPrepare: boolean;
+  shouldCompact: boolean;
+  reason: "threshold" | "manual";
+}
+
+export interface SessionCompactionPolicy extends TranscriptCompactionOptions {
+  compactThreshold?: number;
+  compactPrepareThreshold?: number;
+  force?: boolean;
+  reason?: "threshold" | "manual";
+  providerContext?: {
+    markersEnabled?: boolean;
+    providerId?: string;
+    model?: string;
+  };
+  hooks?: {
+    onPrepare?: (assessment: SessionCompactionAssessment) => void;
+    onBeforeCompact?: (assessment: SessionCompactionAssessment) => void;
+    onAfterCompact?: (outcome: SessionCompactionOutcome) => void;
+  };
 }
 
 interface SessionWorktreeMetadata {
@@ -159,55 +190,81 @@ export function failPendingApprovalsForResume(
 export function compactSessionIfNeeded(
   store: SessionStore,
   sessionId: string,
-  compactThreshold?: number,
+  compactThreshold?: number | SessionCompactionPolicy,
 ): SessionTranscript | null {
-  return compactSession(store, sessionId, {
-    compactThreshold,
-    force: false,
-    reason: "threshold",
-  })?.transcript ?? null;
-}
-
-export function compactSession(
-  store: SessionStore,
-  sessionId: string,
-  options: {
-    compactThreshold?: number;
-    force?: boolean;
-    reason?: "threshold" | "manual";
-  } = {},
-): SessionCompactionOutcome | null {
-  const reason = options.reason ?? "threshold";
-
   const transcript = store.loadTranscript(sessionId);
   if (!transcript) {
     return null;
   }
 
-  const previousMessageCount = transcript.messages.length;
-  const shouldCompact = options.force === true
-    || (options.compactThreshold !== undefined
-      && options.compactThreshold > 0
-      && estimateTokens(transcript.messages) >= options.compactThreshold);
+  const policy = normalizeSessionCompactionPolicy(compactThreshold);
+  const assessment = assessSessionCompaction(transcript, {
+    ...policy,
+    reason: "threshold",
+  });
 
-  if (!shouldCompact) {
+  if (assessment.shouldPrepare) {
+    policy.hooks?.onPrepare?.(assessment);
+    return store.updateMetadata(sessionId, {
+      pendingCompaction: buildPendingCompactionMetadata(assessment, policy),
+    });
+  }
+
+  if (!assessment.shouldCompact) {
+    return transcript;
+  }
+
+  policy.hooks?.onBeforeCompact?.(assessment);
+  const outcome = compactSession(store, sessionId, {
+    ...policy,
+    compactThreshold: assessment.compactThreshold,
+    compactPrepareThreshold: assessment.compactPrepareThreshold,
+    reason: "threshold",
+  });
+  if (outcome) {
+    policy.hooks?.onAfterCompact?.(outcome);
+  }
+
+  return outcome?.transcript ?? transcript;
+}
+
+export function compactSession(
+  store: SessionStore,
+  sessionId: string,
+  options: SessionCompactionPolicy = {},
+): SessionCompactionOutcome | null {
+  const transcript = store.loadTranscript(sessionId);
+  if (!transcript) {
+    return null;
+  }
+
+  const policy = normalizeSessionCompactionPolicy(options);
+  const assessment = assessSessionCompaction(transcript, policy);
+  const previousMessageCount = transcript.messages.length;
+
+  if (!assessment.shouldCompact) {
     return {
       transcript,
       compacted: false,
       previousMessageCount,
       nextMessageCount: previousMessageCount,
-      reason,
+      reason: assessment.reason,
     };
   }
 
-  const result = compactTranscriptWithArtifact(transcript.messages);
+  const providerMarker = buildProviderCompactionMarker(policy, assessment);
+  const result = compactTranscriptWithArtifact(
+    transcript.messages,
+    undefined,
+    buildTranscriptCompactionOptions(policy, providerMarker),
+  );
   if (!result.compacted) {
     return {
       transcript,
       compacted: false,
       previousMessageCount,
       nextMessageCount: previousMessageCount,
-      reason,
+      reason: assessment.reason,
     };
   }
 
@@ -215,9 +272,13 @@ export function compactSession(
     compactionCount: Number(transcript.metadata?.compactionCount ?? 0) + 1,
     lastCompactedAt: new Date().toISOString(),
     previousMessageCount: transcript.messages.length,
-    compactThreshold: options.compactThreshold,
-    lastCompactionReason: reason,
+    compactThreshold: assessment.compactThreshold,
+    compactPrepareThreshold: assessment.compactPrepareThreshold,
+    lastCompactionReason: assessment.reason,
     lastCompactionArtifact: result.artifact,
+    lastProviderCompactionMarker: providerMarker ?? null,
+    lastCompactionInstructions: policy.instructions?.trim() || null,
+    pendingCompaction: null,
   });
 
   return {
@@ -226,7 +287,32 @@ export function compactSession(
     previousMessageCount,
     nextMessageCount: updatedTranscript.messages.length,
     artifact: result.artifact,
-    reason,
+    reason: assessment.reason,
+  };
+}
+
+export function assessSessionCompaction(
+  transcript: SessionTranscript,
+  input: number | SessionCompactionPolicy | undefined,
+): SessionCompactionAssessment {
+  const policy = normalizeSessionCompactionPolicy(input);
+  const compactThreshold = normalizePositiveNumber(policy.compactThreshold);
+  const compactPrepareThreshold = normalizePositiveNumber(policy.compactPrepareThreshold)
+    ?? (compactThreshold ? Math.max(1, Math.floor(compactThreshold * DEFAULT_COMPACT_PREPARE_RATIO)) : undefined);
+  const tokenEstimate = estimateTokens(transcript.messages);
+  const shouldCompact = policy.force === true
+    || (compactThreshold !== undefined && tokenEstimate >= compactThreshold);
+  const shouldPrepare = !shouldCompact
+    && compactPrepareThreshold !== undefined
+    && tokenEstimate >= compactPrepareThreshold;
+
+  return {
+    tokenEstimate,
+    compactThreshold,
+    compactPrepareThreshold,
+    shouldPrepare,
+    shouldCompact,
+    reason: policy.reason ?? "threshold",
   };
 }
 
@@ -248,15 +334,23 @@ export function ensureFreshSessionMemory(
 
 export function transcriptToConversation(
   transcript: SessionTranscript,
-  compactThreshold?: number,
+  compactThreshold?: number | SessionCompactionPolicy,
 ): Message[] {
   // If a transcript has grown past the active threshold, compact the in-memory
   // view again before sending it to the provider. The stored transcript is
   // compacted separately so this function can remain a pure projection.
-  const sourceMessages =
-    compactThreshold && estimateTokens(transcript.messages) >= compactThreshold
-      ? compactTranscriptWithArtifact(transcript.messages).messages
-      : transcript.messages;
+  const policy = normalizeSessionCompactionPolicy(compactThreshold);
+  const assessment = assessSessionCompaction(transcript, policy);
+  const sourceMessages = assessment.shouldCompact
+    ? compactTranscriptWithArtifact(
+        transcript.messages,
+        undefined,
+        buildTranscriptCompactionOptions(
+          policy,
+          buildProviderCompactionMarker(policy, assessment),
+        ),
+      ).messages
+    : transcript.messages;
 
   const conversation = sourceMessages
     .filter((message) => isConversationRole(message.role))
@@ -265,6 +359,14 @@ export function transcriptToConversation(
       content: message.content,
       ...(message.toolCall?.name ? { toolName: message.toolCall.name } : {}),
     }));
+
+  const providerMarker = getProviderCompactionMarker(transcript);
+  if (providerMarker) {
+    conversation.unshift({
+      role: "system",
+      content: buildProviderCompactionPrompt(providerMarker),
+    });
+  }
 
   if (transcript.memory) {
     // Session memory is injected as the first system message so the provider
@@ -378,4 +480,107 @@ function buildSessionMemoryPrompt(summary: string, bullets: string[]): string {
   }
 
   return sections.join("\n\n");
+}
+
+function normalizeSessionCompactionPolicy(
+  input?: number | SessionCompactionPolicy,
+): SessionCompactionPolicy {
+  if (typeof input === "number") {
+    return {
+      compactThreshold: input,
+      reason: "threshold",
+    };
+  }
+
+  return input ?? {};
+}
+
+function normalizePositiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function buildTranscriptCompactionOptions(
+  policy: SessionCompactionPolicy,
+  providerMarker?: ProviderCompactionMarker,
+): TranscriptCompactionOptions {
+  return {
+    ...(policy.instructions?.trim() ? { instructions: policy.instructions.trim() } : {}),
+    ...(providerMarker ? { providerMarker } : {}),
+  };
+}
+
+function buildProviderCompactionMarker(
+  policy: SessionCompactionPolicy,
+  assessment: SessionCompactionAssessment,
+): ProviderCompactionMarker | undefined {
+  if (!policy.providerContext?.markersEnabled) {
+    return undefined;
+  }
+
+  return {
+    kind: "local-context-management",
+    appliedAt: new Date().toISOString(),
+    providerId: policy.providerContext.providerId,
+    model: policy.providerContext.model,
+    compactThreshold: assessment.compactThreshold,
+    compactPrepareThreshold: assessment.compactPrepareThreshold,
+    instructionsApplied: Boolean(policy.instructions?.trim()),
+  };
+}
+
+function buildPendingCompactionMetadata(
+  assessment: SessionCompactionAssessment,
+  policy: SessionCompactionPolicy,
+): Record<string, unknown> {
+  return {
+    preparedAt: new Date().toISOString(),
+    tokenEstimate: assessment.tokenEstimate,
+    compactThreshold: assessment.compactThreshold,
+    compactPrepareThreshold: assessment.compactPrepareThreshold,
+    reason: assessment.reason,
+    providerId: policy.providerContext?.providerId,
+    model: policy.providerContext?.model,
+    instructions: policy.instructions?.trim() || undefined,
+  };
+}
+
+function getProviderCompactionMarker(
+  transcript: SessionTranscript,
+): ProviderCompactionMarker | null {
+  const marker = asRecord(transcript.metadata?.lastProviderCompactionMarker);
+  const appliedAt = typeof marker?.appliedAt === "string" ? marker.appliedAt : "";
+  if (!appliedAt) {
+    return null;
+  }
+
+  return {
+    kind: "local-context-management",
+    appliedAt,
+    ...(typeof marker?.providerId === "string" ? { providerId: marker.providerId } : {}),
+    ...(typeof marker?.model === "string" ? { model: marker.model } : {}),
+    ...(typeof marker?.compactThreshold === "number" ? { compactThreshold: marker.compactThreshold } : {}),
+    ...(typeof marker?.compactPrepareThreshold === "number"
+      ? { compactPrepareThreshold: marker.compactPrepareThreshold }
+      : {}),
+    instructionsApplied: marker?.instructionsApplied === true,
+  };
+}
+
+function buildProviderCompactionPrompt(marker: ProviderCompactionMarker): string {
+  return [
+    "[Context management]",
+    `Pebble compacted earlier transcript context at ${marker.appliedAt}.`,
+    marker.providerId || marker.model
+      ? `Compaction marker: ${marker.providerId ?? "provider"}${marker.model ? ` / ${marker.model}` : ""}.`
+      : undefined,
+    typeof marker.compactThreshold === "number"
+      ? `Apply threshold: ${marker.compactThreshold}`
+      : undefined,
+    typeof marker.compactPrepareThreshold === "number"
+      ? `Prepare threshold: ${marker.compactPrepareThreshold}`
+      : undefined,
+    marker.instructionsApplied
+      ? "Compaction-specific instructions were applied when the summary artifact was generated."
+      : undefined,
+  ].filter(Boolean).join("\n");
 }

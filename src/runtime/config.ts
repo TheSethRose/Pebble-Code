@@ -50,6 +50,7 @@ export interface ProviderCredentialSettings {
 export type ProviderCredentialMap = Record<string, ProviderCredentialSettings>;
 export type ShellCompactionMode = "off" | "auto" | "aggressive";
 export type WorktreeStartupMode = "manual" | "resume-linked";
+export const DEFAULT_COMPACT_PREPARE_RATIO = 0.8;
 
 /**
  * Global settings loaded from config files.
@@ -65,7 +66,10 @@ export interface Settings {
   maxTurns?: number;
   telemetryEnabled: boolean;
   compactThreshold?: number;
+  compactPrepareThreshold?: number;
+  compactionInstructions?: string;
   shellCompactionMode?: ShellCompactionMode;
+  providerCompactionMarkers?: boolean;
   worktreeStartupMode?: WorktreeStartupMode;
   fullscreenRenderer?: boolean;
   voiceEnabled?: boolean;
@@ -81,6 +85,7 @@ const DEFAULT_SETTINGS: Settings = {
   telemetryEnabled: false,
   maxTurns: 50,
   shellCompactionMode: "auto",
+  providerCompactionMarkers: false,
   worktreeStartupMode: "manual",
   fullscreenRenderer: true,
   voiceEnabled: false,
@@ -96,6 +101,21 @@ const USER_SETTINGS_FILE_NAME = "settings.json";
 const PROJECT_SETTINGS_FILE_NAME = "project-settings.json";
 
 type SettingsInput = Partial<Settings>;
+
+function normalizeOptionalPositiveNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+}
 
 function normalizeProviderOAuthSession(input: unknown): ProviderOAuthSession | undefined {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -190,6 +210,14 @@ function normalizeSettingsInput(settings: SettingsInput): SettingsInput {
   const legacyApiKey = typeof settings.apiKey === "string" ? settings.apiKey.trim() : "";
   const normalizedProvider = normalizeProviderId(settings.provider);
   const providerDefinition = getBuiltinProviderDefinition(normalizedProvider);
+  const normalizedCompactThreshold = normalizeOptionalPositiveNumber(settings.compactThreshold);
+  const normalizedCompactPrepareThreshold = normalizeOptionalPositiveNumber(settings.compactPrepareThreshold);
+  const normalizedCompactionInstructions = typeof settings.compactionInstructions === "string"
+    ? settings.compactionInstructions.trim()
+    : "";
+  const normalizedProviderCompactionMarkers = typeof settings.providerCompactionMarkers === "boolean"
+    ? settings.providerCompactionMarkers
+    : undefined;
   const normalizedVoiceEnabled = typeof settings.voiceEnabled === "boolean"
     ? settings.voiceEnabled
     : undefined;
@@ -206,6 +234,14 @@ function normalizeSettingsInput(settings: SettingsInput): SettingsInput {
   if (!legacyApiKey || providerDefinition?.authKind === "oauth") {
     return {
       ...settings,
+      ...(typeof normalizedCompactThreshold === "number" ? { compactThreshold: normalizedCompactThreshold } : {}),
+      ...(typeof normalizedCompactPrepareThreshold === "number"
+        ? { compactPrepareThreshold: normalizedCompactPrepareThreshold }
+        : {}),
+      ...(normalizedCompactionInstructions ? { compactionInstructions: normalizedCompactionInstructions } : {}),
+      ...(typeof normalizedProviderCompactionMarkers === "boolean"
+        ? { providerCompactionMarkers: normalizedProviderCompactionMarkers }
+        : {}),
       ...(normalizedWorktreeStartupMode ? { worktreeStartupMode: normalizedWorktreeStartupMode } : {}),
       ...(typeof normalizedVoiceEnabled === "boolean" ? { voiceEnabled: normalizedVoiceEnabled } : {}),
       ...(normalizedVoiceProvider ? { voiceProvider: normalizedVoiceProvider } : {}),
@@ -218,6 +254,14 @@ function normalizeSettingsInput(settings: SettingsInput): SettingsInput {
 
   return {
     ...settings,
+    ...(typeof normalizedCompactThreshold === "number" ? { compactThreshold: normalizedCompactThreshold } : {}),
+    ...(typeof normalizedCompactPrepareThreshold === "number"
+      ? { compactPrepareThreshold: normalizedCompactPrepareThreshold }
+      : {}),
+    ...(normalizedCompactionInstructions ? { compactionInstructions: normalizedCompactionInstructions } : {}),
+    ...(typeof normalizedProviderCompactionMarkers === "boolean"
+      ? { providerCompactionMarkers: normalizedProviderCompactionMarkers }
+      : {}),
     ...(normalizedWorktreeStartupMode ? { worktreeStartupMode: normalizedWorktreeStartupMode } : {}),
     ...(typeof normalizedVoiceEnabled === "boolean" ? { voiceEnabled: normalizedVoiceEnabled } : {}),
     ...(normalizedVoiceProvider ? { voiceProvider: normalizedVoiceProvider } : {}),
@@ -575,6 +619,18 @@ export function saveSettingsForCwd(cwd: string, settings: Settings): string {
 
   removeLegacySettingsFile(cwd, settingsPath);
   return settingsPath;
+}
+
+export function saveProjectSettingsForCwd(cwd: string, settings: SettingsInput): string {
+  const projectSettingsPath = getProjectSettingsPath(cwd);
+  const sanitized = sanitizeProjectSettings(settings);
+  const dir = dirname(projectSettingsPath);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  writeFileSync(projectSettingsPath, JSON.stringify(sanitized, null, 2), "utf-8");
+  return projectSettingsPath;
 }
 
 /**

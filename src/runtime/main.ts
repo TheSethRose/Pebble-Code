@@ -11,11 +11,13 @@ import { join } from "node:path";
 import { BUILD_INFO, getVersionString } from "../build/buildInfo.js";
 import { getFeatureSummary } from "../build/featureFlags.js";
 import { buildRuntimeConfig } from "./config.js";
+import { BackgroundRunManager } from "./backgroundRuns.js";
 import { PermissionManager } from "./permissionManager.js";
 import { WorktreeManager } from "./worktrees.js";
 import { createHookRegistry, type HookContext, type HookRegistry } from "./hooks.js";
 import { formatInstructions, loadPromptFiles, formatPromptFiles } from "./instructions.js";
 import {
+  assessSessionCompaction,
   cleanupDeletedSessionWorktrees,
   createProjectSessionStore,
   createOrResumeSession,
@@ -131,10 +133,12 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
   const systemPrompt = mergeRuntimeInstructions(promptContent, instructions, integrations.skills);
 
   if (shouldLogStartup) {
+    const backgroundRuns = new BackgroundRunManager(config.trust.projectRoot).getSummary();
     const worktreeManager = new WorktreeManager({ repoRoot: config.trust.projectRoot });
     const worktreeAvailability = worktreeManager.getAvailability();
     console.error(`Provider: ${resolvedProvider.providerLabel} (${resolvedProvider.model})`);
     console.error(`Extensions: ${integrations.extensions.length} plugin(s), ${integrations.skills.length} skill(s), ${integrations.mcpServers.length} MCP server(s), ${integrations.providers.length} provider(s)`);
+    console.error(`Background runs: ${backgroundRuns.total} total (${backgroundRuns.active} active, ${backgroundRuns.completed} completed, ${backgroundRuns.failed} failed, ${backgroundRuns.stopped} stopped)`);
     console.error(`Worktree root: ${join(config.trust.projectRoot, ".pebble", "worktrees")}`);
     console.error(
       `Worktree support: ${worktreeAvailability.available ? "available" : `unavailable (${worktreeAvailability.reason ?? "unknown reason"})`}`,
@@ -204,6 +208,7 @@ async function runHeadless(
   const sessionStore = createProjectSessionStore(config.cwd);
   cleanupDeletedSessionWorktrees(sessionStore, config.cwd);
   const session = createOrResumeSession(sessionStore, options.resume);
+  const compactionPolicy = buildSessionCompactionPolicy(config, resolvedProvider, hookRegistry);
   failPendingApprovalsForResume(sessionStore, permissionManager, session.id);
 
   let sessionStarted = false;
@@ -226,10 +231,10 @@ async function runHeadless(
     const compactedTranscript = compactSessionIfNeeded(
       sessionStore,
       session.id,
-      config.settings.compactThreshold,
+      compactionPolicy,
     ) ?? sessionStore.loadTranscript(session.id) ?? session;
     const inputTranscript = ensureFreshSessionMemory(sessionStore, session.id) ?? compactedTranscript;
-    const conversation = transcriptToConversation(inputTranscript, config.settings.compactThreshold);
+    const conversation = transcriptToConversation(inputTranscript, compactionPolicy);
 
     reporter.emitInit(session.id, resolvedProvider.provider.model, resolvedProvider.provider.name, config.cwd);
     reporter.emitUserPrompt(options.prompt);
@@ -270,7 +275,7 @@ async function runHeadless(
     const postRunCompactedTranscript = compactSessionIfNeeded(
       sessionStore,
       session.id,
-      config.settings.compactThreshold,
+      compactionPolicy,
     );
     sessionStore.updateMetadata(session.id, {
       lastHeadlessRun: {
@@ -367,6 +372,7 @@ async function runInteractive(
   // Import Ink REPL dynamically to avoid blocking fast paths
   const startREPL = startReplForTesting ?? (await import("../ui/App.js")).startREPL;
   const sessionStore = createProjectSessionStore(config.cwd);
+  const backgroundRuns = new BackgroundRunManager(config.cwd).getSummary();
 
   cleanupDeletedSessionWorktrees(sessionStore, config.cwd);
 
@@ -390,8 +396,14 @@ async function runInteractive(
       apiKeySource: resolvedProvider.apiKeySource,
       settingsPath: getSettingsPath(config.cwd),
       compactThreshold: config.settings.compactThreshold,
+      compactPrepareThreshold: config.settings.compactPrepareThreshold,
+      compactionInstructions: config.settings.compactionInstructions,
       shellCompactionMode: config.settings.shellCompactionMode,
+      providerCompactionMarkers: config.settings.providerCompactionMarkers,
       worktreeStartupMode: config.settings.worktreeStartupMode,
+      backgroundRunsTotal: backgroundRuns.total,
+      backgroundRunsActive: backgroundRuns.active,
+      backgroundRunsFailed: backgroundRuns.failed,
     },
     sessionStore,
     sessionId: initialSessionId,
@@ -409,6 +421,62 @@ async function runInteractive(
   };
 
   return startREPL(context);
+}
+
+function buildSessionCompactionPolicy(
+  config: ReturnType<typeof buildRuntimeConfig>,
+  resolvedProvider: RuntimeProviderResolution,
+  hookRegistry: HookRegistry,
+) {
+  return {
+    compactThreshold: config.settings.compactThreshold,
+    compactPrepareThreshold: config.settings.compactPrepareThreshold,
+    instructions: config.settings.compactionInstructions,
+    providerContext: {
+      markersEnabled: config.settings.providerCompactionMarkers,
+      providerId: resolvedProvider.providerId,
+      model: resolvedProvider.model,
+    },
+    hooks: {
+      onPrepare: (assessment: ReturnType<typeof assessSessionCompaction>) => {
+        void hookRegistry.fire("session:compact:prepare", {
+          tokenEstimate: assessment.tokenEstimate,
+          compactThreshold: assessment.compactThreshold,
+          compactPrepareThreshold: assessment.compactPrepareThreshold,
+          compactionReason: assessment.reason,
+          compactionInstructions: config.settings.compactionInstructions,
+          providerId: resolvedProvider.providerId,
+          model: resolvedProvider.model,
+          preparedOnly: true,
+        });
+      },
+      onBeforeCompact: (assessment: ReturnType<typeof assessSessionCompaction>) => {
+        void hookRegistry.fire("session:compact:before", {
+          tokenEstimate: assessment.tokenEstimate,
+          compactThreshold: assessment.compactThreshold,
+          compactPrepareThreshold: assessment.compactPrepareThreshold,
+          compactionReason: assessment.reason,
+          compactionInstructions: config.settings.compactionInstructions,
+          providerId: resolvedProvider.providerId,
+          model: resolvedProvider.model,
+          preparedOnly: false,
+        });
+      },
+      onAfterCompact: (outcome) => {
+        const artifact = outcome.artifact;
+        void hookRegistry.fire("session:compact:after", {
+          tokenEstimate: artifact?.tokenEstimate,
+          compactThreshold: config.settings.compactThreshold,
+          compactPrepareThreshold: config.settings.compactPrepareThreshold,
+          compactionReason: outcome.reason,
+          compactionInstructions: config.settings.compactionInstructions,
+          providerId: resolvedProvider.providerId,
+          model: resolvedProvider.model,
+          preparedOnly: false,
+        });
+      },
+    },
+  };
 }
 
 function mergeRuntimeInstructions(promptContent: string, baseInstructions: string, skills: RuntimeIntegrations["skills"]): string {

@@ -22,6 +22,14 @@ export interface ExtensionHookContext {
   toolInput?: unknown;
   toolSuccess?: boolean;
   error?: Error;
+  tokenEstimate?: number;
+  compactThreshold?: number;
+  compactPrepareThreshold?: number;
+  compactionReason?: string;
+  compactionInstructions?: string;
+  providerId?: string;
+  model?: string;
+  preparedOnly?: boolean;
 }
 
 /**
@@ -46,6 +54,10 @@ export interface ExtensionHooks {
   onAfterTool?(context: ExtensionHookContext): Promise<void>;
   /** Called when the runtime or engine surfaces an error */
   onError?(context: ExtensionHookContext): Promise<void>;
+  /** Called when the runtime crosses the prepare threshold for transcript compaction */
+  onPreCompact?(context: ExtensionHookContext): Promise<void>;
+  /** Called before or after transcript compaction is applied */
+  onPostCompact?(context: ExtensionHookContext): Promise<void>;
 }
 
 /**
