@@ -55,6 +55,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register(createPlanCommand());
   registry.register(createReviewCommand());
   registry.register(createSidebarCommand());
+  registry.register(createVoiceCommand());
 }
 
 function getSessionStore(ctx: CommandContext) {
@@ -681,6 +682,24 @@ function createSidebarCommand(): Command {
         success: true,
         output: "",
         data: { action: "sidebar-toggle" },
+      };
+    },
+  };
+}
+
+function createVoiceCommand(): Command {
+  return {
+    name: "voice",
+    aliases: [],
+    description: "Toggle voice mode",
+    type: "local",
+    usage: "/voice",
+    modes: ["interactive"],
+    execute: async (_args, _ctx): Promise<CommandResult> => {
+      return {
+        success: true,
+        output: "",
+        data: { action: "open-settings", defaultTab: "voice" },
       };
     },
   };

@@ -1,6 +1,6 @@
 # Feature Manifest
 
-Generated: 2026-04-05T05:17:21.153Z
+Generated: 2026-04-05T05:30:33.694Z
 Variant: stable
 
 ## Core
@@ -30,6 +30,7 @@ Variant: stable
 | `webFetch` | ✗ | WebFetch tool for HTTP requests |
 | `webSearch` | ✗ | WebSearch tool for internet queries |
 | `notebookEdit` | ✗ | Jupyter notebook editing support |
+| `voiceMode` | ✓ | Push-to-talk voice capture using local Parakeet STT |
 
 ## Deferred
 

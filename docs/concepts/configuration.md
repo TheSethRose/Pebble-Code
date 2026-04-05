@@ -18,6 +18,8 @@ Pebble combines **project defaults**, **user overrides**, **environment variable
 | `.pebble/project-settings.json` | project-scoped defaults |
 | `PEBBLE_HOME` | optional override for the Pebble home directory |
 
+Project defaults are the right place for shared repository settings such as `provider`, `model`, `maxTurns`, `fullscreenRenderer`, and `shellCompactionMode`.
+
 ## Provider resolution rules
 
 Provider runtime selection is resolved in `src/providers/config.ts` and `src/providers/runtime.ts`.
@@ -62,10 +64,29 @@ Credential resolution follows this order:
 - `/login` stores credentials in `~/.pebble/settings.json`
 - the settings UI also writes user overrides there
 - project defaults stay in `.pebble/project-settings.json`
+- legacy workspace `.pebble/settings.json` files are migrated into `~/.pebble/settings.json`
 
 <Note>
 Pebble intentionally separates committed project defaults from user secrets. Project settings are sanitized so credentials are not written into `.pebble/project-settings.json`.
 </Note>
+
+## Shared project defaults
+
+This repository now commits `shellCompactionMode` in `.pebble/project-settings.json`:
+
+```json
+{
+  "shellCompactionMode": "auto"
+}
+```
+
+Use this setting to control how `ShellTool` summarizes noisy command output:
+
+- `off` — return raw shell output, only truncating when needed
+- `auto` — recommended default; compact common git, test, and diagnostics commands
+- `aggressive` — use shorter summaries for supported command families
+
+If the setting is omitted, Pebble falls back to the built-in default in `src/runtime/config.ts`.
 
 ## Common flows
 
@@ -83,7 +104,7 @@ bun run src/entrypoints/cli.tsx --provider openai --model gpt-4o-mini
 
 ### Use project defaults
 
-Create `.pebble/project-settings.json` with shared defaults such as model, max turns, or provider selection.
+Create `.pebble/project-settings.json` with shared defaults such as model, max turns, provider selection, or shell compaction behavior.
 
 ## Related pages
 

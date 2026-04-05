@@ -39,6 +39,8 @@ import { QuestionPrompt } from "./components/QuestionPrompt.js";
 import { Settings } from "./Settings.js";
 import type { TabId } from "./Settings.js";
 import { formatProgressStatus, formatToolStatus, resolveMaxTurns } from "./toolStatus.js";
+import { useVoice } from "./useVoice.js";
+import { isFeatureEnabled } from "../build/featureFlags.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -63,8 +65,48 @@ function loadCommandConfig(
     compactThreshold: settings.compactThreshold,
     shellCompactionMode: settings.shellCompactionMode,
     fullscreenRenderer: settings.fullscreenRenderer,
+    voiceEnabled: isFeatureEnabled("voiceMode") && settings.voiceEnabled,
+    voiceProvider: settings.voiceProvider,
+    voiceBaseUrl: settings.voiceBaseUrl,
+    voiceTranscribePath: settings.voiceTranscribePath,
+    voiceModel: settings.voiceModel,
     settingsPath: getSettingsPath(cwd),
   };
+}
+
+const SPACE_HOLD_THRESHOLD = 5;
+const SPACE_WARMUP_THRESHOLD = 2;
+const SPACE_RAPID_GAP_MS = 120;
+
+function countBareSpaces(input: string): number {
+  if (!input) {
+    return 0;
+  }
+
+  const normalized = input.replace(/\u3000/g, " ");
+  return /^ +$/u.test(normalized) ? normalized.length : 0;
+}
+
+function stripTrailingSpaces(value: string, maxStrip: number): string {
+  if (maxStrip <= 0 || value.length === 0) {
+    return value;
+  }
+
+  let trailing = 0;
+  for (let index = value.length - 1; index >= 0 && value[index] === " " && trailing < maxStrip; index -= 1) {
+    trailing += 1;
+  }
+
+  return trailing > 0 ? value.slice(0, value.length - trailing) : value;
+}
+
+function appendTranscriptToInputValue(currentValue: string, transcript: string): string {
+  const trimmedCurrent = currentValue.replace(/[ ]+$/u, "");
+  if (!trimmedCurrent) {
+    return transcript;
+  }
+
+  return /\s$/u.test(trimmedCurrent) ? `${trimmedCurrent}${transcript}` : `${trimmedCurrent} ${transcript}`;
 }
 
 const contextlessExtensionProviders: CommandContext["extensionProviders"] = [];
@@ -163,6 +205,8 @@ export function App({
   const [showKeybindings, setShowKeybindings] = React.useState(false);
   const [transcriptScrollOffset, setTranscriptScrollOffset] = React.useState(0);
   const [blinkPhase, setBlinkPhase] = React.useState(true);
+  const [voiceWarmup, setVoiceWarmup] = React.useState(false);
+  const [voiceError, setVoiceError] = React.useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = React.useState<{
     sessionId: string;
     title: string;
@@ -174,8 +218,16 @@ export function App({
   const hookSessionIdRef = React.useRef<string | null>(null);
   const ctrlCTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const previousTranscriptLineCountRef = React.useRef(0);
+  const inputValueRef = React.useRef("");
+  const voiceRapidCountRef = React.useRef(0);
+  const voiceWarmupCountRef = React.useRef(0);
+  const voiceRapidResetRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const voiceHoldActiveRef = React.useRef(false);
+  const trimVoiceSpacesOnIdleRef = React.useRef(false);
   const sessionStore = context.sessionStore ?? null;
   const extensionDirs = context.extensionDirs ?? getDefaultExtensionDirs(context.cwd);
+
+  inputValueRef.current = inputValue;
 
   const reconcilePendingApprovals = React.useCallback((sessionId: string) => {
     if (!sessionStore || !context.permissionManager) {
@@ -343,6 +395,56 @@ export function App({
     setSuggestionIndex(0);
     setInputKey((k) => k + 1);
   }, []);
+
+  const voiceEnabled = runtimeConfig.voiceEnabled === true;
+  const voiceConnectionOptions = React.useMemo(() => ({
+    provider: typeof runtimeConfig.voiceProvider === "string" ? runtimeConfig.voiceProvider : undefined,
+    baseUrl: typeof runtimeConfig.voiceBaseUrl === "string" ? runtimeConfig.voiceBaseUrl : undefined,
+    transcribePath: typeof runtimeConfig.voiceTranscribePath === "string" ? runtimeConfig.voiceTranscribePath : undefined,
+    model: typeof runtimeConfig.voiceModel === "string" ? runtimeConfig.voiceModel : undefined,
+  }), [
+    runtimeConfig.voiceBaseUrl,
+    runtimeConfig.voiceModel,
+    runtimeConfig.voiceProvider,
+    runtimeConfig.voiceTranscribePath,
+  ]);
+
+  const voice = useVoice({
+    enabled: voiceEnabled,
+    onTranscript: (text) => {
+      setVoiceError(null);
+      setInputText(appendTranscriptToInputValue(inputValueRef.current, text), true);
+    },
+    onError: (message) => {
+      setVoiceError(message);
+    },
+    connectionOptions: voiceConnectionOptions,
+  });
+
+  React.useEffect(() => {
+    if (voice.state === "recording") {
+      setVoiceError(null);
+    }
+
+    if (voice.state !== "recording") {
+      voiceHoldActiveRef.current = false;
+      setVoiceWarmup(false);
+      voiceRapidCountRef.current = 0;
+      voiceWarmupCountRef.current = 0;
+      if (voiceRapidResetRef.current) {
+        clearTimeout(voiceRapidResetRef.current);
+        voiceRapidResetRef.current = null;
+      }
+    }
+
+    if (voice.state === "idle" && trimVoiceSpacesOnIdleRef.current) {
+      trimVoiceSpacesOnIdleRef.current = false;
+      const trimmed = inputValueRef.current.replace(/[ ]+$/u, "");
+      if (trimmed !== inputValueRef.current) {
+        setInputText(trimmed, true);
+      }
+    }
+  }, [setInputText, voice.state]);
 
   // ------------------------------------------------------------------
   // Session list for sidebar
@@ -633,6 +735,8 @@ export function App({
 
   useInput(
     (_input, key) => {
+      const spaceCount = countBareSpaces(_input);
+
       // --- Delete confirmation dialog (absorbs all keys while open) ---
       if (deleteConfirm) {
         if (key.leftArrow || key.rightArrow) {
@@ -655,6 +759,52 @@ export function App({
           return;
         }
         return;
+      }
+
+      const voiceCanCapture = voiceEnabled
+        && focusArea === "input"
+        && !state.isProcessing
+        && spaceCount > 0
+        && !key.ctrl
+        && !key.meta
+        && !key.shift
+        && !key.tab
+        && !key.escape;
+
+      if (voiceCanCapture) {
+        if (voiceHoldActiveRef.current || voice.state === "recording") {
+          trimVoiceSpacesOnIdleRef.current = true;
+          voice.handleKeyEvent();
+          return;
+        }
+
+        voiceRapidCountRef.current += spaceCount;
+        voiceWarmupCountRef.current = Math.min(SPACE_WARMUP_THRESHOLD, voiceWarmupCountRef.current + spaceCount);
+        setVoiceWarmup(voiceWarmupCountRef.current >= SPACE_WARMUP_THRESHOLD);
+
+        if (voiceRapidResetRef.current) {
+          clearTimeout(voiceRapidResetRef.current);
+        }
+        voiceRapidResetRef.current = setTimeout(() => {
+          voiceRapidResetRef.current = null;
+          voiceRapidCountRef.current = 0;
+          voiceWarmupCountRef.current = 0;
+          setVoiceWarmup(false);
+        }, SPACE_RAPID_GAP_MS);
+
+        if (voiceRapidCountRef.current >= SPACE_HOLD_THRESHOLD) {
+          voiceHoldActiveRef.current = true;
+          trimVoiceSpacesOnIdleRef.current = true;
+          const stripped = stripTrailingSpaces(inputValueRef.current, SPACE_HOLD_THRESHOLD);
+          if (stripped !== inputValueRef.current) {
+            setInputText(stripped, true);
+          }
+          setVoiceWarmup(false);
+          voiceRapidCountRef.current = 0;
+          voiceWarmupCountRef.current = 0;
+          voice.handleKeyEvent();
+          return;
+        }
       }
 
       // --- Keybindings popup (Cmd+P on macOS, Ctrl+P elsewhere) ---
@@ -1316,6 +1466,11 @@ export function App({
           width={mainWidth ?? availableWidth ?? columns}
           suggestions={suggestions}
           selectedSuggestionIndex={Math.min(suggestionIndex, Math.max(0, suggestions.length - 1))}
+          voiceEnabled={voiceEnabled}
+          voiceState={voice.state}
+          voiceWarmingUp={voiceWarmup}
+          voiceAudioLevels={voice.audioLevels}
+          voiceError={voiceError}
         />
       </Box>
 

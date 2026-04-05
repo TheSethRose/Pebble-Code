@@ -23,6 +23,22 @@ interface PromptInputProps {
   width?: number;
   suggestions?: CommandSuggestion[];
   selectedSuggestionIndex?: number;
+  voiceEnabled?: boolean;
+  voiceState?: "idle" | "recording" | "processing";
+  voiceWarmingUp?: boolean;
+  voiceAudioLevels?: number[];
+  voiceError?: string | null;
+}
+
+function renderVoiceLevels(levels: number[]): string {
+  if (levels.length === 0) {
+    return "▁▁▁▁";
+  }
+
+  const glyphs = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+  return levels
+    .map((level) => glyphs[Math.min(glyphs.length - 1, Math.max(0, Math.round(level * (glyphs.length - 1))))] ?? "▁")
+    .join("");
 }
 
 /**
@@ -44,22 +60,48 @@ export function PromptInput({
   width = 80,
   suggestions = [],
   selectedSuggestionIndex = 0,
+  voiceEnabled = false,
+  voiceState = "idle",
+  voiceWarmingUp = false,
+  voiceAudioLevels = [],
+  voiceError = null,
 }: PromptInputProps) {
   const statusLabel = disabled ? statusText || "Waiting for input…" : isProcessing ? statusText || "Working…" : "Ready";
-  const promptGlyph = isProcessing ? "…" : "❯";
+  const promptGlyph = voiceState === "recording" ? "●" : isProcessing || voiceState === "processing" ? "…" : "❯";
   const sessionLabel = sessionId ? sessionId.slice(0, 8) : "new session";
   const rule = "─".repeat(Math.max(24, width - 2));
-  const actionLabel = disabled
+  const actionLabel = voiceState === "recording"
+    ? `Recording… ${renderVoiceLevels(voiceAudioLevels)}`
+    : voiceState === "processing"
+      ? "Transcribing…"
+      : disabled
     ? "Pebble is waiting for your answer…"
     : isProcessing
       ? statusText || "Working…"
       : "Ask Pebble anything…";
-  const actionHint = disabled
+  const actionHint = voiceState === "recording"
+    ? "Release Space to transcribe"
+    : voiceState === "processing"
+      ? "Pebble will insert the transcript when ready"
+      : disabled
     ? "Answer above to continue"
     : "Enter sends · / shows commands";
-  const actionColor = disabled || isProcessing ? "yellow" : "cyan";
-  const showActionRow = disabled || isProcessing;
+  const actionColor = voiceState === "recording"
+    ? "red"
+    : voiceState === "processing" || disabled || isProcessing
+      ? "yellow"
+      : "cyan";
+  const showActionRow = disabled || isProcessing || voiceState !== "idle" || Boolean(voiceError);
   const footerStatusLabel = isProcessing && !disabled ? "" : statusLabel;
+  const footerVoiceHint = voiceEnabled
+    ? voiceState === "recording"
+      ? "Voice active"
+      : voiceState === "processing"
+        ? "Voice transcribing"
+        : voiceWarmingUp
+          ? "Keep holding Space to talk"
+          : "Hold Space to talk"
+    : null;
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -88,9 +130,11 @@ export function PromptInput({
 
       {showActionRow && (
         <Box justifyContent={actionHint ? "space-between" : "flex-start"} paddingX={1}>
-          <Text color={actionColor} bold>
-            {actionLabel}
-          </Text>
+          <Box flexDirection="column">
+            <Text color={voiceError ? "yellow" : actionColor} bold>
+              {voiceError ?? actionLabel}
+            </Text>
+          </Box>
           {actionHint ? <Text color="#aaaaaa">{actionHint}</Text> : null}
         </Box>
       )}
@@ -123,7 +167,7 @@ export function PromptInput({
       <Box justifyContent="space-between" paddingX={1}>
         <Text color={isProcessing || disabled ? "yellow" : "#aaaaaa"}>
           {footerStatusLabel}
-          {!isProcessing && !disabled ? " · Enter sends · Tab ⇄ sessions" : ""}
+          {!isProcessing && !disabled ? ` · Enter sends · Tab ⇄ sessions${footerVoiceHint ? ` · ${footerVoiceHint}` : ""}` : ""}
         </Text>
         <Text color="#aaaaaa">
           {model} · {sessionLabel} · {IS_MAC ? "⌘" : "Ctrl"}+P help

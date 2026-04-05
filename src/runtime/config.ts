@@ -18,6 +18,15 @@ import {
   getBuiltinProviderDefinition,
   normalizeProviderId,
 } from "../providers/catalog.js";
+import {
+  DEFAULT_VOICE_BASE_URL,
+  DEFAULT_VOICE_MODEL,
+  DEFAULT_VOICE_PROVIDER,
+  DEFAULT_VOICE_TRANSCRIBE_PATH,
+  normalizeVoiceBaseUrlValue,
+  normalizeVoicePathValue,
+  normalizeVoiceProviderValue,
+} from "../voice/config.js";
 import type { McpServerConfig } from "../extensions/contracts.js";
 import { buildTrustConfig } from "./trust";
 import type { TrustConfig, PermissionMode } from "./permissions";
@@ -57,6 +66,11 @@ export interface Settings {
   compactThreshold?: number;
   shellCompactionMode?: ShellCompactionMode;
   fullscreenRenderer?: boolean;
+  voiceEnabled?: boolean;
+  voiceProvider?: string;
+  voiceBaseUrl?: string;
+  voiceTranscribePath?: string;
+  voiceModel?: string;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -66,6 +80,11 @@ const DEFAULT_SETTINGS: Settings = {
   maxTurns: 50,
   shellCompactionMode: "auto",
   fullscreenRenderer: true,
+  voiceEnabled: false,
+  voiceProvider: DEFAULT_VOICE_PROVIDER,
+  voiceBaseUrl: DEFAULT_VOICE_BASE_URL,
+  voiceTranscribePath: DEFAULT_VOICE_TRANSCRIBE_PATH,
+  voiceModel: DEFAULT_VOICE_MODEL,
 };
 
 const CONFIG_DIR_MODE = 0o700;
@@ -168,16 +187,33 @@ function normalizeSettingsInput(settings: SettingsInput): SettingsInput {
   const legacyApiKey = typeof settings.apiKey === "string" ? settings.apiKey.trim() : "";
   const normalizedProvider = normalizeProviderId(settings.provider);
   const providerDefinition = getBuiltinProviderDefinition(normalizedProvider);
+  const normalizedVoiceEnabled = typeof settings.voiceEnabled === "boolean"
+    ? settings.voiceEnabled
+    : undefined;
+  const normalizedVoiceProvider = normalizeVoiceProviderValue(settings.voiceProvider);
+  const normalizedVoiceBaseUrl = normalizeVoiceBaseUrlValue(settings.voiceBaseUrl);
+  const normalizedVoiceTranscribePath = normalizeVoicePathValue(settings.voiceTranscribePath);
+  const normalizedVoiceModel = normalizeVoiceProviderValue(settings.voiceModel);
 
   if (!legacyApiKey || providerDefinition?.authKind === "oauth") {
     return {
       ...settings,
+      ...(typeof normalizedVoiceEnabled === "boolean" ? { voiceEnabled: normalizedVoiceEnabled } : {}),
+      ...(normalizedVoiceProvider ? { voiceProvider: normalizedVoiceProvider } : {}),
+      ...(normalizedVoiceBaseUrl ? { voiceBaseUrl: normalizedVoiceBaseUrl } : {}),
+      ...(normalizedVoiceTranscribePath ? { voiceTranscribePath: normalizedVoiceTranscribePath } : {}),
+      ...(normalizedVoiceModel ? { voiceModel: normalizedVoiceModel } : {}),
       providerAuth: normalizedProviderAuth,
     };
   }
 
   return {
     ...settings,
+    ...(typeof normalizedVoiceEnabled === "boolean" ? { voiceEnabled: normalizedVoiceEnabled } : {}),
+    ...(normalizedVoiceProvider ? { voiceProvider: normalizedVoiceProvider } : {}),
+    ...(normalizedVoiceBaseUrl ? { voiceBaseUrl: normalizedVoiceBaseUrl } : {}),
+    ...(normalizedVoiceTranscribePath ? { voiceTranscribePath: normalizedVoiceTranscribePath } : {}),
+    ...(normalizedVoiceModel ? { voiceModel: normalizedVoiceModel } : {}),
     providerAuth: {
       ...(normalizedProviderAuth ?? {}),
       [normalizedProvider]: {

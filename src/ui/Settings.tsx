@@ -11,6 +11,13 @@ import {
   type Settings,
 } from "../runtime/config.js";
 import {
+  DEFAULT_VOICE_BASE_URL,
+  DEFAULT_VOICE_MODEL,
+  DEFAULT_VOICE_PROVIDER,
+  DEFAULT_VOICE_TRANSCRIBE_PATH,
+} from "../voice/config.js";
+import { getVoiceRuntime } from "../voice/runtime.js";
+import {
   resolveProviderConfig,
   maskSecret,
 } from "../providers/config.js";
@@ -49,7 +56,7 @@ import {
   type SettingsModelResumeTarget,
 } from "./settingsTransitions.js";
 
-export type TabId = "config" | "provider" | "model" | "api-key";
+export type TabId = "config" | "voice" | "provider" | "model" | "api-key";
 
 // ---------------------------------------------------------------------------
 // OpenRouter model fetching
@@ -313,10 +320,235 @@ interface SettingsProps {
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "config", label: "Config" },
+  { id: "voice", label: "Voice" },
   { id: "provider", label: "Provider" },
   { id: "model", label: "Model" },
   { id: "api-key", label: "Auth" },
 ];
+
+type VoiceOptionValue = "toggle" | "provider" | "base-url" | "path" | "model" | "reset";
+type VoiceEditableField = Exclude<VoiceOptionValue, "toggle" | "reset">;
+
+function VoiceTab({
+  settings,
+  onSave,
+}: {
+  settings: Settings;
+  onSave: (settings: Settings) => void;
+}) {
+  const [message, setMessage] = useState("");
+  const [phase, setPhase] = useState<"menu" | "edit">("menu");
+  const [editingField, setEditingField] = useState<VoiceEditableField | null>(null);
+
+  const handleToggle = useCallback(async () => {
+    if (settings.voiceEnabled) {
+      onSave({
+        ...settings,
+        voiceEnabled: false,
+      });
+      setMessage("Voice mode disabled.");
+      return;
+    }
+
+    const runtime = getVoiceRuntime();
+    const recording = await runtime.checkRecordingAvailability();
+    if (!recording.available) {
+      setMessage(recording.reason ?? "Voice mode is not available in this environment.");
+      return;
+    }
+
+    const dependencies = await runtime.checkVoiceDependencies();
+    if (!dependencies.available) {
+      const hint = dependencies.installCommand
+        ? ` Install audio recording tools with: ${dependencies.installCommand}`
+        : " Install SoX manually for audio recording.";
+      setMessage(`No audio recording tool found.${hint}`);
+      return;
+    }
+
+    if (!(await runtime.requestMicrophonePermission())) {
+      const guidance = process.platform === "win32"
+        ? "Settings → Privacy → Microphone"
+        : process.platform === "linux"
+          ? "your system audio settings"
+          : "System Settings → Privacy & Security → Microphone";
+      setMessage(`Microphone access is denied. To enable it, go to ${guidance}, then try again.`);
+      return;
+    }
+
+    onSave({
+      ...settings,
+      voiceEnabled: true,
+    });
+    setMessage(`Voice mode enabled using ${settings.voiceProvider ?? DEFAULT_VOICE_PROVIDER}. Hold Space to record.`);
+  }, [onSave, settings]);
+
+  const handleOptionChange = useCallback((value: string) => {
+    const option = value as VoiceOptionValue;
+    if (option === "toggle") {
+      void handleToggle();
+      return;
+    }
+
+    if (option === "reset") {
+      onSave({
+        ...settings,
+        voiceProvider: DEFAULT_VOICE_PROVIDER,
+        voiceBaseUrl: DEFAULT_VOICE_BASE_URL,
+        voiceTranscribePath: DEFAULT_VOICE_TRANSCRIBE_PATH,
+        voiceModel: DEFAULT_VOICE_MODEL,
+      });
+      setMessage("Voice provider settings reset to the bundled Parakeet defaults.");
+      setPhase("menu");
+      setEditingField(null);
+      return;
+    }
+
+    setEditingField(option);
+    setPhase("edit");
+    setMessage("");
+  }, [handleToggle, onSave, settings]);
+
+  const handleEditSubmit = useCallback((value: string) => {
+    if (!editingField) {
+      return;
+    }
+
+    const trimmed = value.trim();
+    const next = { ...settings };
+
+    switch (editingField) {
+      case "provider": {
+        next.voiceProvider = trimmed || DEFAULT_VOICE_PROVIDER;
+        setMessage(`Voice provider set to ${next.voiceProvider}.`);
+        break;
+      }
+      case "base-url": {
+        next.voiceBaseUrl = trimmed.replace(/\/+$/u, "") || DEFAULT_VOICE_BASE_URL;
+        setMessage(`Voice base URL set to ${next.voiceBaseUrl}.`);
+        break;
+      }
+      case "path": {
+        const resolved = trimmed
+          ? (trimmed.startsWith("/") ? trimmed : `/${trimmed}`)
+          : DEFAULT_VOICE_TRANSCRIBE_PATH;
+        next.voiceTranscribePath = resolved;
+        setMessage(`Voice transcription path set to ${resolved}.`);
+        break;
+      }
+      case "model": {
+        next.voiceModel = trimmed || DEFAULT_VOICE_MODEL;
+        setMessage(`Voice transcription model set to ${next.voiceModel}.`);
+        break;
+      }
+    }
+
+    onSave(next);
+    setPhase("menu");
+    setEditingField(null);
+  }, [editingField, onSave, settings]);
+
+  useInput(
+    (_input, key) => {
+      if (phase === "edit" && key.leftArrow) {
+        setPhase("menu");
+        setEditingField(null);
+      }
+    },
+    { isActive: phase === "edit" },
+  );
+
+  const currentValue = editingField === "provider"
+    ? settings.voiceProvider ?? DEFAULT_VOICE_PROVIDER
+    : editingField === "base-url"
+      ? settings.voiceBaseUrl ?? DEFAULT_VOICE_BASE_URL
+      : editingField === "path"
+        ? settings.voiceTranscribePath ?? DEFAULT_VOICE_TRANSCRIBE_PATH
+        : editingField === "model"
+          ? settings.voiceModel ?? DEFAULT_VOICE_MODEL
+          : "";
+
+  const options: Array<{ label: string; value: VoiceOptionValue }> = [
+    {
+      label: `Voice mode: ${settings.voiceEnabled ? "enabled" : "disabled"}  —  press Enter to toggle`,
+      value: "toggle",
+    },
+    {
+      label: `Provider: ${settings.voiceProvider ?? DEFAULT_VOICE_PROVIDER}`,
+      value: "provider",
+    },
+    {
+      label: `Base URL: ${settings.voiceBaseUrl ?? DEFAULT_VOICE_BASE_URL}`,
+      value: "base-url",
+    },
+    {
+      label: `Transcription path: ${settings.voiceTranscribePath ?? DEFAULT_VOICE_TRANSCRIBE_PATH}`,
+      value: "path",
+    },
+    {
+      label: `Model: ${settings.voiceModel ?? DEFAULT_VOICE_MODEL}`,
+      value: "model",
+    },
+    {
+      label: "Reset provider settings to Pebble defaults",
+      value: "reset",
+    },
+  ];
+
+  return (
+    <Box flexDirection="column">
+      <Text bold color="cyan">Voice</Text>
+      <Box flexDirection="column" marginTop={1}>
+        <Text>Mode: {settings.voiceEnabled ? "enabled" : "disabled"}</Text>
+        <Text>Provider: {settings.voiceProvider ?? DEFAULT_VOICE_PROVIDER}</Text>
+        <Text>Base URL: {settings.voiceBaseUrl ?? DEFAULT_VOICE_BASE_URL}</Text>
+        <Text>Transcription path: {settings.voiceTranscribePath ?? DEFAULT_VOICE_TRANSCRIBE_PATH}</Text>
+        <Text>Model: {settings.voiceModel ?? DEFAULT_VOICE_MODEL}</Text>
+        <Text dimColor>Pebble expects an OpenAI-compatible audio transcription endpoint. The bundled defaults target the local Parakeet setup used in this repo.</Text>
+      </Box>
+
+      {phase === "menu" ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Select
+            options={options}
+            visibleOptionCount={6}
+            defaultValue="toggle"
+            onChange={handleOptionChange}
+          />
+        </Box>
+      ) : (
+        <Box flexDirection="column" marginTop={1}>
+          <Text>Editing: {editingField === "base-url" ? "base URL" : editingField === "path" ? "transcription path" : editingField}</Text>
+          <Text dimColor>Current: {currentValue}</Text>
+          <Text dimColor>Submit a blank value to restore the Pebble default.</Text>
+          <Box marginTop={1}>
+            <Text color="cyan">{"› "} </Text>
+            <TextInput
+              onSubmit={handleEditSubmit}
+              placeholder={currentValue}
+            />
+          </Box>
+        </Box>
+      )}
+
+      {message ? (
+        <Box marginTop={1}>
+          <Text color={message.startsWith("Voice mode enabled") || message.startsWith("Voice provider") || message.startsWith("Voice base URL") || message.startsWith("Voice transcription path") || message.startsWith("Voice transcription model") || message.startsWith("Voice provider settings reset") || message.startsWith("Voice mode disabled") ? "green" : "yellow"}>
+            {message}
+          </Text>
+        </Box>
+      ) : null}
+
+      <Box marginTop={1}>
+        <Text dimColor>
+          {phase === "menu"
+            ? "↑↓ choose setting · Enter toggle/edit · Shift+Tab / Tab to switch sections"
+            : "Enter save · blank restores default · ← back to voice settings · Shift+Tab / Tab to switch sections"}
+        </Text>
+      </Box>
+    </Box>
+  );
+}
 
 const SHELL_COMPACTION_OPTIONS: Array<{ label: string; value: string }> = [
   { label: "Off  (raw/truncated output)", value: "off" },
@@ -394,6 +626,8 @@ function ConfigTab({
         <Text>Compact threshold: {settings.compactThreshold ?? "not set"}</Text>
         <Text>Shell compaction: {settings.shellCompactionMode ?? "auto"}</Text>
         <Text>Fullscreen renderer: {settings.fullscreenRenderer === false ? "disabled" : "enabled"}</Text>
+        <Text>Voice mode: {settings.voiceEnabled ? "enabled" : "disabled"} (toggle with /voice)</Text>
+        <Text>Voice provider: {settings.voiceProvider ?? DEFAULT_VOICE_PROVIDER}</Text>
         <Text>Provider: {resolved.providerLabel} ({resolved.providerId})</Text>
         <Text>Model: {resolved.model}</Text>
         <Text>Stored provider credentials: {Object.keys(settings.providerAuth ?? {}).length}</Text>
@@ -1397,6 +1631,12 @@ export function Settings({
             settingsPath={settingsPath}
             projectSettingsPath={projectSettingsPath}
             cwd={context.cwd}
+            onSave={handleSave}
+          />
+        )}
+        {activeTab === "voice" && (
+          <VoiceTab
+            settings={settings}
             onSave={handleSave}
           />
         )}

@@ -4,6 +4,7 @@
   "model": "qwen/qwen3.6-plus:free",
   "telemetryEnabled": false,
   "maxTurns": 50,
+  "shellCompactionMode": "auto",
   "fullscreenRenderer": true,
   "baseUrl": "https://openrouter.ai/api/v1"
 }

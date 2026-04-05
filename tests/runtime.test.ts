@@ -15,6 +15,7 @@ import type { Message } from "../src/engine/types";
 import type { Provider, ProviderCapabilities, ProviderOptions, StreamChunk } from "../src/providers/types";
 import type { PendingPermission, PermissionChoice } from "../src/ui/types";
 import { getSettingsPath } from "../src/runtime/config";
+import { setVoiceRuntimeForTesting, type VoiceRuntime } from "../src/voice/runtime";
 
 const tempDirs: string[] = [];
 const previousPebbleHome = process.env.PEBBLE_HOME;
@@ -93,6 +94,7 @@ afterEach(() => {
 
   rmSync(pebbleHomeDir, { recursive: true, force: true });
   mkdirSync(pebbleHomeDir, { recursive: true });
+  setVoiceRuntimeForTesting(null);
 });
 
 afterAll(() => {
@@ -587,6 +589,62 @@ describe("interactive runtime permissions", () => {
       const transcript = sessionStore.loadTranscript(sessionId);
       expect(transcript?.messages.some((message) => message.content.includes("Tool execution denied: User decision"))).toBe(true);
       expect(permissionManager.getPendingApprovals(sessionId)).toHaveLength(0);
+    } finally {
+      app.cleanup();
+    }
+  });
+
+  test("captures a held spacebar voice transcript into the prompt", async () => {
+    const projectDir = createTempProject("pebble-runtime-interactive-voice-", {
+      settings: {
+        voiceEnabled: true,
+        fullscreenRenderer: false,
+      },
+    });
+
+    const voiceRuntime: VoiceRuntime = {
+      checkRecordingAvailability: async () => ({ available: true, reason: null }),
+      checkVoiceDependencies: async () => ({ available: true, missing: [], installCommand: null }),
+      requestMicrophonePermission: async () => true,
+      startRecording: async (onData) => {
+        onData(Buffer.from([0, 1, 2, 3]));
+        return true;
+      },
+      stopRecording: () => {},
+      isVoiceStreamAvailable: () => true,
+      connectVoiceStream: async (callbacks) => {
+        const connection = {
+          send: (_chunk: Buffer) => {},
+          finalize: async () => {
+            callbacks.onTranscript("voice transcript", true);
+            callbacks.onClose();
+            return "post_closestream_endpoint" as const;
+          },
+          close: () => {},
+          isConnected: () => true,
+        };
+        callbacks.onReady(connection);
+        return connection;
+      },
+    };
+
+    setVoiceRuntimeForTesting(voiceRuntime);
+
+    const sessionStore = createProjectSessionStore(projectDir);
+    const app = mountInteractiveApp({
+      cwd: projectDir,
+      sessionStore,
+    });
+
+    try {
+      await sendKeys(app.stdin, "     ");
+      await waitFor(() => app.output().includes("Recording…") || app.output().includes("Transcribing…"), 3000);
+      await waitFor(() => app.output().includes("voice transcript"), 3000);
+      await sendKeys(app.stdin, "\r");
+
+      const sessionId = await waitForSessionId(sessionStore);
+      const transcript = sessionStore.loadTranscript(sessionId);
+      expect(transcript?.messages.some((message) => message.role === "user" && message.content === "voice transcript")).toBe(true);
     } finally {
       app.cleanup();
     }

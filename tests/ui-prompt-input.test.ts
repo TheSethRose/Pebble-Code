@@ -45,6 +45,35 @@ describe("PromptInput", () => {
     expect(flat).toContain("Inspecting workspace · action: project_structure, path: .");
     expect(flat).not.toContain("Pebble is working…");
   });
+
+  test("shows the hold-to-talk hint when voice mode is enabled", () => {
+    const flat = normalizeWhitespace(flattenText(
+      PromptInput({
+        isProcessing: false,
+        onSubmit: () => {},
+        width: 60,
+        voiceEnabled: true,
+      }),
+    ));
+
+    expect(flat).toContain("Hold Space to talk");
+  });
+
+  test("shows recording state copy when voice capture is active", () => {
+    const flat = normalizeWhitespace(flattenText(
+      PromptInput({
+        isProcessing: false,
+        onSubmit: () => {},
+        width: 60,
+        voiceEnabled: true,
+        voiceState: "recording",
+        voiceAudioLevels: [0, 0.2, 0.5, 1],
+      }),
+    ));
+
+    expect(flat).toContain("Recording…");
+    expect(flat).toContain("Release Space to transcribe");
+  });
 });
 
 function normalizeWhitespace(value: string): string {

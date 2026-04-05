@@ -7,6 +7,12 @@ import { registerBuiltinCommands } from "../src/commands/builtins";
 import { SessionStore } from "../src/persistence/sessionStore";
 import type { CommandContext } from "../src/commands/types";
 import {
+  DEFAULT_VOICE_BASE_URL,
+  DEFAULT_VOICE_MODEL,
+  DEFAULT_VOICE_PROVIDER,
+  DEFAULT_VOICE_TRANSCRIBE_PATH,
+} from "../src/voice/config";
+import {
   getProjectSettingsPath,
   getSettingsPath,
   loadSettingsForCwd,
@@ -77,6 +83,7 @@ describe("Command Registry", () => {
     expect(registry.find("plan")).toBeDefined();
     expect(registry.find("review")).toBeDefined();
     expect(registry.find("permissions")).toBeDefined();
+    expect(registry.find("voice")).toBeDefined();
   });
 
   test("finds commands by alias", () => {
@@ -724,5 +731,51 @@ describe("Command Registry", () => {
     // /config is now a UI command that opens the Settings component, so it returns empty output
     expect(result.success).toBe(true);
     expect(result.output).toBe("");
+  });
+
+  test("/voice opens the voice settings tab", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-voice-enable-");
+
+    const result = await registry.execute("voice", "", createCommandContext({ cwd: tempDir }));
+
+    expect(result.success).toBe(true);
+    expect(result.output).toBe("");
+    expect(result.data?.action).toBe("open-settings");
+    expect(result.data?.defaultTab).toBe("voice");
+  });
+
+  test("loads voice defaults for the bundled Parakeet setup", () => {
+    const tempDir = createTempProjectDir("pebble-command-voice-defaults-");
+
+    const settings = loadSettingsForCwd(tempDir);
+
+    expect(settings.voiceEnabled).toBe(false);
+    expect(settings.voiceProvider).toBe(DEFAULT_VOICE_PROVIDER);
+    expect(settings.voiceBaseUrl).toBe(DEFAULT_VOICE_BASE_URL);
+    expect(settings.voiceTranscribePath).toBe(DEFAULT_VOICE_TRANSCRIBE_PATH);
+    expect(settings.voiceModel).toBe(DEFAULT_VOICE_MODEL);
+  });
+
+  test("persists custom voice provider endpoint overrides", () => {
+    const tempDir = createTempProjectDir("pebble-command-voice-overrides-");
+
+    saveSettingsForCwd(tempDir, {
+      ...loadSettingsForCwd(tempDir),
+      voiceEnabled: true,
+      voiceProvider: "custom-stt",
+      voiceBaseUrl: "http://127.0.0.1:7777/",
+      voiceTranscribePath: "custom/transcribe",
+      voiceModel: "gpt-4o-mini-transcribe",
+    });
+
+    const loaded = loadSettingsForCwd(tempDir);
+    expect(loaded.voiceEnabled).toBe(true);
+    expect(loaded.voiceProvider).toBe("custom-stt");
+    expect(loaded.voiceBaseUrl).toBe("http://127.0.0.1:7777");
+    expect(loaded.voiceTranscribePath).toBe("/custom/transcribe");
+    expect(loaded.voiceModel).toBe("gpt-4o-mini-transcribe");
   });
 });
