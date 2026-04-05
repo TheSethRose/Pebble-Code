@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { findProjectRoot } from "../runtime/trust.js";
 
-export type ContextAttachmentSource = "opencode" | "repomix";
+export type ContextAttachmentSource = "workspace";
 
 export interface ContextAttachmentIndexEntry {
   key: string;
@@ -37,35 +37,30 @@ const binaryExtensions = new Set([
   ".icns",
   ".ico",
 ]);
-const ignoredDirectories = new Set([".git", "node_modules"]);
+const ignoredDirectories = new Set([
+  ".git",
+  "node_modules",
+  ".pebble",
+  "dist",
+  "dist-debug",
+  "coverage",
+  "private/context",
+]);
 
 export function createContextAttachmentIndex(cwd: string): ContextAttachmentIndex {
   const projectRoot = findProjectRoot(cwd) ?? cwd;
-  const contextRoot = join(projectRoot, "private", "context");
-  const opencodeRoot = join(contextRoot, "opencode");
-  const repomixPath = join(contextRoot, "repomix-claude.xml");
-
-  const repomixContents = new Map<string, string>();
-  const repomixEntries = parseRepomixEntries(repomixPath, repomixContents);
-  const opencodeEntries = walkDirectory(opencodeRoot).map((absolutePath) => {
-    const path = normalizeRelativePath(relative(opencodeRoot, absolutePath));
+  const entries = walkDirectory(projectRoot).map((absolutePath) => {
+    const path = normalizeRelativePath(relative(projectRoot, absolutePath));
     return {
-      key: `opencode:${path}`,
-      source: "opencode" as const,
+      key: `workspace:${path}`,
+      source: "workspace" as const,
       path,
-      displayPath: `opencode/${path}`,
-      description: "opencode workspace snapshot",
+      displayPath: path,
+      description: "workspace file",
       absolutePath,
     };
   });
-
-  const entries = [...opencodeEntries, ...repomixEntries].sort((left, right) => {
-    if (left.source !== right.source) {
-      return left.source.localeCompare(right.source);
-    }
-
-    return left.path.localeCompare(right.path);
-  });
+  entries.sort((left, right) => left.path.localeCompare(right.path));
 
   return {
     entries,
@@ -73,63 +68,16 @@ export function createContextAttachmentIndex(cwd: string): ContextAttachmentInde
       return searchEntries(entries, query, limit);
     },
     resolve(entry) {
-      if (entry.source === "opencode") {
-        if (!entry.absolutePath) {
-          return null;
-        }
-
-        return {
-          ...entry,
-          content: readFileSync(entry.absolutePath, "utf8"),
-        };
-      }
-
-      const content = repomixContents.get(entry.key);
-      if (!content) {
+      if (!entry.absolutePath) {
         return null;
       }
 
       return {
         ...entry,
-        content,
+        content: readFileSync(entry.absolutePath, "utf8"),
       };
     },
   };
-}
-
-function parseRepomixEntries(
-  filePath: string,
-  contents: Map<string, string>,
-): ContextAttachmentIndexEntry[] {
-  let xml = "";
-  try {
-    xml = readFileSync(filePath, "utf8");
-  } catch {
-    return [];
-  }
-
-  const entries: ContextAttachmentIndexEntry[] = [];
-  const pattern = /<file path="([^"]+)">\n?([\s\S]*?)<\/file>/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(xml)) !== null) {
-    const path = normalizeRelativePath(match[1] ?? "");
-    if (!path) {
-      continue;
-    }
-
-    const content = (match[2] ?? "").replace(/^\n/u, "").replace(/\n$/u, "");
-    const key = `repomix:${path}`;
-    contents.set(key, content);
-    entries.push({
-      key,
-      source: "repomix",
-      path,
-      displayPath: `repomix/${path}`,
-      description: "repomix packed reference",
-    });
-  }
-
-  return entries;
 }
 
 function walkDirectory(root: string): string[] {
@@ -152,11 +100,12 @@ function walkDirectory(root: string): string[] {
     }
 
     for (const name of readdirSync(current)) {
-      if (ignoredDirectories.has(name)) {
+      const absolutePath = join(current, name);
+      const relativePath = normalizeRelativePath(relative(root, absolutePath));
+      if (isIgnoredPath(name, relativePath)) {
         continue;
       }
 
-      const absolutePath = join(current, name);
       const stat = statSync(absolutePath);
       if (stat.isDirectory()) {
         pending.push(absolutePath);
@@ -172,6 +121,14 @@ function walkDirectory(root: string): string[] {
   }
 
   return results;
+}
+
+function isIgnoredPath(name: string, relativePath: string): boolean {
+  if (ignoredDirectories.has(name)) {
+    return true;
+  }
+
+  return [...ignoredDirectories].some((ignored) => relativePath === ignored || relativePath.startsWith(`${ignored}/`));
 }
 
 function searchEntries(

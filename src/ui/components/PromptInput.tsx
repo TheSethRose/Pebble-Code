@@ -1,15 +1,23 @@
 import React from "react";
 import { Box, Text } from "ink";
+import type { ContextAttachmentIndexEntry } from "../contextAttachmentIndex.js";
 import { PromptComposerInput } from "./PromptComposerInput.js";
 
 const IS_MAC = process.platform === "darwin";
 
 export interface CommandSuggestion {
+  kind: "command";
   name: string;
   description: string;
   aliases?: string[];
   insertText?: string;
 }
+
+export interface FileSuggestion extends ContextAttachmentIndexEntry {
+  kind: "file";
+}
+
+export type PromptSuggestion = CommandSuggestion | FileSuggestion;
 
 interface PromptInputProps {
   isProcessing: boolean;
@@ -24,8 +32,9 @@ interface PromptInputProps {
   model?: string;
   sessionId?: string | null;
   width?: number;
-  suggestions?: CommandSuggestion[];
+  suggestions?: PromptSuggestion[];
   selectedSuggestionIndex?: number;
+  emptySuggestionLabel?: string | null;
   voiceEnabled?: boolean;
   voiceState?: "idle" | "recording" | "processing";
   voiceWarmingUp?: boolean;
@@ -44,6 +53,18 @@ function renderVoiceLevels(levels: number[]): string {
   return levels
     .map((level) => glyphs[Math.min(glyphs.length - 1, Math.max(0, Math.round(level * (glyphs.length - 1))))] ?? "▁")
     .join("");
+}
+
+function truncateLabel(value: string, maxWidth: number): string {
+  if (value.length <= maxWidth) {
+    return value;
+  }
+
+  if (maxWidth <= 3) {
+    return value.slice(0, maxWidth);
+  }
+
+  return `${value.slice(0, maxWidth - 3)}...`;
 }
 
 /**
@@ -66,6 +87,7 @@ export function PromptInput({
   width = 80,
   suggestions = [],
   selectedSuggestionIndex = 0,
+  emptySuggestionLabel = null,
   voiceEnabled = false,
   voiceState = "idle",
   voiceWarmingUp = false,
@@ -84,8 +106,8 @@ export function PromptInput({
     : voiceState === "processing"
       ? "Transcribing…"
       : disabled
-    ? "Pebble is waiting for your answer…"
-    : isProcessing
+        ? "Pebble is waiting for your answer…"
+        : isProcessing
       ? statusText || "Working…"
       : stagedPasteCount > 0
         ? `${stagedPasteCount} pasted block${stagedPasteCount === 1 ? "" : "s"} staged`
@@ -95,10 +117,11 @@ export function PromptInput({
     : voiceState === "processing"
       ? "Pebble will insert the transcript when ready"
       : disabled
-    ? "Answer above to continue"
-    : stagedPasteCount > 0
-      ? "Enter sends the full pasted content"
-    : "Enter sends · / shows commands";
+        ? "Answer above to continue"
+        : stagedPasteCount > 0
+          ? "Enter sends the full pasted content"
+          : "Enter sends · / commands · @ files";
+  const showSuggestionBox = suggestions.length > 0 || Boolean(emptySuggestionLabel);
   const actionColor = voiceState === "recording"
     ? "red"
     : voiceState === "processing" || disabled || isProcessing
@@ -106,6 +129,7 @@ export function PromptInput({
       : "cyan";
   const showActionRow = disabled || isProcessing || voiceState !== "idle" || Boolean(voiceError) || stagedPasteCount > 0;
   const footerStatusLabel = isProcessing && !disabled ? "" : statusLabel;
+  const suggestionLabelWidth = Math.max(24, Math.min(64, width - 18));
   const footerVoiceHint = voiceEnabled
     ? voiceState === "recording"
       ? "Voice active"
@@ -118,25 +142,45 @@ export function PromptInput({
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      {suggestions.length > 0 && (
+      {showSuggestionBox && (
         <Box flexDirection="column" paddingX={1} marginBottom={1}>
-          {suggestions.map((s, i) => {
+          {suggestions.length === 0 ? (
+            <Text color="#aaaaaa">{emptySuggestionLabel}</Text>
+          ) : suggestions.map((suggestion, i) => {
             const isSelected = i === selectedSuggestionIndex;
+            if (suggestion.kind === "file") {
+              return (
+                <Box key={suggestion.key} flexDirection="column" marginBottom={1}>
+                  <Box>
+                    <Text color={isSelected ? "green" : "#aaaaaa"}>
+                      {isSelected ? "▶ " : "  "}
+                    </Text>
+                    <Text color={isSelected ? "green" : "white"} bold={isSelected}>
+                      {truncateLabel(`@${suggestion.displayPath}`, suggestionLabelWidth)}
+                    </Text>
+                  </Box>
+                  <Text color={isSelected ? "green" : "#aaaaaa"}>
+                    {suggestion.description} · {suggestion.source}
+                  </Text>
+                </Box>
+              );
+            }
+
             return (
-              <Box key={`${s.name}:${s.insertText ?? s.name}`}>
+              <Box key={`${suggestion.name}:${suggestion.insertText ?? suggestion.name}`}>
                 <Text color={isSelected ? "cyan" : "#aaaaaa"}>
                   {isSelected ? "▶ " : "  "}
                 </Text>
                 <Text color={isSelected ? "cyan" : "white"} bold={isSelected}>
-                  {("/" + s.name).padEnd(14)}
+                  {("/" + suggestion.name).padEnd(14)}
                 </Text>
-                {s.aliases && s.aliases.length > 0 ? (
+                {suggestion.aliases && suggestion.aliases.length > 0 ? (
                   <Text dimColor={!isSelected} color={isSelected ? "cyan" : "#aaaaaa"}>
-                    {s.aliases.map((alias) => `/${alias}`).join(", ")}{"  "}
+                    {suggestion.aliases.map((alias) => `/${alias}`).join(", ")}{"  "}
                   </Text>
                 ) : null}
                 <Text dimColor={!isSelected} color={isSelected ? "cyan" : undefined}>
-                  {s.description}
+                  {suggestion.description}
                 </Text>
               </Box>
             );

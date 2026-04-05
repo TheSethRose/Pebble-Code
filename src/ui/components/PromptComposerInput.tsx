@@ -30,6 +30,11 @@ interface InputState {
 	cursorOffset: number;
 }
 
+interface PreparedPaste {
+	insertedText: string;
+	stagedContent?: PastedTextContent;
+}
+
 type InputAction =
 	| { type: "move-cursor-left" }
 	| { type: "move-cursor-right" }
@@ -123,33 +128,43 @@ export function PromptComposerInput({
 		dispatch({ type: "delete" });
 	}, []);
 
-	const stagePaste = React.useCallback((rawText: string) => {
+	const preparePaste = React.useCallback((rawText: string): PreparedPaste | null => {
 		const normalizedText = normalizePastedText(rawText);
 		if (!normalizedText) {
-			return;
+			return null;
 		}
 
 		if (!shouldStagePastedText(normalizedText)) {
-			insert(normalizedText);
-			return;
+			return { insertedText: normalizedText };
 		}
 
 		const pasteId = nextPasteIdRef.current;
 		nextPasteIdRef.current += 1;
 		const numLines = getPastedTextRefNumLines(normalizedText);
 
-		setPastedContents((current) => ({
-			...current,
-			[pasteId]: {
+		return {
+			insertedText: formatPastedTextRef(pasteId, numLines),
+			stagedContent: {
 				id: pasteId,
 				type: "text",
 				content: normalizedText,
 			},
-		}));
-		insert(formatPastedTextRef(pasteId, numLines));
+		};
+	}, []);
+
+	const applyPreparedPaste = React.useCallback((preparedPaste: PreparedPaste) => {
+		if (preparedPaste.stagedContent) {
+			const stagedContent = preparedPaste.stagedContent;
+			setPastedContents((current) => ({
+				...current,
+				[stagedContent.id]: stagedContent,
+			}));
+		}
+
+		insert(preparedPaste.insertedText);
 	}, [insert]);
 
-	const flushPendingPaste = React.useCallback(() => {
+	const flushPendingPaste = React.useCallback((): PreparedPaste | null => {
 		const combinedText = pendingPasteChunksRef.current.join("");
 		pendingPasteChunksRef.current = [];
 
@@ -158,10 +173,18 @@ export function PromptComposerInput({
 			pasteTimeoutRef.current = null;
 		}
 
-		if (combinedText.length > 0) {
-			stagePaste(combinedText);
+		if (combinedText.length === 0) {
+			return null;
 		}
-	}, [stagePaste]);
+
+		const preparedPaste = preparePaste(combinedText);
+		if (!preparedPaste) {
+			return null;
+		}
+
+		applyPreparedPaste(preparedPaste);
+		return preparedPaste;
+	}, [applyPreparedPaste, preparePaste]);
 
 	const queuePaste = React.useCallback((input: string) => {
 		pendingPasteChunksRef.current.push(input);
@@ -179,6 +202,24 @@ export function PromptComposerInput({
 		const visibleValue = suggestion ? `${state.value}${suggestion}` : state.value;
 		onSubmit?.(expandPastedTextReferences(visibleValue, pastedContents));
 	}, [onSubmit, pastedContents, state.value, suggestion]);
+
+	const submitPendingPaste = React.useCallback(() => {
+		const preparedPaste = flushPendingPaste();
+		if (!preparedPaste) {
+			submit();
+			return;
+		}
+
+		const visibleValue = `${state.value.slice(0, state.cursorOffset)}${preparedPaste.insertedText}${state.value.slice(state.cursorOffset)}`;
+		const nextPastedContents = preparedPaste.stagedContent
+			? {
+				...pastedContents,
+				[preparedPaste.stagedContent.id]: preparedPaste.stagedContent,
+			}
+			: pastedContents;
+
+		onSubmit?.(expandPastedTextReferences(visibleValue, nextPastedContents));
+	}, [flushPendingPaste, onSubmit, pastedContents, state.cursorOffset, state.value, submit]);
 
 	React.useEffect(() => {
 		if (state.value !== state.previousValue) {
@@ -248,7 +289,12 @@ export function PromptComposerInput({
 			return;
 		}
 
-		if (pendingPasteChunksRef.current.length > 0 && (key.return || key.leftArrow || key.rightArrow || key.backspace || key.delete)) {
+		if (pendingPasteChunksRef.current.length > 0 && key.return) {
+			submitPendingPaste();
+			return;
+		}
+
+		if (pendingPasteChunksRef.current.length > 0 && (key.leftArrow || key.rightArrow || key.backspace || key.delete)) {
 			flushPendingPaste();
 			return;
 		}

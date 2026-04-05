@@ -82,6 +82,7 @@ describe("PromptInput", () => {
         onSubmit: () => {},
         width: 80,
         suggestions: [{
+          kind: "command",
           name: "clear",
           aliases: ["cls", "new"],
           description: "Clear the conversation",
@@ -93,6 +94,41 @@ describe("PromptInput", () => {
     expect(flat).toContain("/clear");
     expect(flat).toContain("/new");
     expect(flat).toContain("Clear the conversation");
+  });
+
+  test("renders file suggestions for @ context picking", () => {
+    const flat = normalizeWhitespace(flattenText(
+      PromptInput({
+        isProcessing: false,
+        onSubmit: () => {},
+        width: 90,
+        suggestions: [{
+          kind: "file",
+          key: "workspace:src/ui/App.tsx",
+          source: "workspace",
+          path: "src/ui/App.tsx",
+          displayPath: "src/ui/App.tsx",
+          description: "workspace file",
+        }],
+      }),
+    ));
+
+    expect(flat).toContain("@src/ui/App.tsx");
+    expect(flat).toContain("workspace file");
+  });
+
+  test("shows empty file picker copy without a duplicate attachment summary", () => {
+    const flat = normalizeWhitespace(flattenText(
+      PromptInput({
+        isProcessing: false,
+        onSubmit: () => {},
+        width: 90,
+        emptySuggestionLabel: "No matching context files",
+      }),
+    ));
+
+    expect(flat).toContain("No matching context files");
+    expect(flat).not.toContain("Attached context");
   });
 
   test("shows staged paste status when pasted content is queued", () => {

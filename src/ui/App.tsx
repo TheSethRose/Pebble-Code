@@ -25,9 +25,17 @@ import {
   transcriptToDisplayMessages,
 } from "../persistence/runtimeSessions.js";
 import type { AppState, DisplayMessage, PendingPermission, PermissionChoice } from "./types.js";
+import type { ContextAttachmentIndexEntry, ResolvedContextAttachment } from "./contextAttachmentIndex.js";
+import { createContextAttachmentIndex } from "./contextAttachmentIndex.js";
+import { createComposerState, getActiveComposerQuery, insertComposerFileTag } from "./composerState.js";
+import {
+  collectReferencedContextAttachments,
+  mergeContextAttachmentEntries,
+  serializeContextAttachmentMetadata,
+} from "./contextAttachmentSelection.js";
 
 import { PromptInput } from "./components/PromptInput.js";
-import type { CommandSuggestion } from "./components/PromptInput.js";
+import type { PromptSuggestion } from "./components/PromptInput.js";
 import { JumpToBottomPill } from "./components/JumpToBottomPill.js";
 import { MousePressableRegion } from "./components/MousePressableRegion.js";
 import { TranscriptView, getTranscriptMetrics } from "./components/TranscriptView.js";
@@ -220,6 +228,7 @@ export function App({
     title: string;
     selectedButton: "delete" | "cancel";
   } | null>(null);
+  const [selectedContextAttachments, setSelectedContextAttachments] = React.useState<ContextAttachmentIndexEntry[]>([]);
 
   const engineRef = React.useRef<QueryEngine | null>(null);
   const sessionIdRef = React.useRef<string | null>(null);
@@ -227,6 +236,7 @@ export function App({
   const ctrlCTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const previousTranscriptLineCountRef = React.useRef(0);
   const inputValueRef = React.useRef("");
+  const selectedContextAttachmentsRef = React.useRef<ContextAttachmentIndexEntry[]>([]);
   const voiceRapidCountRef = React.useRef(0);
   const voiceWarmupCountRef = React.useRef(0);
   const voiceRapidResetRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -307,6 +317,48 @@ export function App({
   }), [context.hookRegistry, runtimeConfig]);
 
   inputValueRef.current = inputValue;
+  selectedContextAttachmentsRef.current = selectedContextAttachments;
+
+  const contextAttachmentIndex = React.useMemo(
+    () => createContextAttachmentIndex(context.cwd),
+    [context.cwd],
+  );
+
+  const activeComposerQuery = React.useMemo(
+    () => getActiveComposerQuery(createComposerState(inputValue)),
+    [inputValue],
+  );
+
+  const syncSelectedContextAttachments = React.useCallback(
+    (value: string, additions: ContextAttachmentIndexEntry[] = []) => {
+      const next = collectReferencedContextAttachments(
+        value,
+        mergeContextAttachmentEntries(selectedContextAttachmentsRef.current, additions),
+      );
+
+      selectedContextAttachmentsRef.current = next;
+      setSelectedContextAttachments(next);
+      return next;
+    },
+    [],
+  );
+
+  const resolveSelectedContextAttachments = React.useCallback(
+    (value: string) => {
+      const entries = collectReferencedContextAttachments(value, selectedContextAttachmentsRef.current);
+      const resolved: ResolvedContextAttachment[] = [];
+
+      for (const entry of entries) {
+        const content = contextAttachmentIndex.resolve(entry);
+        if (content) {
+          resolved.push(content);
+        }
+      }
+
+      return { entries, resolved };
+    },
+    [contextAttachmentIndex],
+  );
 
   const reconcilePendingApprovals = React.useCallback((sessionId: string) => {
     if (!sessionStore || !context.permissionManager) {
@@ -458,24 +510,38 @@ export function App({
   // Unified input helpers
   // ------------------------------------------------------------------
   const setInputText = React.useCallback(
-    (value: string, updateQuery = false) => {
+    (value: string, updateQuery = false, attachmentAdditions: ContextAttachmentIndexEntry[] = []) => {
+      inputValueRef.current = value;
       setInputValue(value);
       setInputDefaultValue(value);
+      syncSelectedContextAttachments(value, attachmentAdditions);
       setStagedPasteCount(0);
       if (updateQuery) setSuggestionQuery(value);
       setInputKey((k) => k + 1);
     },
-    [],
+    [syncSelectedContextAttachments],
   );
 
   const clearInput = React.useCallback(() => {
+    inputValueRef.current = "";
+    selectedContextAttachmentsRef.current = [];
     setInputValue("");
     setInputDefaultValue("");
     setSuggestionQuery("");
     setSuggestionIndex(0);
+    setSelectedContextAttachments([]);
     setStagedPasteCount(0);
     setInputKey((k) => k + 1);
   }, []);
+
+  const insertSelectedContextAttachment = React.useCallback(
+    (entry: ContextAttachmentIndexEntry) => {
+      const nextState = insertComposerFileTag(createComposerState(inputValueRef.current), entry);
+      setInputText(nextState.text, true, [entry]);
+      setSuggestionIndex(0);
+    },
+    [setInputText],
+  );
 
   const voiceEnabled = runtimeConfig.voiceEnabled === true;
   const voiceConnectionOptions = React.useMemo(() => ({
@@ -639,9 +705,17 @@ export function App({
     return reg;
   }, [context.extensionCommands]);
 
-  // Slash-command suggestions: filtered by what the user actually typed (suggestionQuery),
-  // not inputValue, so scrolling through suggestions doesn't collapse the list.
-  const suggestions = React.useMemo((): CommandSuggestion[] => {
+  // Slash-command suggestions stay filtered by `suggestionQuery` so arrow-key
+  // preview does not collapse the list; file suggestions are driven by the
+  // active trailing `@query` in the composer text.
+  const suggestions = React.useMemo((): PromptSuggestion[] => {
+    if (activeComposerQuery?.kind === "file") {
+      return contextAttachmentIndex.search(activeComposerQuery.query).map((entry) => ({
+        ...entry,
+        kind: "file" as const,
+      }));
+    }
+
     if (!suggestionQuery.startsWith("/") || suggestionQuery.includes(" ")) return [];
     const query = suggestionQuery.slice(1).toLowerCase();
     const listCtx = { cwd: context.cwd, headless: false, config: runtimeConfig };
@@ -657,13 +731,18 @@ export function App({
         }
 
         return [{
+          kind: "command" as const,
           name: command.name,
           description: command.description,
           aliases,
           insertText: matchesName ? command.name : matchingAliases[0],
         }];
       });
-  }, [suggestionQuery, registry, context.cwd, runtimeConfig]);
+  }, [activeComposerQuery, context.cwd, contextAttachmentIndex, registry, runtimeConfig, suggestionQuery]);
+
+  const emptySuggestionLabel = activeComposerQuery?.kind === "file" && suggestions.length === 0
+    ? "No matching context files"
+    : null;
 
   // Reset selection to top whenever the suggestion list changes (e.g. user types more).
   React.useEffect(() => {
@@ -951,7 +1030,9 @@ export function App({
           setSuggestionIndex((i) => {
             const next = Math.max(0, i - 1);
             const selected = suggestions[next];
-            if (selected) setInputText(`/${selected.insertText ?? selected.name}`);
+            if (selected?.kind === "command") {
+              setInputText(`/${selected.insertText ?? selected.name}`);
+            }
             return next;
           });
           return;
@@ -960,14 +1041,20 @@ export function App({
           setSuggestionIndex((i) => {
             const next = Math.min(suggestions.length - 1, i + 1);
             const selected = suggestions[next];
-            if (selected) setInputText(`/${selected.insertText ?? selected.name}`);
+            if (selected?.kind === "command") {
+              setInputText(`/${selected.insertText ?? selected.name}`);
+            }
             return next;
           });
           return;
         }
         if (key.tab) {
           const selected = suggestions[suggestionIndex];
-          if (selected) setInputText(`/${selected.insertText ?? selected.name} `, true);
+          if (selected?.kind === "command") {
+            setInputText(`/${selected.insertText ?? selected.name} `, true);
+          } else if (selected?.kind === "file") {
+            insertSelectedContextAttachment(selected);
+          }
           return;
         }
       }
@@ -1035,6 +1122,14 @@ export function App({
       let trimmed = input.trim();
       if (!trimmed) return;
 
+      if (suggestions.length > 0 && activeComposerQuery?.kind === "file") {
+        const selected = suggestions[Math.min(suggestionIndex, suggestions.length - 1)];
+        if (selected?.kind === "file") {
+          insertSelectedContextAttachment(selected);
+          return;
+        }
+      }
+
       // If suggestions are visible and the user pressed Enter on a partial,
       // expand to the currently-selected suggestion instead of submitting the prefix.
       if (
@@ -1043,10 +1138,21 @@ export function App({
         !trimmed.includes(" ")
       ) {
         const selected = suggestions[Math.min(suggestionIndex, suggestions.length - 1)];
-        if (selected) {
+        if (selected?.kind === "command") {
           trimmed = `/${selected.name}`;
         }
       }
+
+      const promptContext = resolveSelectedContextAttachments(trimmed);
+      const messageAttachments = promptContext.resolved.map((entry) => ({
+        type: "text" as const,
+        mimeType: "text/plain",
+        data: entry.content,
+        name: entry.displayPath,
+      }));
+      const messageMetadata = promptContext.entries.length > 0
+        ? { contextAttachments: serializeContextAttachmentMetadata(promptContext.entries) }
+        : undefined;
 
       // Scroll back to bottom so the user sees new responses.
       setTranscriptScrollOffset(0);
@@ -1190,6 +1296,8 @@ export function App({
           role: "user",
           content: trimmed,
           timestamp: new Date().toISOString(),
+          ...(messageAttachments.length > 0 ? { attachments: messageAttachments } : {}),
+          ...(messageMetadata ? { metadata: messageMetadata } : {}),
         });
         compactSessionIfNeeded(
           sessionStore,
@@ -1210,10 +1318,20 @@ export function App({
                 transcript,
                 buildCompactionPolicy(sessionIdRef.current),
               )
-            : [{ role: "user", content: trimmed }]
+            : [{
+                role: "user",
+                content: trimmed,
+                ...(messageAttachments.length > 0 ? { attachments: messageAttachments } : {}),
+                ...(messageMetadata ? { metadata: messageMetadata } : {}),
+              }]
         ) as Message[];
       } else {
-        conversation = [{ role: "user", content: trimmed }] as Message[];
+        conversation = [{
+          role: "user",
+          content: trimmed,
+          ...(messageAttachments.length > 0 ? { attachments: messageAttachments } : {}),
+          ...(messageMetadata ? { metadata: messageMetadata } : {}),
+        }] as Message[];
       }
 
       setState((prev) => ({
@@ -1311,7 +1429,22 @@ export function App({
     // state.messages intentionally omitted — we only need it for the fallback
     // non-persisted path. Including it would cause stale-closure issues.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [registry, context, runtimeConfig, sessionStore, refreshSessions, suggestions, suggestionIndex, reconcilePendingApprovals, refreshRuntimeConfig, rebuildEngine, buildCompactionPolicy],
+    [
+      activeComposerQuery,
+      buildCompactionPolicy,
+      context,
+      insertSelectedContextAttachment,
+      rebuildEngine,
+      reconcilePendingApprovals,
+      refreshRuntimeConfig,
+      refreshSessions,
+      registry,
+      resolveSelectedContextAttachments,
+      runtimeConfig,
+      sessionStore,
+      suggestionIndex,
+      suggestions,
+    ],
   );
 
   const model = String(runtimeConfig.model ?? "default");
@@ -1552,6 +1685,7 @@ export function App({
           onChange={(val) => {
             setInputValue(val);
             setSuggestionQuery(val);
+            syncSelectedContextAttachments(val);
           }}
           inputKey={inputKey}
           defaultValue={inputDefaultValue}
@@ -1562,6 +1696,7 @@ export function App({
           width={mainWidth ?? availableWidth ?? columns}
           suggestions={suggestions}
           selectedSuggestionIndex={Math.min(suggestionIndex, Math.max(0, suggestions.length - 1))}
+          emptySuggestionLabel={emptySuggestionLabel}
           voiceEnabled={voiceEnabled}
           voiceState={voice.state}
           voiceWarmingUp={voiceWarmup}

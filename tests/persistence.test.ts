@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { SessionStore } from "../src/persistence/sessionStore";
 import { compactTranscript, estimateTokens, TokenTracker } from "../src/persistence/compaction";
 import { buildSessionMemory, isSessionMemoryStale } from "../src/persistence/memory";
-import { compactSessionIfNeeded } from "../src/persistence/runtimeSessions";
+import { compactSessionIfNeeded, transcriptToConversation } from "../src/persistence/runtimeSessions";
 
 describe("Session Store", () => {
   let store: SessionStore;
@@ -168,6 +168,65 @@ describe("Compaction", () => {
     ];
     const tokens = estimateTokens(messages);
     expect(tokens).toBe(3); // "Hello world" = 11 chars / 4 ≈ 3
+  });
+
+  test("counts attached context content in token estimates", () => {
+    const tokens = estimateTokens([
+      {
+        role: "user" as const,
+        content: "Review these references",
+        timestamp: "2024-01-01",
+        attachments: [{
+          type: "text" as const,
+          mimeType: "text/plain",
+          data: "const answer = 42;",
+          name: "repomix/src/ui/App.tsx",
+        }],
+        metadata: {
+          contextAttachments: [{
+            key: "repomix:src/ui/App.tsx",
+            source: "repomix",
+            path: "src/ui/App.tsx",
+            displayPath: "repomix/src/ui/App.tsx",
+          }],
+        },
+      },
+    ]);
+
+    expect(tokens).toBeGreaterThan(Math.ceil("Review these references".length / 4));
+  });
+
+  test("projects structured attachments into provider conversation text", () => {
+    const conversation = transcriptToConversation({
+      id: "attachment-conversation-test",
+      createdAt: "2024-01-01",
+      updatedAt: "2024-01-01",
+      status: "active",
+      messages: [{
+        role: "user",
+        content: "Compare @repomix/src/ui/App.tsx",
+        timestamp: "2024-01-01",
+        attachments: [{
+          type: "text",
+          mimeType: "text/plain",
+          data: "export function App() {}",
+          name: "repomix/src/ui/App.tsx",
+        }],
+        metadata: {
+          contextAttachments: [{
+            key: "repomix:src/ui/App.tsx",
+            source: "repomix",
+            path: "src/ui/App.tsx",
+            displayPath: "repomix/src/ui/App.tsx",
+          }],
+        },
+      }],
+    });
+
+    expect(conversation).toHaveLength(1);
+    expect(conversation[0]?.content).toContain("[Attached context files]");
+    expect(conversation[0]?.content).toContain("<attached-context-file");
+    expect(conversation[0]?.attachments).toHaveLength(1);
   });
 
   test("persists automatic compaction metadata when a session crosses the threshold", () => {
