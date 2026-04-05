@@ -137,7 +137,23 @@ describe("TranscriptView", () => {
       createMessage("assistant", "Here are the files."),
     ];
 
-    expect(getTranscriptLineCount(messages, 80)).toBe(6);
+    expect(getTranscriptLineCount(messages, 80)).toBe(5);
+  });
+
+  test("collapses consecutive successful tool results into a single compact row", () => {
+    const messages = [
+      createMessage("tool", "WorkspaceRead", { toolName: "WorkspaceRead", toolArgs: { action: "read_file", path: "settings.json" } }),
+      createMessage("tool_result", "WorkspaceRead done", { toolName: "WorkspaceRead", toolArgs: { action: "read_file", path: "settings.json" } }),
+      createMessage("tool", "WorkspaceRead", { toolName: "WorkspaceRead", toolArgs: { action: "read_file", path: "package.json" } }),
+      createMessage("tool_result", "WorkspaceRead done", { toolName: "WorkspaceRead", toolArgs: { action: "read_file", path: "package.json" } }),
+      createMessage("tool", "WorkspaceRead", { toolName: "WorkspaceRead", toolArgs: { action: "read_file", path: "tsconfig.json" } }),
+      createMessage("tool_result", "WorkspaceRead done", { toolName: "WorkspaceRead", toolArgs: { action: "read_file", path: "tsconfig.json" } }),
+    ];
+
+    const flat = flattenText(TranscriptView({ messages, width: 120, isProcessing: false }));
+
+    expect(flat).toContain("WorkspaceRead ×3 (settings.json, package.json, tsconfig.json)");
+    expect(flat).not.toContain("WorkspaceRead done");
   });
 
   test("hides empty assistant placeholder rows around tool cycles", () => {
@@ -154,7 +170,7 @@ describe("TranscriptView", () => {
     const flat = flattenText(TranscriptView({ messages, width: 80, isProcessing: true }));
 
     expect(flat).toContain("Give me an overview of the current workspace tree");
-    expect(flat).toContain("WorkspaceRead done");
+    expect(flat).toContain("WorkspaceRead");
     expect(flat).not.toContain("(empty)");
   });
 
@@ -175,7 +191,7 @@ describe("TranscriptView", () => {
     expect(flat).toContain("Done");
   });
 
-  test("shows tool output while processing, then collapses it after completion", () => {
+  test("keeps successful tool rows compact and only expands error details", () => {
     const messages = [
       createMessage("tool_result", "Bash done", {
         toolName: "Bash",
@@ -186,11 +202,25 @@ describe("TranscriptView", () => {
 
     const liveFlat = flattenText(TranscriptView({ messages, isProcessing: true, width: 80 }));
     const completeFlat = flattenText(TranscriptView({ messages, isProcessing: false, width: 80 }));
+    const errorFlat = flattenText(TranscriptView({
+      messages: [createMessage("tool_result", "Bash failed", {
+        toolName: "Bash",
+        toolOutput: "line 1\nline 2",
+        summary: "2 lines returned",
+        errorMessage: "boom",
+        isError: true,
+      })],
+      isProcessing: false,
+      width: 80,
+    }));
 
-    expect(liveFlat).toContain("line 1");
-    expect(completeFlat).toContain("Bash done");
+    expect(liveFlat).toContain("Bash");
+    expect(completeFlat).toContain("Bash");
+    expect(liveFlat).not.toContain("line 1");
     expect(completeFlat).not.toContain("line 1");
-    expect(completeFlat).not.toContain("2 lines returned");
+    expect(completeFlat).toContain("2 lines returned");
+    expect(errorFlat).toContain("line 1");
+    expect(errorFlat).toContain("boom");
   });
 
   test("formats markdown headings and bold text instead of showing raw markers", () => {

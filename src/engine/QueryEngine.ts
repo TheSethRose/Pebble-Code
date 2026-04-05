@@ -16,6 +16,164 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import type { PermissionManager } from "../runtime/permissionManager.js";
 import type { PermissionDecision } from "../runtime/permissions.js";
 
+export function normalizeProviderToolInputSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const anyOf = Array.isArray(schema.anyOf) ? schema.anyOf : undefined;
+  const oneOf = Array.isArray(schema.oneOf) ? schema.oneOf : undefined;
+  const allOf = Array.isArray(schema.allOf) ? schema.allOf : undefined;
+  const unionBranches = anyOf ?? oneOf ?? allOf;
+  const schemaType = typeof schema.type === "string" ? schema.type : undefined;
+
+  if (!unionBranches || unionBranches.length === 0) {
+    return schema;
+  }
+
+  const allBranchesAreObjects = unionBranches.every((branch) => {
+    if (!branch || typeof branch !== "object") {
+      return false;
+    }
+
+    return (branch as Record<string, unknown>).type === "object";
+  });
+
+  if (!allBranchesAreObjects) {
+    return schema;
+  }
+
+  const mergedProperties = new Map<string, Record<string, unknown>>();
+  const branchRequiredSets = unionBranches.map((branch) => {
+    const record = branch as Record<string, unknown>;
+    return new Set(Array.isArray(record.required) ? record.required.filter((value): value is string => typeof value === "string") : []);
+  });
+  const sharedRequired = new Set<string>(branchRequiredSets[0] ? [...branchRequiredSets[0]] : []);
+
+  for (const requiredSet of branchRequiredSets.slice(1)) {
+    for (const key of [...sharedRequired]) {
+      if (!requiredSet.has(key)) {
+        sharedRequired.delete(key);
+      }
+    }
+  }
+
+  for (const branch of unionBranches) {
+    const record = branch as Record<string, unknown>;
+    const properties = record.properties;
+    if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+      continue;
+    }
+
+    for (const [propertyName, propertySchemaValue] of Object.entries(properties)) {
+      if (!propertySchemaValue || typeof propertySchemaValue !== "object" || Array.isArray(propertySchemaValue)) {
+        continue;
+      }
+
+      const propertySchema = propertySchemaValue as Record<string, unknown>;
+      const existing = mergedProperties.get(propertyName);
+      if (!existing) {
+        mergedProperties.set(propertyName, propertySchema);
+        continue;
+      }
+
+      const merged = mergeProviderSchemaProperty(propertyName, existing, propertySchema);
+      mergedProperties.set(propertyName, merged);
+    }
+  }
+
+  const { anyOf: _ignoredAnyOf, oneOf: _ignoredOneOf, allOf: _ignoredAllOf, ...rest } = schema;
+
+  return {
+    ...rest,
+    type: schemaType ?? "object",
+    properties: Object.fromEntries(mergedProperties.entries()),
+    required: [...sharedRequired],
+    additionalProperties: unionBranches.every((branch) => {
+      const additionalProperties = (branch as Record<string, unknown>).additionalProperties;
+      return additionalProperties === false;
+    }) ? false : rest.additionalProperties,
+  };
+}
+
+function mergeProviderSchemaProperty(
+  propertyName: string,
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+): Record<string, unknown> {
+  const variants = dedupeSchemaVariants([
+    ...collectProviderSchemaVariants(left),
+    ...collectProviderSchemaVariants(right),
+  ]);
+
+  if (variants.length === 1) {
+    return left;
+  }
+
+  if (propertyName === "action") {
+    const actionValues = variants.flatMap((variant) => {
+      if (typeof variant.const === "string") {
+        return [variant.const];
+      }
+
+      return Array.isArray(variant.enum)
+        ? variant.enum.filter((value): value is string => typeof value === "string")
+        : [];
+    });
+
+    if (actionValues.length > 0) {
+      const descriptions = variants
+        .map((variant) => variant.description)
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+      const combinedDescription = descriptions.length > 0
+        ? descriptions.join(" ")
+        : undefined;
+
+      return {
+        type: "string",
+        enum: Array.from(new Set(actionValues)),
+        ...(combinedDescription ? { description: combinedDescription } : {}),
+      };
+    }
+  }
+
+  if (variants.length === 1) {
+    return variants[0]!;
+  }
+
+  return {
+    anyOf: variants,
+  };
+}
+
+function collectProviderSchemaVariants(schema: Record<string, unknown>): Array<Record<string, unknown>> {
+  const anyOf = Array.isArray(schema.anyOf) ? schema.anyOf : undefined;
+  if (!anyOf) {
+    return [schema];
+  }
+
+  return anyOf.flatMap((variant) => {
+    if (!variant || typeof variant !== "object" || Array.isArray(variant)) {
+      return [];
+    }
+
+    return collectProviderSchemaVariants(variant as Record<string, unknown>);
+  });
+}
+
+function dedupeSchemaVariants(variants: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const seen = new Set<string>();
+  const unique: Array<Record<string, unknown>> = [];
+
+  for (const variant of variants) {
+    const serialized = JSON.stringify(variant);
+    if (seen.has(serialized)) {
+      continue;
+    }
+
+    seen.add(serialized);
+    unique.push(variant);
+  }
+
+  return unique;
+}
+
 /**
  * Context passed to the resolvePermission callback when user approval is needed.
  */
@@ -1072,10 +1230,12 @@ export class QueryEngine {
 
   private zodSchemaToJsonSchema(schema: unknown): Record<string, unknown> {
     if (schema && typeof schema === "object" && !("safeParse" in (schema as Record<string, unknown>))) {
-      return schema as Record<string, unknown>;
+      return normalizeProviderToolInputSchema(schema as Record<string, unknown>);
     }
 
-    return zodToJsonSchema(schema as any) as Record<string, unknown>;
+    return normalizeProviderToolInputSchema(zodToJsonSchema(schema as any, {
+      $refStrategy: "none",
+    }) as Record<string, unknown>);
   }
 
   private isProviderStopReason(value: string): value is ProviderResponse["stopReason"] {

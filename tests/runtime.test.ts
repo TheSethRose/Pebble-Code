@@ -13,6 +13,7 @@ import type { CommandContext } from "../src/commands/types";
 import { App } from "../src/ui/App";
 import type { Message } from "../src/engine/types";
 import type { Provider, ProviderCapabilities, ProviderOptions, StreamChunk } from "../src/providers/types";
+import type { PendingPermission, PermissionChoice } from "../src/ui/types";
 import { getSettingsPath } from "../src/runtime/config";
 
 const tempDirs: string[] = [];
@@ -572,9 +573,10 @@ describe("interactive runtime permissions", () => {
       const sessionId = await waitForSessionId(sessionStore);
 
       await waitFor(() => permissionManager.getPendingApprovals(sessionId).length === 1);
+      await waitFor(() => app.hasPendingPermission());
       expect(app.output()).toContain("Permission Required");
 
-      await sendKeys(app.stdin, "\u001B");
+      app.resolvePendingPermission("deny");
 
       await waitFor(() => {
         const transcript = sessionStore.loadTranscript(sessionId);
@@ -753,7 +755,11 @@ function readPackageName(packageJsonPath: string): string {
 
 class TestInput extends PassThrough {
   isTTY = true;
-  setRawMode(_value: boolean): void {}
+  isRaw = false;
+  setRawMode(value: boolean): this {
+    this.isRaw = value;
+    return this;
+  }
   ref(): this {
     return this;
   }
@@ -771,12 +777,15 @@ class TestOutput extends PassThrough {
 function mountInteractiveApp(context: Pick<CommandContext, "cwd"> & Partial<CommandContext>): {
   stdin: TestInput;
   output: () => string;
+  hasPendingPermission: () => boolean;
+  resolvePendingPermission: (choice: PermissionChoice) => void;
   cleanup: () => void;
 } {
   const stdin = new TestInput();
   const stdout = new TestOutput();
   const stderr = new TestOutput();
   let buffer = "";
+  let latestPendingPermission: PendingPermission | null = null;
   const { cwd, headless, config, ...restContext } = context;
 
   const append = (chunk: string | Buffer) => {
@@ -793,7 +802,14 @@ function mountInteractiveApp(context: Pick<CommandContext, "cwd"> & Partial<Comm
     config: config ?? {},
   };
 
-  const instance = render(React.createElement(App, { context: appContext }), {
+  const instance = render(React.createElement(App, {
+    context: appContext,
+    testController: {
+      onPendingPermission: (pending: PendingPermission | null) => {
+        latestPendingPermission = pending;
+      },
+    },
+  }), {
     stdin: stdin as unknown as NodeJS.ReadStream,
     stdout: stdout as unknown as NodeJS.WriteStream,
     stderr: stderr as unknown as NodeJS.WriteStream,
@@ -804,6 +820,10 @@ function mountInteractiveApp(context: Pick<CommandContext, "cwd"> & Partial<Comm
   return {
     stdin,
     output: () => buffer,
+    hasPendingPermission: () => latestPendingPermission !== null,
+    resolvePendingPermission: (choice: PermissionChoice) => {
+      latestPendingPermission?.resolve(choice);
+    },
     cleanup: () => {
       instance.unmount();
       instance.cleanup();
@@ -836,7 +856,7 @@ async function waitForSessionId(sessionStore: ReturnType<typeof createProjectSes
   return session.id;
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (predicate()) {

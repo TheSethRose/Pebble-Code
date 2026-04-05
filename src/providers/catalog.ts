@@ -658,7 +658,7 @@ export function applyProviderDefaults<T extends { provider?: string; model?: str
   return {
     ...value,
     provider: definition.id,
-    model: normalizeProviderModelId(definition.id, value.model) ?? definition.defaultModel || undefined,
+    model: normalizeProviderModelId(definition.id, value.model) ?? (definition.defaultModel || undefined),
     baseUrl: value.baseUrl?.trim() || definition.defaultBaseUrl || undefined,
   };
 }

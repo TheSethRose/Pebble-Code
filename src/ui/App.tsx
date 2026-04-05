@@ -134,7 +134,13 @@ function toHookContext(context: {
 // App
 // ---------------------------------------------------------------------------
 
-export function App({ context }: { context: CommandContext }) {
+export function App({
+  context,
+  testController,
+}: {
+  context: CommandContext;
+  testController?: { onPendingPermission?: (pending: PendingPermission | null) => void };
+}) {
   const [runtimeConfig, setRuntimeConfig] = React.useState<Record<string, unknown>>(() =>
     loadCommandConfig(context.cwd, context.config, context.extensionProviders),
   );
@@ -611,6 +617,19 @@ export function App({ context }: { context: CommandContext }) {
   // Keyboard: Tab focus, ↑↓ navigation, Ctrl+C exit, Cmd+P, Delete
   // ------------------------------------------------------------------
   useInput(
+    (input, key) => {
+      if (!state.pendingPermission || showSettings || showKeybindings) {
+        return;
+      }
+
+      if (key.escape || input === "\u001B") {
+        state.pendingPermission.resolve("deny");
+      }
+    },
+    { isActive: Boolean(state.pendingPermission) },
+  );
+
+  useInput(
     (_input, key) => {
       // --- Delete confirmation dialog (absorbs all keys while open) ---
       if (deleteConfirm) {
@@ -1054,6 +1073,10 @@ export function App({ context }: { context: CommandContext }) {
     : undefined;
   const isFullscreen = runtimeConfig.fullscreenRenderer !== false;
   const { columns, rows } = useTerminalDimensions();
+
+  React.useEffect(() => {
+    testController?.onPendingPermission?.(state.pendingPermission);
+  }, [state.pendingPermission, testController]);
 
   React.useEffect(() => {
     if (!state.isProcessing) {

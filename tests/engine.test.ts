@@ -3,13 +3,14 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { z } from "zod";
-import { QueryEngine } from "../src/engine/QueryEngine";
+import { QueryEngine, normalizeProviderToolInputSchema } from "../src/engine/QueryEngine";
 import type { Message } from "../src/engine/types";
 import { PermissionManager } from "../src/runtime/permissionManager";
 import type { Provider, ProviderCapabilities, ProviderOptions, ProviderResponse, StreamChunk } from "../src/providers/types";
 import { FileEditTool } from "../src/tools/FileEditTool";
 import { FileReadTool } from "../src/tools/FileReadTool";
 import type { Tool } from "../src/tools/Tool";
+import { WorkspaceReadTool } from "../src/tools/WorkspaceReadTool";
 
 const tempDirs: string[] = [];
 
@@ -106,6 +107,59 @@ class ScriptedProvider implements Provider {
 }
 
 describe("QueryEngine provider error handling", () => {
+  test("normalizes discriminated-union tool schemas into a flat top-level object schema for providers", async () => {
+    const provider = new StubProvider({
+      text: "Done",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
+
+    let capturedTools: ProviderOptions["tools"];
+    provider.complete = async (_messages: Message[], options?: ProviderOptions): Promise<ProviderResponse> => {
+      capturedTools = options?.tools;
+      return {
+        text: "Done",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    };
+
+    const engine = new QueryEngine({
+      provider,
+      tools: [new WorkspaceReadTool()],
+    });
+
+    const result = await engine.process([{ role: "user", content: "Inspect the repo" }]);
+
+    expect(result.success).toBe(true);
+    const workspaceReadTool = capturedTools?.find((tool) => tool.name === "WorkspaceRead");
+    expect(workspaceReadTool).toBeDefined();
+    expect(workspaceReadTool?.inputSchema.type).toBe("object");
+    expect(workspaceReadTool?.inputSchema.anyOf).toBeUndefined();
+    expect(workspaceReadTool?.inputSchema.oneOf).toBeUndefined();
+    expect(workspaceReadTool?.inputSchema.allOf).toBeUndefined();
+    expect(workspaceReadTool?.inputSchema.properties).toMatchObject({
+      action: {
+        type: "string",
+        enum: expect.arrayContaining(["read_file", "list_directory", "glob", "grep"]),
+      },
+    });
+  });
+
+  test("leaves plain object schemas unchanged when normalizing provider tool schemas", () => {
+    const original = {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+      },
+      required: ["path"],
+    } as const;
+
+    expect(normalizeProviderToolInputSchema(original)).toEqual(original);
+  });
+
   test("stops immediately when the provider returns an error stop reason", async () => {
     const provider = new StubProvider({
       text: "Provider error: 401 User not found.",

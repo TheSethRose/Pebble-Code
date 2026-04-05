@@ -359,4 +359,116 @@ describe("GitHub Copilot provider runtime", () => {
     expect(requestBody.max_completion_tokens).toBe(123);
     expect(requestBody.max_tokens).toBeUndefined();
   });
+
+  test("includes preceding assistant tool_calls before tool messages in follow-up Copilot requests", async () => {
+    const requests: Array<{ url: string; headers: Headers; body?: string }> = [];
+
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      requests.push({
+        url,
+        headers: new Headers(init?.headers),
+        body: typeof init?.body === "string" ? init.body : undefined,
+      });
+
+      if (url === "https://api.github.com/copilot_internal/v2/token") {
+        return new Response(JSON.stringify({
+          token: "copilot-runtime-token;proxy-ep=proxy.individual.githubcopilot.com",
+          expires_at: Math.floor((Date.now() + 30 * 60_000) / 1000),
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({
+        id: "chatcmpl-1",
+        object: "chat.completion",
+        created: 1,
+        model: "gpt-5.4-mini",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "Here is the workspace overview." },
+            finish_reason: "stop",
+          },
+        ],
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 3,
+          total_tokens: 8,
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const provider = createPrimaryProvider({
+      settings: {
+        provider: "github-copilot",
+        model: "gpt-5.4-mini",
+        providerAuth: {
+          "github-copilot": {
+            oauth: {
+              accessToken: "ghu_saved_device_token",
+              tokenType: "github-device",
+            },
+          },
+        },
+      },
+    });
+
+    const response = await provider.complete([
+      { role: "user", content: "Give me an overview of the workspace" },
+      {
+        role: "assistant",
+        content: "I'll inspect the workspace first.",
+        metadata: {
+          toolCalls: [{
+            id: "call_workspace_read_1",
+            name: "WorkspaceRead",
+            input: {
+              action: "project_structure",
+              path: ".",
+            },
+          }],
+        },
+      },
+      {
+        role: "tool",
+        content: "src/\nREADME.md",
+        toolCallId: "call_workspace_read_1",
+        toolName: "WorkspaceRead",
+      },
+    ]);
+
+    expect(response.text).toBe("Here is the workspace overview.");
+    const requestBody = JSON.parse(requests[1]?.body ?? "{}");
+    expect(requestBody.messages).toHaveLength(3);
+    expect(requestBody.messages[1]).toMatchObject({
+      role: "assistant",
+      content: "I'll inspect the workspace first.",
+      tool_calls: [
+        {
+          id: "call_workspace_read_1",
+          type: "function",
+          function: {
+            name: "WorkspaceRead",
+            arguments: JSON.stringify({ action: "project_structure", path: "." }),
+          },
+        },
+      ],
+    });
+    expect(requestBody.messages[2]).toMatchObject({
+      role: "tool",
+      tool_call_id: "call_workspace_read_1",
+      name: "WorkspaceRead",
+      content: "src/\nREADME.md",
+    });
+  });
 });

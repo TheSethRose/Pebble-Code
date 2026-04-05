@@ -67,12 +67,7 @@ export class PrimaryProvider implements Provider {
     }
 
     try {
-      const openaiMessages = messages.map((m) => ({
-        role: m.role === "assistant" ? "assistant" : m.role === "tool" ? "tool" : m.role === "system" ? "system" : "user" as const,
-        content: m.content,
-        ...(m.toolCallId ? { tool_call_id: m.toolCallId } : {}),
-        ...(m.toolName ? { name: m.toolName } : {}),
-      }));
+      const openaiMessages = mapEngineMessagesToOpenAi(messages);
 
       const tools = options?.tools?.map((t) => ({
         type: "function" as const,
@@ -146,12 +141,7 @@ export class PrimaryProvider implements Provider {
     }
 
     try {
-      const openaiMessages = messages.map((m) => ({
-        role: m.role === "assistant" ? "assistant" : m.role === "tool" ? "tool" : m.role === "system" ? "system" : "user" as const,
-        content: m.content,
-        ...(m.toolCallId ? { tool_call_id: m.toolCallId } : {}),
-        ...(m.toolName ? { name: m.toolName } : {}),
-      }));
+      const openaiMessages = mapEngineMessagesToOpenAi(messages);
 
       const stream = await client.chat.completions.create({
         model: this.model,
@@ -359,4 +349,76 @@ function safeParseJson(value: string): unknown {
   } catch {
     return value;
   }
+}
+
+function mapEngineMessagesToOpenAi(messages: Message[]): Array<Record<string, unknown>> {
+  return messages.flatMap((message) => {
+    if (message.role === "progress") {
+      return [];
+    }
+
+    if (message.role === "assistant") {
+      const toolCalls = extractAssistantToolCalls(message);
+      return [{
+        role: "assistant",
+        content: message.content,
+        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      }];
+    }
+
+    if (message.role === "tool") {
+      return [{
+        role: "tool",
+        content: message.content,
+        ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
+        ...(message.toolName ? { name: message.toolName } : {}),
+      }];
+    }
+
+    return [{
+      role: message.role === "system" ? "system" : "user",
+      content: message.content,
+    }];
+  });
+}
+
+function extractAssistantToolCalls(message: Message): Array<Record<string, unknown>> {
+  const metadataToolCalls = message.metadata?.toolCalls;
+  if (!Array.isArray(metadataToolCalls)) {
+    return [];
+  }
+
+  return metadataToolCalls.flatMap((toolCall) => {
+    if (!toolCall || typeof toolCall !== "object") {
+      return [];
+    }
+
+    const candidate = toolCall as {
+      id?: unknown;
+      name?: unknown;
+      input?: unknown;
+    };
+    const id = typeof candidate.id === "string" ? candidate.id : "";
+    const name = typeof candidate.name === "string" ? candidate.name : "";
+    if (!id || !name) {
+      return [];
+    }
+
+    return [{
+      id,
+      type: "function",
+      function: {
+        name,
+        arguments: serializeToolCallArguments(candidate.input),
+      },
+    }];
+  });
+}
+
+function serializeToolCallArguments(input: unknown): string {
+  if (typeof input === "string") {
+    return input;
+  }
+
+  return JSON.stringify(input ?? {});
 }

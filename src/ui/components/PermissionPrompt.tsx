@@ -31,10 +31,6 @@ export function PermissionPrompt({ pending, width = 60 }: PermissionPromptProps)
       if (choice) pending.resolve(choice.value);
       return;
     }
-    if (key.escape) {
-      pending.resolve("deny");
-      return;
-    }
   });
 
   // Summarise the tool arguments (single line, truncated)

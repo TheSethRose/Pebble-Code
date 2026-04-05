@@ -44,7 +44,8 @@ interface TranscriptRow {
 
 type GroupedItem =
   | { type: "single"; key: string; message: DisplayMessage }
-  | { type: "tool-group"; key: string; call: DisplayMessage; result?: DisplayMessage };
+  | { type: "tool-group"; key: string; call: DisplayMessage; result?: DisplayMessage }
+  | { type: "tool-batch"; key: string; toolName: string; results: DisplayMessage[]; details: string[] };
 
 interface TranscriptMetrics {
   totalRows: number;
@@ -169,6 +170,11 @@ function buildTranscriptRows(
       rows.push({ key: `gap:${group.key}`, segments: [createSpan("")] });
     }
 
+    if (group.type === "tool-batch") {
+      rows.push(...compactToolBatchToRows(group, width, `${group.key}:batch`, blinkPhase));
+      return;
+    }
+
     if (group.type === "tool-group") {
       rows.push(...messageToRows(group.call, width, `${group.key}:call`, {
         toolResolved: Boolean(group.result),
@@ -269,7 +275,183 @@ function groupMessages(messages: DisplayMessage[]): GroupedItem[] {
     index += 1;
   }
 
-  return items;
+  return mergeConsecutiveToolBatches(items);
+}
+
+function mergeConsecutiveToolBatches(items: GroupedItem[]): GroupedItem[] {
+  const merged: GroupedItem[] = [];
+
+  for (const item of items) {
+    const batchCandidate = toToolBatchCandidate(item);
+    if (!batchCandidate) {
+      merged.push(item);
+      continue;
+    }
+
+    const previous = merged[merged.length - 1];
+    if (previous?.type === "tool-batch" && previous.toolName === batchCandidate.toolName) {
+      previous.results.push(...batchCandidate.results);
+      previous.details.push(...batchCandidate.details);
+      continue;
+    }
+
+    merged.push(batchCandidate);
+  }
+
+  return merged;
+}
+
+function toToolBatchCandidate(item: GroupedItem): Extract<GroupedItem, { type: "tool-batch" }> | null {
+  if (item.type === "tool-group") {
+    const result = item.result;
+    if (!result || result.meta?.isError) {
+      return null;
+    }
+
+    return {
+      type: "tool-batch",
+      key: item.key,
+      toolName: result.meta?.toolName ?? item.call.meta?.toolName ?? item.call.content,
+      results: [result],
+      details: compactToolDetails(result),
+    };
+  }
+
+  if (item.type === "single" && item.message.role === "tool_result" && !item.message.meta?.isError) {
+    return {
+      type: "tool-batch",
+      key: item.key,
+      toolName: item.message.meta?.toolName ?? item.message.content,
+      results: [item.message],
+      details: compactToolDetails(item.message),
+    };
+  }
+
+  return null;
+}
+
+function compactToolBatchToRows(
+  group: Extract<GroupedItem, { type: "tool-batch" }>,
+  width: number,
+  keyBase: string,
+  blinkPhase: boolean,
+): TranscriptRow[] {
+  const rows: TranscriptRow[] = [];
+  const countSuffix = group.results.length > 1 ? ` ×${group.results.length}` : "";
+  const detailSuffix = formatCompactToolDetailSuffix(group.details);
+  const truncatedSuffix = group.results.some((result) => result.meta?.truncated) ? " [truncated]" : "";
+
+  pushWrappedRows(
+    rows,
+    keyBase,
+    `${getStatusDot("complete", blinkPhase)} `,
+    "  ",
+    `${group.toolName}${countSuffix}${detailSuffix}${truncatedSuffix}`,
+    width,
+    { color: "green" },
+  );
+
+  return rows;
+}
+
+function formatCompactToolDetailSuffix(details: string[]): string {
+  const uniqueDetails = Array.from(new Set(details.filter((detail) => detail.trim().length > 0)));
+  if (uniqueDetails.length === 0) {
+    return "";
+  }
+
+  const visible = uniqueDetails.slice(0, 3);
+  const remaining = uniqueDetails.length - visible.length;
+  const body = remaining > 0
+    ? `${visible.join(", ")}, +${remaining} more`
+    : visible.join(", ");
+
+  return ` (${body})`;
+}
+
+function compactToolDetails(message: DisplayMessage): string[] {
+  const fromArgs = compactToolDetailFromArgs(message.meta?.toolArgs);
+  if (fromArgs.length > 0) {
+    return fromArgs;
+  }
+
+  const summary = typeof message.meta?.summary === "string"
+    ? compactInlineText(message.meta.summary, 48)
+    : undefined;
+  if (summary) {
+    return [summary];
+  }
+
+  const output = typeof message.meta?.toolOutput === "string"
+    ? compactToolDetailFromOutput(message.meta.toolOutput)
+    : [];
+  return output;
+}
+
+function compactToolDetailFromArgs(args: Record<string, unknown> | undefined): string[] {
+  if (!args) {
+    return [];
+  }
+
+  const preferredKeys = [
+    "path",
+    "file_path",
+    "filePath",
+    "dir_path",
+    "dirPath",
+    "includePattern",
+    "include_pattern",
+    "pattern",
+    "query",
+    "command",
+    "url",
+  ] as const;
+
+  for (const key of preferredKeys) {
+    const value = args[key];
+    if (typeof value !== "string" || value.trim().length === 0) {
+      continue;
+    }
+
+    if (key === "command" || key === "query" || key === "pattern" || key === "url") {
+      return [compactInlineText(value, 48)];
+    }
+
+    return [compactPathText(value)];
+  }
+
+  return [];
+}
+
+function compactToolDetailFromOutput(output: string): string[] {
+  const lines = output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .slice(0, 3);
+
+  return lines.map((line) => compactPathText(line));
+}
+
+function compactPathText(value: string): string {
+  const trimmed = value.trim().replace(/[\\/]+$/u, "");
+  if (trimmed === "." || trimmed === "..") {
+    return trimmed;
+  }
+
+  const normalized = trimmed.replace(/\\/g, "/");
+  const segments = normalized.split("/").filter(Boolean);
+  const basename = segments[segments.length - 1] ?? normalized;
+  return compactInlineText(basename || normalized, 48);
+}
+
+function compactInlineText(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, Math.max(1, maxLength - 1))}…`;
 }
 
 function messageToRows(
@@ -360,19 +542,18 @@ function messageToRows(
       const isError = meta?.isError ?? false;
       const marker = `${getStatusDot(isError ? "failed" : "complete", blinkPhase)} `;
       const toolName = meta?.toolName ?? "tool";
-      const durationSuffix = typeof meta?.durationMs === "number" ? ` (${meta.durationMs} ms)` : "";
       const truncatedSuffix = meta?.truncated ? " [truncated]" : "";
       pushWrappedRows(
         rows,
         keyBase,
         marker,
         "  ",
-        `${toolName} ${isError ? "failed" : "done"}${durationSuffix}${truncatedSuffix}`,
+        `${toolName} ${isError ? "failed" : "done"}${truncatedSuffix}`,
         width,
         { color: isError ? "red" : "green" },
       );
 
-      if (!collapseDetails && meta?.toolOutput) {
+      if (isError && meta?.toolOutput) {
         pushWrappedRows(
           rows,
           `${keyBase}:output`,
@@ -384,7 +565,7 @@ function messageToRows(
         );
       }
 
-      if (!collapseDetails && meta?.summary && meta.summary !== meta.toolOutput) {
+      if (isError && !collapseDetails && meta?.summary && meta.summary !== meta.toolOutput) {
         pushWrappedRows(rows, `${keyBase}:summary`, "  ", "  ", meta.summary, width, { color: "#888888" });
       }
 
