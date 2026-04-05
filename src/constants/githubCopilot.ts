@@ -1,4 +1,4 @@
-export const GITHUB_COPILOT_DEVICE_CLIENT_ID = "Iv1.b507a08c87ecfe98";
+export const GITHUB_COPILOT_DEVICE_CLIENT_ID = "01ab8ac9400c4e429b23";
 export const GITHUB_COPILOT_DEVICE_CODE_URL = "https://github.com/login/device/code";
 export const GITHUB_COPILOT_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
 export const GITHUB_COPILOT_TOKEN_EXCHANGE_URL = "https://api.github.com/copilot_internal/v2/token";
@@ -6,6 +6,7 @@ export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilo
 export const COPILOT_EDITOR_VERSION = "vscode/1.96.2";
 export const COPILOT_USER_AGENT = "GitHubCopilotChat/0.26.7";
 export const COPILOT_GITHUB_API_VERSION = "2025-04-01";
+export const GITHUB_COPILOT_DEVICE_SCOPE = "read:user user:email repo workflow";
 
 export function buildCopilotIdeHeaders(options: {
   includeApiVersion?: boolean;

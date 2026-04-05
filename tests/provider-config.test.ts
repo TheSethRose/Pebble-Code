@@ -102,6 +102,25 @@ describe("provider config resolution", () => {
     expect(resolved.requestHeaders["Editor-Version"]).toBeDefined();
   });
 
+  test("prefers the saved OAuth session over a stale saved credential for GitHub Copilot", () => {
+    const resolved = resolveProviderConfig({
+      provider: "github-copilot",
+      providerAuth: {
+        "github-copilot": {
+          credential: "sk-or-v1-stale-openrouter-token",
+          oauth: {
+            accessToken: "ghu_copilot_device_token",
+            tokenType: "github-device",
+          },
+        },
+      },
+    });
+
+    expect(resolved.apiKey).toBe("ghu_copilot_device_token");
+    expect(resolved.apiKeySource).toBe("settings");
+    expect(resolved.runtimeReady).toBe(true);
+  });
+
   const promotedProviders = [
     {
       provider: "huggingface",

@@ -13,7 +13,11 @@ import {
   OPENROUTER_DEFAULT_MODEL,
   OPENROUTER_PROVIDER_ID,
 } from "../constants/openrouter.js";
-import { applyProviderDefaults, normalizeProviderId } from "../providers/catalog.js";
+import {
+  applyProviderDefaults,
+  getBuiltinProviderDefinition,
+  normalizeProviderId,
+} from "../providers/catalog.js";
 import type { McpServerConfig } from "../extensions/contracts.js";
 import { buildTrustConfig } from "./trust";
 import type { TrustConfig, PermissionMode } from "./permissions";
@@ -160,8 +164,9 @@ function normalizeSettingsInput(settings: SettingsInput): SettingsInput {
   const normalizedProviderAuth = normalizeProviderCredentialMap(settings.providerAuth);
   const legacyApiKey = typeof settings.apiKey === "string" ? settings.apiKey.trim() : "";
   const normalizedProvider = normalizeProviderId(settings.provider);
+  const providerDefinition = getBuiltinProviderDefinition(normalizedProvider);
 
-  if (!legacyApiKey) {
+  if (!legacyApiKey || providerDefinition?.authKind === "oauth") {
     return {
       ...settings,
       providerAuth: normalizedProviderAuth,
@@ -194,6 +199,23 @@ export function getStoredProviderCredential(
   }
 
   return undefined;
+}
+
+export function getStoredProviderAuthToken(
+  settings: Partial<Settings> = {},
+  provider?: string,
+): string | undefined {
+  const normalizedProvider = normalizeProviderId(provider ?? settings.provider);
+  const providerDefinition = getBuiltinProviderDefinition(normalizedProvider);
+  const storedCredential = getStoredProviderCredential(settings, normalizedProvider);
+  const oauthSession = getStoredProviderOAuthSession(settings, normalizedProvider);
+  const oauthToken = oauthSession?.accessToken?.trim() || oauthSession?.refreshToken?.trim() || undefined;
+
+  if (providerDefinition?.authKind === "oauth") {
+    return oauthToken || storedCredential;
+  }
+
+  return storedCredential || oauthToken;
 }
 
 export function getStoredProviderOAuthSession(
@@ -264,10 +286,24 @@ export function setStoredProviderOAuthSession(
   };
 }
 
+export function clearStoredProviderAuth(
+  settings: Settings,
+  provider: string,
+): Settings {
+  const normalizedProvider = normalizeProviderId(provider);
+  const nextProviderAuth = { ...(settings.providerAuth ?? {}) };
+  delete nextProviderAuth[normalizedProvider];
+
+  return synchronizeActiveProviderCredential({
+    ...settings,
+    providerAuth: Object.keys(nextProviderAuth).length > 0 ? nextProviderAuth : undefined,
+  });
+}
+
 function synchronizeActiveProviderCredential(settings: Settings): Settings {
   return {
     ...settings,
-    apiKey: getStoredProviderCredential(settings, settings.provider),
+    apiKey: getStoredProviderAuthToken(settings, settings.provider),
   };
 }
 

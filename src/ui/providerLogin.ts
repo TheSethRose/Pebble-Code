@@ -4,7 +4,7 @@ import {
 } from "../providers/catalog.js";
 import { runGitHubCopilotDeviceLogin } from "../providers/githubCopilot.js";
 import {
-  getStoredProviderCredential,
+  getStoredProviderAuthToken,
   getStoredProviderOAuthSession,
   setStoredProviderOAuthSession,
   type Settings,
@@ -17,10 +17,7 @@ import {
 
 export function ensureSettingsProviderDefaults(settings: Settings): Settings {
   const withDefaults = applyProviderDefaults(settings);
-  const oauthSession = getStoredProviderOAuthSession(withDefaults, withDefaults.provider);
-  const activeCredential = getStoredProviderCredential(withDefaults, withDefaults.provider)
-    ?? oauthSession?.accessToken?.trim()
-    ?? oauthSession?.refreshToken?.trim();
+  const activeCredential = getStoredProviderAuthToken(withDefaults, withDefaults.provider);
 
   if (withDefaults.provider === OPENROUTER_PROVIDER_ID) {
     return {
@@ -49,6 +46,7 @@ export async function runSettingsProviderLogin(params: {
   settings: Settings;
   writeLine?: (line: string) => void;
   fetchImpl?: typeof fetch;
+  openExternalUrl?: (url: string) => Promise<boolean> | boolean;
 }): Promise<SettingsProviderLoginResult> {
   const providerId = normalizeProviderId(params.providerId);
   const currentSettings = params.settings;
@@ -59,6 +57,7 @@ export async function runSettingsProviderLogin(params: {
       const oauth = await runGitHubCopilotDeviceLogin({
         fetchImpl: params.fetchImpl,
         writeLine: params.writeLine,
+        openExternalUrl: params.openExternalUrl,
       });
 
       const nextSettings = ensureSettingsProviderDefaults(

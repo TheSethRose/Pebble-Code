@@ -5,8 +5,13 @@ import {
   GITHUB_COPILOT_ACCESS_TOKEN_URL,
   GITHUB_COPILOT_DEVICE_CLIENT_ID,
   GITHUB_COPILOT_DEVICE_CODE_URL,
+  GITHUB_COPILOT_DEVICE_SCOPE,
   GITHUB_COPILOT_TOKEN_EXCHANGE_URL,
 } from "../constants/githubCopilot.js";
+import {
+  getGitHubCopilotDebugLogPath,
+  logGitHubCopilotDebug,
+} from "./githubCopilotDebug.js";
 
 type DeviceCodeResponse = {
   device_code: string;
@@ -42,18 +47,32 @@ function parseJsonResponse<T>(value: unknown, errorMessage: string): T {
 }
 
 async function requestGitHubDeviceCode(fetchImpl: typeof fetch): Promise<DeviceCodeResponse> {
-  const body = new URLSearchParams({
+  const body = JSON.stringify({
     client_id: GITHUB_COPILOT_DEVICE_CLIENT_ID,
-    scope: "read:user",
+    scope: GITHUB_COPILOT_DEVICE_SCOPE,
+  });
+
+  logGitHubCopilotDebug("device_code_request", {
+    url: GITHUB_COPILOT_DEVICE_CODE_URL,
+    clientId: GITHUB_COPILOT_DEVICE_CLIENT_ID,
+    scope: GITHUB_COPILOT_DEVICE_SCOPE,
   });
 
   const response = await fetchImpl(GITHUB_COPILOT_DEVICE_CODE_URL, {
     method: "POST",
     headers: {
       Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Type": "application/json",
     },
     body,
+  });
+
+  const responseText = await response.text();
+  logGitHubCopilotDebug("device_code_response", {
+    url: GITHUB_COPILOT_DEVICE_CODE_URL,
+    status: response.status,
+    statusText: response.statusText,
+    body: responseText,
   });
 
   if (!response.ok) {
@@ -61,7 +80,7 @@ async function requestGitHubDeviceCode(fetchImpl: typeof fetch): Promise<DeviceC
   }
 
   const payload = parseJsonResponse<DeviceCodeResponse>(
-    await response.json(),
+    JSON.parse(responseText),
     "Unexpected response from GitHub device-code endpoint",
   );
 
@@ -82,20 +101,33 @@ async function pollForGitHubAccessToken(params: {
   intervalMs: number;
   expiresAt: number;
 }): Promise<string> {
-  const body = new URLSearchParams({
-    client_id: GITHUB_COPILOT_DEVICE_CLIENT_ID,
-    device_code: params.deviceCode,
-    grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-  });
-
   while (Date.now() < params.expiresAt) {
+    const body = JSON.stringify({
+      client_id: GITHUB_COPILOT_DEVICE_CLIENT_ID,
+      device_code: params.deviceCode,
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+    });
+
+    logGitHubCopilotDebug("device_token_poll_request", {
+      url: GITHUB_COPILOT_ACCESS_TOKEN_URL,
+      clientId: GITHUB_COPILOT_DEVICE_CLIENT_ID,
+    });
+
     const response = await params.fetchImpl(GITHUB_COPILOT_ACCESS_TOKEN_URL, {
       method: "POST",
       headers: {
         Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Type": "application/json",
       },
       body,
+    });
+
+    const responseText = await response.text();
+    logGitHubCopilotDebug("device_token_poll_response", {
+      url: GITHUB_COPILOT_ACCESS_TOKEN_URL,
+      status: response.status,
+      statusText: response.statusText,
+      body: responseText,
     });
 
     if (!response.ok) {
@@ -103,15 +135,26 @@ async function pollForGitHubAccessToken(params: {
     }
 
     const payload = parseJsonResponse<DeviceTokenResponse>(
-      await response.json(),
+      JSON.parse(responseText),
       "Unexpected response from GitHub access-token endpoint",
     );
 
     if ("access_token" in payload && typeof payload.access_token === "string") {
+      logGitHubCopilotDebug("device_token_acquired", {
+        tokenType: payload.token_type,
+        scope: payload.scope ?? null,
+      });
       return payload.access_token;
     }
 
     const errorCode = "error" in payload ? payload.error : "unknown";
+    if (errorCode !== "authorization_pending") {
+      logGitHubCopilotDebug("device_token_poll_state", {
+        error: errorCode,
+        description: "error_description" in payload ? payload.error_description ?? null : null,
+      });
+    }
+
     if (errorCode === "authorization_pending") {
       await waitFor(params.intervalMs);
       continue;
@@ -171,14 +214,23 @@ function parseCopilotTokenExchangeResponse(value: unknown): {
 export async function runGitHubCopilotDeviceLogin(options: {
   fetchImpl?: typeof fetch;
   writeLine?: (line: string) => void;
+  openExternalUrl?: (url: string) => Promise<boolean> | boolean;
 } = {}): Promise<{ githubToken: string }> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const writeLine = options.writeLine ?? (() => {});
   const device = await requestGitHubDeviceCode(fetchImpl);
+  const browserOpened = device.verification_uri
+    ? await options.openExternalUrl?.(device.verification_uri) ?? false
+    : false;
+
+  logGitHubCopilotDebug("device_browser_open", {
+    verificationUri: device.verification_uri,
+    opened: browserOpened,
+  });
 
   writeLine("");
   writeLine("GitHub Copilot device login");
-  writeLine(`Open ${device.verification_uri}`);
+  writeLine(browserOpened ? `Opened browser: ${device.verification_uri}` : `Open ${device.verification_uri}`);
   writeLine(`Enter code: ${device.user_code}`);
   writeLine("Waiting for GitHub authorization...");
 
@@ -187,6 +239,12 @@ export async function runGitHubCopilotDeviceLogin(options: {
   const githubToken = await pollForGitHubAccessToken({
     fetchImpl,
     deviceCode: device.device_code,
+    intervalMs,
+    expiresAt,
+  });
+
+  logGitHubCopilotDebug("device_login_complete", {
+    verificationUri: device.verification_uri,
     intervalMs,
     expiresAt,
   });
@@ -204,24 +262,56 @@ export async function resolveGitHubCopilotRuntimeAuth(params: {
 }> {
   const githubToken = params.githubToken.trim();
   if (!githubToken) {
+    logGitHubCopilotDebug("runtime_token_exchange_missing_token", {
+      url: GITHUB_COPILOT_TOKEN_EXCHANGE_URL,
+    });
     throw new Error("GitHub Copilot is missing its GitHub access token. Run /login github-copilot.");
   }
 
   const fetchImpl = params.fetchImpl ?? fetch;
-  const response = await fetchImpl(GITHUB_COPILOT_TOKEN_EXCHANGE_URL, {
-    method: "GET",
+  logGitHubCopilotDebug("runtime_token_exchange_request", {
+    url: GITHUB_COPILOT_TOKEN_EXCHANGE_URL,
     headers: {
       Accept: "application/json",
-      Authorization: `Bearer ${githubToken}`,
+      Authorization: `token ${githubToken}`,
       ...buildCopilotIdeHeaders({ includeApiVersion: true }),
     },
   });
 
+  const response = await fetchImpl(GITHUB_COPILOT_TOKEN_EXCHANGE_URL, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `token ${githubToken}`,
+      ...buildCopilotIdeHeaders({ includeApiVersion: true }),
+    },
+  });
+
+  const responseText = await response.text();
+  logGitHubCopilotDebug("runtime_token_exchange_response", {
+    url: GITHUB_COPILOT_TOKEN_EXCHANGE_URL,
+    status: response.status,
+    statusText: response.statusText,
+    body: responseText,
+    scopes: response.headers.get("x-oauth-scopes"),
+    acceptedScopes: response.headers.get("x-accepted-oauth-scopes"),
+  });
+
   if (!response.ok) {
-    throw new Error(`Copilot token exchange failed: HTTP ${response.status}`);
+    if (response.status === 401) {
+      throw new Error(
+        `Copilot token exchange failed: HTTP 401. See ${getGitHubCopilotDebugLogPath()} for details, then run /login github-copilot again to refresh your GitHub session.`,
+      );
+    }
+
+    throw new Error(`Copilot token exchange failed: HTTP ${response.status}. See ${getGitHubCopilotDebugLogPath()} for details.`);
   }
 
-  const payload = parseCopilotTokenExchangeResponse(await response.json());
+  const payload = parseCopilotTokenExchangeResponse(JSON.parse(responseText));
+  logGitHubCopilotDebug("runtime_token_exchange_success", {
+    expiresAt: payload.expiresAt,
+    derivedBaseUrl: deriveCopilotApiBaseUrlFromToken(payload.token) ?? DEFAULT_COPILOT_API_BASE_URL,
+  });
   return {
     apiKey: payload.token,
     baseUrl: deriveCopilotApiBaseUrlFromToken(payload.token) ?? DEFAULT_COPILOT_API_BASE_URL,

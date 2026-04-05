@@ -24,6 +24,7 @@ function createCommandContext(overrides: Partial<CommandContext> = {}): CommandC
     headless: false,
     config: {},
     trustLevel: "trusted",
+    openExternalUrl: async () => false,
     ...overrides,
   };
 }
@@ -68,6 +69,7 @@ describe("Command Registry", () => {
     expect(registry.find("clear")).toBeDefined();
     expect(registry.find("config")).toBeDefined();
     expect(registry.find("login")).toBeDefined();
+    expect(registry.find("logout")).toBeDefined();
     expect(registry.find("model")).toBeDefined();
     expect(registry.find("resume")).toBeDefined();
     expect(registry.find("memory")).toBeDefined();
@@ -84,6 +86,7 @@ describe("Command Registry", () => {
     expect(registry.find("quit")).toBeDefined();
     expect(registry.find("cls")).toBeDefined();
     expect(registry.find("m")).toBeDefined();
+    expect(registry.find("signout")).toBeDefined();
   });
 
   test("detects command input", () => {
@@ -330,6 +333,7 @@ describe("Command Registry", () => {
 
     const tempDir = createTempProjectDir("pebble-command-copilot-login-");
     const writes: string[] = [];
+    const openedUrls: string[] = [];
     let fetchCall = 0;
 
     process.stdout.write = ((chunk: string | Uint8Array) => {
@@ -372,6 +376,10 @@ describe("Command Registry", () => {
     const result = await registry.execute("login", "github-copilot", createCommandContext({
       cwd: tempDir,
       config: { provider: "github-copilot" },
+      openExternalUrl: async (url) => {
+        openedUrls.push(url);
+        return true;
+      },
     }));
 
     globalThis.fetch = previousFetch;
@@ -380,7 +388,9 @@ describe("Command Registry", () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain("Saved OAuth session for github-copilot");
     expect(writes.join(" ")).toContain("GitHub Copilot device login");
+    expect(writes.join(" ")).toContain("Opened browser:");
     expect(writes.join(" ")).toContain("ABCD-EFGH");
+    expect(openedUrls).toEqual(["https://github.com/login/device"]);
 
     const settingsPath = getSettingsPath(tempDir);
     const saved = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
@@ -417,6 +427,164 @@ describe("Command Registry", () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain("cannot be configured with a pasted");
     expect(existsSync(getSettingsPath(tempDir))).toBe(false);
+  });
+
+  test("/logout lists providers with stored auth when no provider is specified", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-logout-list-");
+    writeFileSync(
+      getSettingsPath(tempDir),
+      JSON.stringify({
+        providerAuth: {
+          openrouter: {
+            credential: "sk-or-v1-test-key",
+          },
+          "github-copilot": {
+            oauth: {
+              accessToken: "ghu_copilot_login_token",
+              tokenType: "github-device",
+            },
+          },
+        },
+      }, null, 2),
+      "utf-8",
+    );
+
+    const result = await registry.execute("logout", "", createCommandContext({ cwd: tempDir }));
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Stored provider auth:");
+    expect(result.output).toContain("openrouter (OpenRouter)");
+    expect(result.output).toContain("github-copilot (GitHub Copilot)");
+    expect(result.output).toContain("Use /logout <provider>");
+  });
+
+  test("/logout clears stored auth for the selected providers", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-logout-clear-");
+    writeFileSync(
+      getSettingsPath(tempDir),
+      JSON.stringify({
+        provider: "github-copilot",
+        providerAuth: {
+          openrouter: {
+            credential: "sk-or-v1-test-key",
+          },
+          "github-copilot": {
+            credential: "stale-token",
+            oauth: {
+              accessToken: "ghu_copilot_login_token",
+              tokenType: "github-device",
+            },
+          },
+        },
+      }, null, 2),
+      "utf-8",
+    );
+
+    const result = await registry.execute("logout", "github-copilot", createCommandContext({ cwd: tempDir }));
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Cleared saved auth for github-copilot");
+
+    const saved = JSON.parse(readFileSync(getSettingsPath(tempDir), "utf-8")) as {
+      provider?: string;
+      providerAuth?: Record<string, {
+        credential?: string;
+        oauth?: { accessToken?: string };
+      }>;
+    };
+
+    expect(saved.provider).toBe("github-copilot");
+    expect(saved.providerAuth?.openrouter?.credential).toBe("sk-or-v1-test-key");
+    expect(saved.providerAuth?.["github-copilot"]).toBeUndefined();
+
+    const loaded = loadSettingsForCwd(tempDir);
+    expect(loaded.apiKey).toBeUndefined();
+    expect(loaded.provider).toBe("github-copilot");
+  });
+
+  test("/login github-copilot does not persist the previous provider credential under github-copilot", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-copilot-switch-");
+    writeFileSync(
+      getSettingsPath(tempDir),
+      JSON.stringify({
+        provider: "openrouter",
+        providerAuth: {
+          openrouter: {
+            credential: "sk-or-v1-test-key",
+          },
+        },
+      }, null, 2),
+      "utf-8",
+    );
+
+    const previousStdoutWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    const previousFetch = globalThis.fetch;
+    let fetchCall = 0;
+
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      fetchCall += 1;
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+
+      if (fetchCall === 1) {
+        expect(url).toBe("https://github.com/login/device/code");
+        return new Response(JSON.stringify({
+          device_code: "device-code",
+          user_code: "ABCD-EFGH",
+          verification_uri: "https://github.com/login/device",
+          expires_in: 900,
+          interval: 0,
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      expect(url).toBe("https://github.com/login/oauth/access_token");
+      return new Response(JSON.stringify({
+        access_token: "ghu_copilot_login_token",
+        token_type: "bearer",
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const result = await registry.execute("login", "github-copilot", createCommandContext({
+      cwd: tempDir,
+      config: { provider: "github-copilot" },
+    }));
+
+    globalThis.fetch = previousFetch;
+    process.stdout.write = previousStdoutWrite;
+
+    expect(result.success).toBe(true);
+
+    const saved = JSON.parse(readFileSync(getSettingsPath(tempDir), "utf-8")) as {
+      provider?: string;
+      providerAuth?: Record<string, {
+        credential?: string;
+        oauth?: { accessToken?: string; tokenType?: string };
+      }>;
+    };
+
+    expect(saved.provider).toBe("github-copilot");
+    expect(saved.providerAuth?.openrouter?.credential).toBe("sk-or-v1-test-key");
+    expect(saved.providerAuth?.["github-copilot"]?.credential).toBeUndefined();
+    expect(saved.providerAuth?.["github-copilot"]?.oauth?.accessToken).toBe("ghu_copilot_login_token");
   });
 
   test("migrates legacy workspace settings into ~/.pebble and deletes the leaked copy", () => {

@@ -46,6 +46,8 @@ export interface CommandContext {
   hookRegistry?: HookRegistry;
   /** Combined repository instructions and injected skill instructions */
   systemPrompt?: string;
+  /** Optional URL opener for browser/device auth flows */
+  openExternalUrl?: (url: string) => Promise<boolean> | boolean;
 }
 
 /**

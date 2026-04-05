@@ -43,6 +43,7 @@ import {
 } from "./providerModels.js";
 import {
   getInitialSettingsModelPhase,
+  resolveSettingsPostProviderSelectionNavigation,
   resolveSettingsPostLoginNavigation,
   type SettingsAuthReturnTarget,
   type SettingsModelResumeTarget,
@@ -394,11 +395,13 @@ function ProviderTab({
   settings,
   onSave,
   onOpenAuth,
+  onOpenModelList,
 }: {
   context: CommandContext;
   settings: Settings;
   onSave: (s: Settings) => void;
   onOpenAuth: (followUp: ProviderAuthFollowUp, returnTarget?: SettingsAuthReturnTarget) => void;
+  onOpenModelList: (message?: string) => void;
 }) {
   const [message, setMessage] = useState("");
   const [showManual, setShowManual] = useState(false);
@@ -443,14 +446,28 @@ function ProviderTab({
         setShowManual(true);
         return;
       }
+
       const provider = normalizeProviderId(value);
+      const providerLabel = getBuiltinProviderDefinition(provider)?.label ?? provider;
+
       if (provider === settings.provider) {
         const followUp = getProviderSelectionAuthFollowUp(settings, provider);
-        if (followUp) {
-          onOpenAuth(followUp, { tab: "provider" });
+        const navigation = resolveSettingsPostProviderSelectionNavigation({
+          providerId: provider,
+          providerLabel,
+          requiresAuth: Boolean(followUp),
+          providerWasChanged: false,
+        });
+
+        if (followUp && navigation.authReturnTarget) {
+          onOpenAuth(followUp, navigation.authReturnTarget);
+          return;
         }
+
+        onOpenModelList(navigation.modelResumeTarget?.message);
         return;
       }
+
       const next = ensureSettingsProviderDefaults({
         ...settings,
         provider,
@@ -458,14 +475,23 @@ function ProviderTab({
         baseUrl: undefined,
       });
       onSave(next);
+
       const followUp = getProviderSelectionAuthFollowUp(next, provider);
-      if (followUp) {
-        onOpenAuth(followUp, { tab: "provider" });
+      const navigation = resolveSettingsPostProviderSelectionNavigation({
+        providerId: provider,
+        providerLabel,
+        requiresAuth: Boolean(followUp),
+        providerWasChanged: true,
+      });
+
+      if (followUp && navigation.authReturnTarget) {
+        onOpenAuth(followUp, navigation.authReturnTarget);
         return;
       }
-      setMessage(`Provider set to ${provider}`);
+
+      onOpenModelList(navigation.modelResumeTarget?.message);
     },
-    [onOpenAuth, onSave, settings],
+    [onOpenAuth, onOpenModelList, onSave, settings],
   );
 
   const handleManualSubmit = useCallback(
@@ -475,6 +501,7 @@ function ProviderTab({
         setMessage("Provider ID cannot be empty");
         return;
       }
+
       const next = ensureSettingsProviderDefaults({
         ...settings,
         provider,
@@ -482,14 +509,24 @@ function ProviderTab({
         baseUrl: undefined,
       });
       onSave(next);
+
       const followUp = getProviderSelectionAuthFollowUp(next, provider);
-      if (followUp) {
-        onOpenAuth(followUp, { tab: "provider" });
+      const providerLabel = getBuiltinProviderDefinition(provider)?.label ?? provider;
+      const navigation = resolveSettingsPostProviderSelectionNavigation({
+        providerId: provider,
+        providerLabel,
+        requiresAuth: Boolean(followUp),
+        providerWasChanged: true,
+      });
+
+      if (followUp && navigation.authReturnTarget) {
+        onOpenAuth(followUp, navigation.authReturnTarget);
         return;
       }
-      setMessage(`Provider set to ${provider}`);
+
+      onOpenModelList(navigation.modelResumeTarget?.message);
     },
-    [onOpenAuth, onSave, settings],
+    [onOpenAuth, onOpenModelList, onSave, settings],
   );
 
   return (
@@ -1202,6 +1239,17 @@ export function Settings({
     setActiveTab("api-key");
   }, []);
 
+  const openModelTab = useCallback((message?: string) => {
+    setAuthFollowUp(null);
+    setAuthReturnTarget(null);
+    setModelResumeTarget({
+      nonce: Date.now(),
+      phase: "model",
+      message,
+    });
+    setActiveTab("model");
+  }, []);
+
   const runProviderLogin = useCallback(async (providerId: string) => {
     if (activeProviderLoginRef.current === providerId) {
       return;
@@ -1318,6 +1366,7 @@ export function Settings({
             settings={settings}
             onSave={handleSave}
             onOpenAuth={openAuthTab}
+            onOpenModelList={openModelTab}
           />
         )}
         {activeTab === "model" && (

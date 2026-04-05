@@ -17,6 +17,7 @@ import {
   type Settings,
 } from "../../runtime/config.js";
 import { resolveGitHubCopilotRuntimeAuth } from "../githubCopilot.js";
+import { logGitHubCopilotDebug } from "../githubCopilotDebug.js";
 
 /**
  * Primary provider adapter.
@@ -286,10 +287,26 @@ export class PrimaryProvider implements Provider {
   }> {
     if (this.config.providerId === "github-copilot") {
       const oauthSession = getStoredProviderOAuthSession(this.settings, this.config.providerId);
-      const githubToken = this.config.apiKey.trim()
-        || oauthSession?.accessToken?.trim()
-        || oauthSession?.refreshToken?.trim()
+      const oauthAccessToken = oauthSession?.accessToken?.trim() || "";
+      const oauthRefreshToken = oauthSession?.refreshToken?.trim() || "";
+      const fallbackConfigToken = this.config.apiKey.trim();
+      const githubToken = oauthAccessToken
+        || oauthRefreshToken
+        || fallbackConfigToken
         || "";
+      logGitHubCopilotDebug("prepare_client_config", {
+        providerId: this.config.providerId,
+        model: this.model,
+        hasOauthSession: Boolean(oauthSession),
+        oauthTokenType: oauthSession?.tokenType ?? null,
+        tokenSource: oauthAccessToken
+          ? "oauth.accessToken"
+          : oauthRefreshToken
+            ? "oauth.refreshToken"
+            : fallbackConfigToken
+              ? "config.apiKey"
+              : "missing",
+      });
       const resolved = await resolveGitHubCopilotRuntimeAuth({ githubToken });
       return {
         apiKey: resolved.apiKey,

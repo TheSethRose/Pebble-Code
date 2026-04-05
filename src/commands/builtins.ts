@@ -22,6 +22,8 @@ import {
 } from "../persistence/memory.js";
 import { createProjectSessionStore } from "../persistence/runtimeSessions.js";
 import {
+  clearStoredProviderAuth,
+  getStoredProviderAuthToken,
   getStoredProviderOAuthSession,
   getStoredProviderCredential,
   getSettingsPath,
@@ -32,6 +34,7 @@ import {
   type Settings,
 } from "../runtime/config.js";
 import { findProjectRoot } from "../runtime/trust.js";
+import { openExternalUrl } from "../runtime/openExternalUrl.js";
 import { runGitHubCopilotDeviceLogin } from "../providers/githubCopilot.js";
 
 /**
@@ -42,6 +45,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register(createClearCommand());
   registry.register(createExitCommand());
   registry.register(createLoginCommand());
+  registry.register(createLogoutCommand());
   registry.register(createConfigCommand());
   registry.register(createProviderCommand());
   registry.register(createPermissionsCommand());
@@ -80,7 +84,7 @@ function saveProjectSettings(ctx: CommandContext, settings: Settings): string {
 
 function ensureProviderDefaults(settings: Settings): Settings {
   const withDefaults = applyProviderDefaults(settings);
-  const activeCredential = getStoredProviderCredential(withDefaults, withDefaults.provider);
+  const activeCredential = getStoredProviderAuthToken(withDefaults, withDefaults.provider);
   if (withDefaults.provider === OPENROUTER_PROVIDER_ID) {
     return {
       ...withDefaults,
@@ -248,7 +252,13 @@ function createLoginCommand(): Command {
           }
         };
 
-        const oauth = await runGitHubCopilotDeviceLogin({ writeLine });
+        const oauth = await runGitHubCopilotDeviceLogin({
+          writeLine,
+          openExternalUrl: async (url) => {
+            const opener = ctx.openExternalUrl ?? openExternalUrl;
+            return await opener(url);
+          },
+        });
         const nextSettings = ensureProviderDefaults(
           setStoredProviderOAuthSession(
             {
@@ -307,6 +317,98 @@ function createLoginCommand(): Command {
         `Saved ${getProviderCredentialLabel(definition)} for ${nextSettings.provider} to ${settingsPath}.${implementationNote}`,
         settingsPath,
       );
+    },
+  };
+}
+
+function createLogoutCommand(): Command {
+  return {
+    name: "logout",
+    aliases: ["signout"],
+    description: "Clear saved provider authentication",
+    type: "local",
+    usage: "/logout [provider ...]",
+    modes: ["interactive"],
+    execute: (args, ctx): CommandResult => {
+      const settings = loadProjectSettings(ctx);
+      const storedProviders = Object.entries(settings.providerAuth ?? {})
+        .flatMap(([providerId, auth]) => {
+          const hasCredential = Boolean(auth.credential?.trim());
+          const hasOauth = Boolean(auth.oauth?.accessToken?.trim() || auth.oauth?.refreshToken?.trim());
+
+          if (!hasCredential && !hasOauth) {
+            return [];
+          }
+
+          const definition = getBuiltinProviderDefinition(providerId);
+          const authModes = [
+            ...(hasOauth ? ["OAuth session"] : []),
+            ...(hasCredential ? [getProviderCredentialLabel(definition)] : []),
+          ];
+
+          return [{
+            providerId,
+            label: definition?.label ?? providerId,
+            authModes,
+          }];
+        })
+        .sort((left, right) => left.providerId.localeCompare(right.providerId));
+
+      const trimmedArgs = args.trim();
+      const selectedProviders = trimmedArgs
+        ? [...new Set(trimmedArgs.split(/\s+/).map((value) => normalizeProviderId(value)).filter(Boolean))]
+        : [];
+
+      if (selectedProviders.length === 0) {
+        if (storedProviders.length === 0) {
+          return {
+            success: true,
+            output: `No stored provider auth found in ${getSettingsPath(ctx.cwd)}.`,
+          };
+        }
+
+        return {
+          success: true,
+          output: [
+            "Stored provider auth:",
+            ...storedProviders.map((provider) => `- ${provider.providerId} (${provider.label}) — ${provider.authModes.join(" + ")}`),
+            "Use /logout <provider> [provider...] to clear one or more saved auth entries.",
+          ].join("\n"),
+        };
+      }
+
+      let nextSettings = settings;
+      const clearedProviders: string[] = [];
+      const missingProviders: string[] = [];
+
+      for (const providerId of selectedProviders) {
+        const hasStoredAuth = Boolean(settings.providerAuth?.[providerId]?.credential?.trim()
+          || settings.providerAuth?.[providerId]?.oauth?.accessToken?.trim()
+          || settings.providerAuth?.[providerId]?.oauth?.refreshToken?.trim());
+
+        if (!hasStoredAuth) {
+          missingProviders.push(providerId);
+          continue;
+        }
+
+        nextSettings = ensureProviderDefaults(clearStoredProviderAuth(nextSettings, providerId));
+        clearedProviders.push(providerId);
+      }
+
+      if (clearedProviders.length === 0) {
+        return {
+          success: true,
+          output: `No stored auth found for: ${missingProviders.join(", ")}.`,
+        };
+      }
+
+      const settingsPath = saveProjectSettings(ctx, nextSettings);
+      const output = [
+        `Cleared saved auth for ${clearedProviders.join(", ")} in ${settingsPath}.`,
+        ...(missingProviders.length > 0 ? [`No stored auth found for: ${missingProviders.join(", ")}.`] : []),
+      ].join(" ");
+
+      return createConfigUpdatedResult(output, settingsPath);
     },
   };
 }

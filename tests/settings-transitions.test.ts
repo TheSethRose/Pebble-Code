@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   getInitialSettingsModelPhase,
+  resolveSettingsPostProviderSelectionNavigation,
   resolveSettingsPostLoginNavigation,
 } from "../src/ui/settingsTransitions";
 
@@ -32,6 +33,37 @@ describe("settings post-login navigation", () => {
       modelResumeTarget: {
         phase: "model",
         message: "GitHub Copilot authenticated. Pick a model below.",
+      },
+    });
+  });
+
+  test("routes configured provider selection straight into the model list", () => {
+    expect(resolveSettingsPostProviderSelectionNavigation({
+      providerId: "anthropic",
+      providerLabel: "Anthropic",
+      requiresAuth: false,
+      providerWasChanged: true,
+    })).toEqual({
+      nextTab: "model",
+      modelResumeTarget: {
+        phase: "model",
+        message: "Anthropic selected. Pick a model below.",
+      },
+    });
+  });
+
+  test("routes unauthenticated provider selection through auth and back to the model list", () => {
+    expect(resolveSettingsPostProviderSelectionNavigation({
+      providerId: "github-copilot",
+      providerLabel: "GitHub Copilot",
+      requiresAuth: true,
+      providerWasChanged: true,
+    })).toEqual({
+      nextTab: "api-key",
+      authReturnTarget: {
+        tab: "model",
+        modelPhase: "model",
+        successMessage: "GitHub Copilot authenticated. Pick a model below.",
       },
     });
   });

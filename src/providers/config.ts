@@ -84,17 +84,18 @@ export function resolveProviderConfig(
     firstConfiguredEnv(definition.modelEnvKeys) ||
     definition.defaultModel ||
     "";
-  const apiKey = settingsApiKey || storedOauthToken || envApiKey || defaultApiKey || "";
+  const preferredSettingsApiKey = definition.authKind === "oauth"
+    ? storedOauthToken || settingsApiKey
+    : settingsApiKey || storedOauthToken;
+  const apiKey = preferredSettingsApiKey || envApiKey || defaultApiKey || "";
   const baseUrl = settingsBaseUrl || envBaseUrl || definition.defaultBaseUrl || "";
-  const apiKeySource: ConfigSource = settingsApiKey
+  const apiKeySource: ConfigSource = preferredSettingsApiKey
     ? "settings"
-    : storedOauthToken
-      ? "settings"
-      : envApiKey
-        ? "env"
-        : defaultApiKey
-          ? "default"
-          : "unset";
+    : envApiKey
+      ? "env"
+      : defaultApiKey
+        ? "default"
+        : "unset";
   const baseUrlSource: ConfigSource = settingsBaseUrl
     ? "settings"
     : envBaseUrl

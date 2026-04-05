@@ -83,7 +83,7 @@ describe("provider model fetching", () => {
       { id: "github-copilot/gpt-5-codex", name: "GPT-5-Codex" },
     ]);
     expect(requests).toHaveLength(2);
-    expect(requests[0]?.headers.get("Authorization")).toBe("Bearer ghu_saved_device_token");
+    expect(requests[0]?.headers.get("Authorization")).toBe("token ghu_saved_device_token");
     expect(requests[1]?.headers.get("Authorization")).toBe(
       "Bearer copilot-runtime-token;proxy-ep=proxy.individual.githubcopilot.com",
     );

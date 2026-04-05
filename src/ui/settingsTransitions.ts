@@ -18,6 +18,12 @@ export interface SettingsPostLoginNavigation {
   modelResumeTarget?: Omit<SettingsModelResumeTarget, "nonce">;
 }
 
+export interface SettingsPostProviderSelectionNavigation {
+  nextTab: SettingsTabId;
+  authReturnTarget?: SettingsAuthReturnTarget;
+  modelResumeTarget?: Omit<SettingsModelResumeTarget, "nonce">;
+}
+
 export function getInitialSettingsModelPhase(
   resumeTarget?: SettingsModelResumeTarget | null,
 ): SettingsModelPhase {
@@ -44,5 +50,36 @@ export function resolveSettingsPostLoginNavigation(params: {
           message: params.returnTarget.successMessage,
         }
       : undefined,
+  };
+}
+
+export function resolveSettingsPostProviderSelectionNavigation(params: {
+  providerId: string;
+  providerLabel?: string;
+  requiresAuth: boolean;
+  providerWasChanged: boolean;
+}): SettingsPostProviderSelectionNavigation {
+  const providerId = params.providerId.trim();
+  const providerLabel = params.providerLabel?.trim() || providerId;
+
+  if (params.requiresAuth) {
+    return {
+      nextTab: "api-key",
+      authReturnTarget: {
+        tab: "model",
+        modelPhase: "model",
+        successMessage: `${providerLabel} authenticated. Pick a model below.`,
+      },
+    };
+  }
+
+  return {
+    nextTab: "model",
+    modelResumeTarget: {
+      phase: "model",
+      message: params.providerWasChanged
+        ? `${providerLabel} selected. Pick a model below.`
+        : `${providerLabel} confirmed. Pick a model below.`,
+    },
   };
 }
