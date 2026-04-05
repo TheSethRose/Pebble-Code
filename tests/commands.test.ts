@@ -741,6 +741,28 @@ describe("Command Registry", () => {
     expect(loadSettingsForCwd(tempDir).shellCompactionMode).toBe("off");
   });
 
+  test("saveSettingsForCwd persists a worktree startup override when it differs from project defaults", () => {
+    const tempDir = createTempProjectDir("pebble-command-worktree-startup-override-");
+    const projectSettingsPath = getProjectSettingsPath(tempDir);
+    mkdirSync(join(tempDir, ".pebble"), { recursive: true });
+    writeFileSync(
+      projectSettingsPath,
+      JSON.stringify({
+        worktreeStartupMode: "manual",
+      }, null, 2),
+      "utf-8",
+    );
+
+    const savedPath = saveSettingsForCwd(tempDir, {
+      ...loadSettingsForCwd(tempDir),
+      worktreeStartupMode: "resume-linked",
+    });
+    const saved = JSON.parse(readFileSync(savedPath, "utf-8")) as Record<string, unknown>;
+
+    expect(saved.worktreeStartupMode).toBe("resume-linked");
+    expect(loadSettingsForCwd(tempDir).worktreeStartupMode).toBe("resume-linked");
+  });
+
   test("/config opens the settings UI", async () => {
     const registry = new CommandRegistry();
     registerBuiltinCommands(registry);

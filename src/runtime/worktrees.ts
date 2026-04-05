@@ -36,6 +36,11 @@ export interface WorktreeAvailability {
   reason?: string;
 }
 
+export interface WorktreeCleanupOutcome {
+  removedSessionIds: string[];
+  retainedSessionIds: string[];
+}
+
 /**
  * Manage git worktrees for isolated development contexts.
  */
@@ -218,6 +223,28 @@ export class WorktreeManager {
     for (const sessionId of this.worktrees.keys()) {
       this.removeWorktree(sessionId);
     }
+  }
+
+  pruneDeletedSessionWorktrees(activeSessionIds: Iterable<string>): WorktreeCleanupOutcome {
+    const active = new Set(activeSessionIds);
+    const removedSessionIds: string[] = [];
+    const retainedSessionIds: string[] = [];
+
+    for (const sessionId of Array.from(this.worktrees.keys())) {
+      if (active.has(sessionId)) {
+        retainedSessionIds.push(sessionId);
+        continue;
+      }
+
+      this.removeWorktree(sessionId);
+      if (this.worktrees.has(sessionId)) {
+        retainedSessionIds.push(sessionId);
+      } else {
+        removedSessionIds.push(sessionId);
+      }
+    }
+
+    return { removedSessionIds, retainedSessionIds };
   }
 
   private ensureDir(): void {

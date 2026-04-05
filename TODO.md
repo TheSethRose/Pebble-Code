@@ -384,7 +384,7 @@ Checked items below mean Pebble now has real config/runtime wiring for that prov
 - [x] [REFACTOR] `WorktreeManager` can still create/remove worktrees through git commands
 - [x] [REFACTOR] persist worktree metadata across processes instead of relying on in-memory maps that lose state between invocations
 - [x] [REFACTOR] add worktree availability checks, bind worktree git commands to the intended repo root, surface startup worktree support status, and link session metadata to created/removed worktrees
-- [ ] [REFACTOR] add worktree startup preference handling and stronger cleanup guarantees closer to the Claude reference implementation
+- [x] [REFACTOR] add worktree startup preference handling and stronger cleanup guarantees closer to the Claude reference implementation
 
 - [x] [REFACTOR] `src/engine/query.ts` now routes `query()` and `streamQuery()` through one shared `QueryEngine` constructor helper
 - [x] [REFACTOR] collapse the duplicated tool execution, permission, and result-packaging logic shared by `QueryEngine.process()` and `QueryEngine.stream()`

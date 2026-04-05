@@ -1,14 +1,18 @@
 import React from "react";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { PassThrough } from "node:stream";
 import { render } from "ink";
 import { run, setStartReplForTesting } from "../src/runtime/main";
 import { buildSessionMemory } from "../src/persistence/memory";
-import { createProjectSessionStore } from "../src/persistence/runtimeSessions";
+import {
+  createProjectSessionStore,
+  deleteSessionWithRuntimeCleanup,
+} from "../src/persistence/runtimeSessions";
 import { PermissionManager } from "../src/runtime/permissionManager";
+import { WorktreeManager } from "../src/runtime/worktrees";
 import type { CommandContext } from "../src/commands/types";
 import { App } from "../src/ui/App";
 import type { Message } from "../src/engine/types";
@@ -41,6 +45,17 @@ function createTempProject(
   }
 
   return dir;
+}
+
+function initializeGitRepo(projectDir: string): void {
+  Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync({ cmd: ["git", "config", "user.email", "tests@example.com"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync({ cmd: ["git", "config", "user.name", "Pebble Tests"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+}
+
+function commitAll(projectDir: string, message: string): void {
+  Bun.spawnSync({ cmd: ["git", "add", "."], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync({ cmd: ["git", "commit", "-m", message, "--quiet"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
 }
 
 async function captureConsole<T>(callback: () => Promise<T>): Promise<{
@@ -349,6 +364,61 @@ export default {
     expect(stderr.some((line) => line.includes("Worktree support:"))).toBe(true);
   });
 
+  test("prunes worktrees for deleted sessions during runtime boot", async () => {
+    const projectDir = createTempProject("pebble-runtime-worktree-prune-");
+    initializeGitRepo(projectDir);
+    writeFileSync(join(projectDir, "tracked.txt"), "base\n", "utf-8");
+    commitAll(projectDir, "initial");
+
+    const sessionStore = createProjectSessionStore(projectDir);
+    const session = sessionStore.createSession("deleted-session");
+    const manager = new WorktreeManager({ repoRoot: projectDir });
+    const worktreePath = manager.createWorktree(session.id, `${session.id}-worktree`);
+
+    expect(existsSync(worktreePath)).toBe(true);
+    sessionStore.deleteSession(session.id);
+
+    const { result: exitCode } = await withProviderKeysUnset(() =>
+      captureConsole(() =>
+        run({
+          headless: true,
+          prompt: "status",
+          cwd: projectDir,
+        }),
+      ),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(existsSync(worktreePath)).toBe(false);
+    expect(readFileSync(join(projectDir, ".pebble", "worktrees", "registry.json"), "utf-8")).toContain('"worktrees": []');
+  });
+
+  test("deleteSessionWithRuntimeCleanup removes a linked worktree before deleting the transcript", () => {
+    const projectDir = createTempProject("pebble-runtime-delete-session-worktree-");
+    initializeGitRepo(projectDir);
+    writeFileSync(join(projectDir, "tracked.txt"), "base\n", "utf-8");
+    commitAll(projectDir, "initial");
+
+    const sessionStore = createProjectSessionStore(projectDir);
+    const session = sessionStore.createSession("cleanup-session");
+    const manager = new WorktreeManager({ repoRoot: projectDir });
+    const worktreePath = manager.createWorktree(session.id, `${session.id}-worktree`);
+    sessionStore.updateMetadata(session.id, {
+      worktree: {
+        path: worktreePath,
+        branch: `${session.id}-worktree`,
+      },
+    });
+
+    const outcome = deleteSessionWithRuntimeCleanup(sessionStore, projectDir, session.id);
+
+    expect(outcome.sessionDeleted).toBe(true);
+    expect(outcome.worktreeRemoved).toBe(true);
+    expect(outcome.worktreePath).toBe(worktreePath);
+    expect(sessionStore.loadTranscript(session.id)).toBeNull();
+    expect(existsSync(worktreePath)).toBe(false);
+  });
+
   test("executes a real end-to-end runtime tool flow through headless mode", async () => {
     const projectDir = createTempProject("pebble-runtime-tool-flow-", {
       settings: {
@@ -569,6 +639,48 @@ describe("interactive runtime permissions", () => {
       expect(exitCode).toBe(0);
       expect(startReplCalls).toBe(1);
       expect(stderr).toEqual([]);
+    } finally {
+      setStartReplForTesting(null);
+    }
+  });
+
+  test("interactive startup can prefer the newest linked worktree session when configured", async () => {
+    const projectDir = createTempProject("pebble-runtime-interactive-worktree-startup-", {
+      settings: {
+        worktreeStartupMode: "resume-linked",
+      },
+    });
+    const sessionStore = createProjectSessionStore(projectDir);
+    const linkedSession = sessionStore.createSession("linked-session");
+    const linkedWorktreePath = join(projectDir, ".pebble", "worktrees", linkedSession.id);
+    mkdirSync(linkedWorktreePath, { recursive: true });
+    sessionStore.updateMetadata(linkedSession.id, {
+      worktree: {
+        path: linkedWorktreePath,
+        branch: `${linkedSession.id}-worktree`,
+      },
+    });
+    sessionStore.createSession("newer-unlinked-session");
+
+    let capturedSessionId: string | null | undefined;
+    let capturedStartupMode: unknown;
+
+    setStartReplForTesting(async (context) => {
+      capturedSessionId = context.sessionId;
+      capturedStartupMode = context.config.worktreeStartupMode;
+      return 0;
+    });
+
+    try {
+      const { result: exitCode } = await withProviderKeysUnset(() =>
+        captureConsole(() =>
+          run({ cwd: projectDir }),
+        ),
+      );
+
+      expect(exitCode).toBe(0);
+      expect(capturedSessionId).toBe(linkedSession.id);
+      expect(capturedStartupMode).toBe("resume-linked");
     } finally {
       setStartReplForTesting(null);
     }

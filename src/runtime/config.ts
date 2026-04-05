@@ -49,6 +49,7 @@ export interface ProviderCredentialSettings {
 
 export type ProviderCredentialMap = Record<string, ProviderCredentialSettings>;
 export type ShellCompactionMode = "off" | "auto" | "aggressive";
+export type WorktreeStartupMode = "manual" | "resume-linked";
 
 /**
  * Global settings loaded from config files.
@@ -65,6 +66,7 @@ export interface Settings {
   telemetryEnabled: boolean;
   compactThreshold?: number;
   shellCompactionMode?: ShellCompactionMode;
+  worktreeStartupMode?: WorktreeStartupMode;
   fullscreenRenderer?: boolean;
   voiceEnabled?: boolean;
   voiceProvider?: string;
@@ -79,6 +81,7 @@ const DEFAULT_SETTINGS: Settings = {
   telemetryEnabled: false,
   maxTurns: 50,
   shellCompactionMode: "auto",
+  worktreeStartupMode: "manual",
   fullscreenRenderer: true,
   voiceEnabled: false,
   voiceProvider: DEFAULT_VOICE_PROVIDER,
@@ -190,6 +193,11 @@ function normalizeSettingsInput(settings: SettingsInput): SettingsInput {
   const normalizedVoiceEnabled = typeof settings.voiceEnabled === "boolean"
     ? settings.voiceEnabled
     : undefined;
+  const normalizedWorktreeStartupMode = settings.worktreeStartupMode === "resume-linked"
+    ? "resume-linked"
+    : settings.worktreeStartupMode === "manual"
+      ? "manual"
+      : undefined;
   const normalizedVoiceProvider = normalizeVoiceProviderValue(settings.voiceProvider);
   const normalizedVoiceBaseUrl = normalizeVoiceBaseUrlValue(settings.voiceBaseUrl);
   const normalizedVoiceTranscribePath = normalizeVoicePathValue(settings.voiceTranscribePath);
@@ -198,6 +206,7 @@ function normalizeSettingsInput(settings: SettingsInput): SettingsInput {
   if (!legacyApiKey || providerDefinition?.authKind === "oauth") {
     return {
       ...settings,
+      ...(normalizedWorktreeStartupMode ? { worktreeStartupMode: normalizedWorktreeStartupMode } : {}),
       ...(typeof normalizedVoiceEnabled === "boolean" ? { voiceEnabled: normalizedVoiceEnabled } : {}),
       ...(normalizedVoiceProvider ? { voiceProvider: normalizedVoiceProvider } : {}),
       ...(normalizedVoiceBaseUrl ? { voiceBaseUrl: normalizedVoiceBaseUrl } : {}),
@@ -209,6 +218,7 @@ function normalizeSettingsInput(settings: SettingsInput): SettingsInput {
 
   return {
     ...settings,
+    ...(normalizedWorktreeStartupMode ? { worktreeStartupMode: normalizedWorktreeStartupMode } : {}),
     ...(typeof normalizedVoiceEnabled === "boolean" ? { voiceEnabled: normalizedVoiceEnabled } : {}),
     ...(normalizedVoiceProvider ? { voiceProvider: normalizedVoiceProvider } : {}),
     ...(normalizedVoiceBaseUrl ? { voiceBaseUrl: normalizedVoiceBaseUrl } : {}),

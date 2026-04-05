@@ -1,7 +1,10 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Message } from "../engine/types.js";
 import type { PermissionManager } from "../runtime/permissionManager.js";
+import type { WorktreeStartupMode } from "../runtime/config.js";
 import { findProjectRoot } from "../runtime/trust.js";
+import { WorktreeManager, type WorktreeCleanupOutcome } from "../runtime/worktrees.js";
 import { compactTranscriptWithArtifact, type CompactionArtifact } from "./compaction.js";
 import { buildSessionMemory, isSessionMemoryStale } from "./memory.js";
 import { SessionStore, type SessionTranscript, type TranscriptMessage } from "./sessionStore.js";
@@ -15,6 +18,18 @@ export interface SessionCompactionOutcome {
   nextMessageCount: number;
   artifact?: CompactionArtifact;
   reason: "threshold" | "manual";
+}
+
+export interface SessionDeletionOutcome {
+  sessionDeleted: boolean;
+  worktreeRemoved: boolean;
+  worktreePath?: string;
+}
+
+interface SessionWorktreeMetadata {
+  path: string;
+  branch?: string;
+  linkedAt?: string;
 }
 
 export function getSessionsDir(cwd: string): string {
@@ -35,6 +50,60 @@ export function createOrResumeSession(
   }
 
   return store.getLatestSession() ?? store.createSession();
+}
+
+export function resolveInteractiveStartupSessionId(
+  store: SessionStore,
+  startupMode: WorktreeStartupMode | undefined,
+  requestedSessionId?: string,
+): string | null {
+  if (requestedSessionId) {
+    return requestedSessionId;
+  }
+
+  if (startupMode !== "resume-linked") {
+    return null;
+  }
+
+  for (const summary of store.listSessions()) {
+    const transcript = store.loadTranscript(summary.id);
+    const linkedWorktree = getSessionWorktreeMetadata(transcript);
+    if (transcript && linkedWorktree && existsSync(linkedWorktree.path)) {
+      return transcript.id;
+    }
+  }
+
+  return null;
+}
+
+export function cleanupDeletedSessionWorktrees(
+  store: SessionStore,
+  cwd: string,
+): WorktreeCleanupOutcome {
+  const projectRoot = findProjectRoot(cwd) ?? cwd;
+  const manager = new WorktreeManager({ repoRoot: projectRoot });
+  return manager.pruneDeletedSessionWorktrees(store.listSessions().map((session) => session.id));
+}
+
+export function deleteSessionWithRuntimeCleanup(
+  store: SessionStore,
+  cwd: string,
+  sessionId: string,
+): SessionDeletionOutcome {
+  const transcript = store.loadTranscript(sessionId);
+  const linkedWorktree = getSessionWorktreeMetadata(transcript);
+
+  if (linkedWorktree) {
+    const projectRoot = findProjectRoot(cwd) ?? cwd;
+    const manager = new WorktreeManager({ repoRoot: projectRoot });
+    manager.removeWorktree(sessionId);
+  }
+
+  return {
+    sessionDeleted: store.deleteSession(sessionId),
+    worktreeRemoved: linkedWorktree ? !existsSync(linkedWorktree.path) : false,
+    ...(linkedWorktree ? { worktreePath: linkedWorktree.path } : {}),
+  };
 }
 
 export function failPendingApprovalsForResume(
@@ -260,6 +329,22 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function getSessionWorktreeMetadata(
+  transcript: SessionTranscript | null | undefined,
+): SessionWorktreeMetadata | null {
+  const worktree = asRecord(transcript?.metadata?.worktree);
+  const path = typeof worktree?.path === "string" ? worktree.path : "";
+  if (!path) {
+    return null;
+  }
+
+  return {
+    path,
+    ...(typeof worktree?.branch === "string" ? { branch: worktree.branch } : {}),
+    ...(typeof worktree?.linkedAt === "string" ? { linkedAt: worktree.linkedAt } : {}),
+  };
 }
 
 function buildSessionMemoryPrompt(summary: string, bullets: string[]): string {

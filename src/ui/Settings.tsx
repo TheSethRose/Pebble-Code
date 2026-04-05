@@ -556,6 +556,11 @@ const SHELL_COMPACTION_OPTIONS: Array<{ label: string; value: string }> = [
   { label: "Aggressive  (shorter summaries)", value: "aggressive" },
 ];
 
+const WORKTREE_STARTUP_OPTIONS: Array<{ label: string; value: string }> = [
+  { label: "Manual  (default, start fresh unless explicitly resumed)", value: "manual" },
+  { label: "Resume linked session  (prefer the newest session with an active worktree)", value: "resume-linked" },
+];
+
 function TabBar({
   tabs,
   activeTab,
@@ -613,6 +618,18 @@ function ConfigTab({
     setMessage(`Shell compaction mode set to ${value}`);
   }, [onSave, settings]);
 
+  const handleWorktreeStartupModeChange = useCallback((value: string) => {
+    if (value !== "manual" && value !== "resume-linked") {
+      return;
+    }
+
+    onSave({
+      ...settings,
+      worktreeStartupMode: value,
+    });
+    setMessage(`Worktree startup mode set to ${value}`);
+  }, [onSave, settings]);
+
   return (
     <Box flexDirection="column">
       <Text bold color="cyan">Status</Text>
@@ -625,6 +642,7 @@ function ConfigTab({
         <Text>Telemetry: {settings.telemetryEnabled ? "enabled" : "disabled"}</Text>
         <Text>Compact threshold: {settings.compactThreshold ?? "not set"}</Text>
         <Text>Shell compaction: {settings.shellCompactionMode ?? "auto"}</Text>
+        <Text>Worktree startup: {settings.worktreeStartupMode ?? "manual"}</Text>
         <Text>Fullscreen renderer: {settings.fullscreenRenderer === false ? "disabled" : "enabled"}</Text>
         <Text>Voice mode: {settings.voiceEnabled ? "enabled" : "disabled"} (toggle with /voice)</Text>
         <Text>Voice provider: {settings.voiceProvider ?? DEFAULT_VOICE_PROVIDER}</Text>
@@ -653,6 +671,17 @@ function ConfigTab({
             <Text color="green">{message}</Text>
           </Box>
         ) : null}
+      </Box>
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold color="cyan">Worktree startup</Text>
+        <Box marginTop={1}>
+          <Select
+            options={WORKTREE_STARTUP_OPTIONS}
+            visibleOptionCount={2}
+            defaultValue={settings.worktreeStartupMode ?? "manual"}
+            onChange={handleWorktreeStartupModeChange}
+          />
+        </Box>
       </Box>
       <Box marginTop={1}>
         <Text dimColor>↑↓ choose mode · Enter save · Shift+Tab / Tab to switch sections · Esc to close</Text>

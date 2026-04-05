@@ -15,6 +15,7 @@ import { getDefaultExtensionDirs } from "../extensions/loaders.js";
 import type { Message, StreamEvent } from "../engine/types.js";
 import {
   compactSessionIfNeeded,
+  deleteSessionWithRuntimeCleanup,
   ensureFreshSessionMemory,
   engineMessageToTranscriptMessage,
   failPendingApprovalsForResume,
@@ -64,6 +65,7 @@ function loadCommandConfig(
     apiKeySource: resolved.apiKeySource,
     compactThreshold: settings.compactThreshold,
     shellCompactionMode: settings.shellCompactionMode,
+    worktreeStartupMode: settings.worktreeStartupMode,
     fullscreenRenderer: settings.fullscreenRenderer,
     voiceEnabled: isFeatureEnabled("voiceMode") && settings.voiceEnabled,
     voiceProvider: settings.voiceProvider,
@@ -528,7 +530,7 @@ export function App({
   const handleDeleteSession = React.useCallback(
     (sessionId: string) => {
       if (!sessionStore) return;
-      sessionStore.deleteSession(sessionId);
+      deleteSessionWithRuntimeCleanup(sessionStore, context.cwd, sessionId);
 
       // If we deleted the active session, reset to new chat
       if (sessionIdRef.current === sessionId) {

@@ -15,8 +15,10 @@ import { WorktreeManager } from "./worktrees.js";
 import { createHookRegistry, type HookContext, type HookRegistry } from "./hooks.js";
 import { formatInstructions, loadPromptFiles, formatPromptFiles } from "./instructions.js";
 import {
+  cleanupDeletedSessionWorktrees,
   createProjectSessionStore,
   createOrResumeSession,
+  resolveInteractiveStartupSessionId,
   compactSessionIfNeeded,
   transcriptToConversation,
   ensureFreshSessionMemory,
@@ -196,6 +198,7 @@ async function runHeadless(
 
   const tools = createMvpTools(integrations.tools);
   const sessionStore = createProjectSessionStore(config.cwd);
+  cleanupDeletedSessionWorktrees(sessionStore, config.cwd);
   const session = createOrResumeSession(sessionStore, options.resume);
   failPendingApprovalsForResume(sessionStore, permissionManager, session.id);
 
@@ -355,6 +358,15 @@ async function runInteractive(
 ): Promise<number> {
   // Import Ink REPL dynamically to avoid blocking fast paths
   const startREPL = startReplForTesting ?? (await import("../ui/App.js")).startREPL;
+  const sessionStore = createProjectSessionStore(config.cwd);
+
+  cleanupDeletedSessionWorktrees(sessionStore, config.cwd);
+
+  const initialSessionId = resolveInteractiveStartupSessionId(
+    sessionStore,
+    config.settings.worktreeStartupMode,
+    options.resume,
+  );
 
   const context = {
     cwd: config.cwd,
@@ -371,9 +383,10 @@ async function runInteractive(
       settingsPath: getSettingsPath(config.cwd),
       compactThreshold: config.settings.compactThreshold,
       shellCompactionMode: config.settings.shellCompactionMode,
+      worktreeStartupMode: config.settings.worktreeStartupMode,
     },
-    sessionStore: createProjectSessionStore(config.cwd),
-    sessionId: options.resume ?? null,
+    sessionStore,
+    sessionId: initialSessionId,
     trustLevel: config.trust.level,
     permissionManager,
     extensionCommandNames,

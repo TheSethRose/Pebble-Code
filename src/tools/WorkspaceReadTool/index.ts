@@ -110,16 +110,8 @@ const WorkspaceReadInputSchema = z.discriminatedUnion("action", [
 
 export class WorkspaceReadTool implements Tool {
   name = "WorkspaceRead";
-  aliases = [
-    "FileRead",
-    "ReadFile",
-    "ListDirectory",
-    "Glob",
-    "Grep",
-    "ToolSearch",
-    "WorkspaceInspect",
-  ];
-  description = "Inspect the workspace through a single read surface. Choose `read_file` for file contents, `list_directory` for immediate children, `project_structure` for a tree overview, `glob` for filename/path matching, `grep` for text search, `tool_search` for discovering tools, `summarize_path` for quick metadata, `git_inspect` for repo state, and `diagnostics` for typecheck/build/test. Always pass an object with an `action` field rather than a bare string path. Prefer repo-relative or absolute paths and JSON-typed booleans/numbers when possible. For high-level overview requests, gather a small number of broad reads first, then answer instead of repeatedly enumerating more directories once you already have enough context.";
+  aliases = ["WorkspaceInspect", "FileRead", "ListDirectory", "Glob", "Grep"];
+  description = "Consolidated workspace inspection tool. Use this for ALL workspace read operations. Set the `action` field to choose the operation: `read_file` (file contents), `list_directory` (directory children), `glob` (find files by path pattern), `grep` (search file contents), `project_structure` (recursive tree view), `tool_search` (discover available tools), `summarize_path` (path metadata + preview), `git_inspect` (git status/diff), or `diagnostics` (run typecheck/build/test). IMPORTANT: Do NOT confuse this with the Shell tool — the Shell tool uses actions like `exec`, `start_background`, etc., while this tool ONLY accepts the read actions listed above. Always pass an object with an `action` field matching exactly one of the allowed literals. Several flags accept JSON-typed booleans/numbers as strings for model compatibility, but the action names themselves must still match exactly. Never send Shell, Bash, or background process actions here.";
   category = "workspace-read" as const;
   capability = "workspace-read" as const;
   inputSchema = WorkspaceReadInputSchema;
