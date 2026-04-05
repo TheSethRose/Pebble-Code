@@ -86,10 +86,10 @@ export class PrimaryProvider implements Provider {
       const response = await client.chat.completions.create({
         model: this.model,
         messages: openaiMessages as any,
-        max_tokens: options?.maxTokens,
         temperature: options?.temperature,
         tools: tools?.length ? tools : undefined,
         stop: options?.stopSequences,
+        ...this.buildMaxTokensParam(options?.maxTokens),
       }, {
         signal: options?.abortSignal,
       });
@@ -156,7 +156,6 @@ export class PrimaryProvider implements Provider {
       const stream = await client.chat.completions.create({
         model: this.model,
         messages: openaiMessages as any,
-        max_tokens: options?.maxTokens,
         temperature: options?.temperature,
         stream: true,
         tools: options?.tools?.map((t) => ({
@@ -167,6 +166,7 @@ export class PrimaryProvider implements Provider {
             parameters: t.inputSchema,
           },
         })),
+        ...this.buildMaxTokensParam(options?.maxTokens),
       }, {
         signal: options?.abortSignal,
       });
@@ -321,6 +321,18 @@ export class PrimaryProvider implements Provider {
       baseURL: this.config.baseUrl,
       defaultHeaders: { ...this.config.requestHeaders },
     };
+  }
+
+  private buildMaxTokensParam(maxTokens: number | undefined): Record<string, number> {
+    if (typeof maxTokens !== "number") {
+      return {};
+    }
+
+    if (this.config.providerId === "github-copilot" && /^gpt-5([.-]|$)/.test(this.model)) {
+      return { max_completion_tokens: maxTokens };
+    }
+
+    return { max_tokens: maxTokens };
   }
 }
 

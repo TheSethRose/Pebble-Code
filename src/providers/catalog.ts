@@ -420,21 +420,21 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     ],
     aliases: ["copilot"],
     authKind: "oauth",
-    defaultModel: "github-copilot/gpt-4o",
+    defaultModel: "gpt-4o",
     defaultBaseUrl: DEFAULT_COPILOT_API_BASE_URL,
     requiresApiKey: false,
     exampleModels: [
-      "github-copilot/gpt-4o",
-      "github-copilot/gpt-4.1",
-      "github-copilot/gpt-5",
-      "github-copilot/gpt-5-mini",
-      "github-copilot/gpt-5-codex",
-      "github-copilot/gpt-5.1",
-      "github-copilot/gpt-5.1-codex",
-      "github-copilot/gpt-5.1-codex-mini",
-      "github-copilot/gpt-5.2",
-      "github-copilot/gpt-5.2-codex",
-      "github-copilot/gpt-5.4",
+      "gpt-4o",
+      "gpt-4.1",
+      "gpt-5",
+      "gpt-5-mini",
+      "gpt-5-codex",
+      "gpt-5.1",
+      "gpt-5.1-codex",
+      "gpt-5.1-codex-mini",
+      "gpt-5.2",
+      "gpt-5.2-codex",
+      "gpt-5.4",
     ],
     requestHeaders: buildCopilotRequestHeaders(),
     help: "Pebble supports GitHub.com device-flow login plus Copilot token exchange. Live smoke tests are still pending, and GitHub Enterprise / proxy bridge modes remain follow-up work.",
@@ -627,6 +627,21 @@ export function getBuiltinProviderDefinition(provider?: string): BuiltinProvider
   return BUILTIN_PROVIDER_DEFINITIONS.find((definition) => definition.id === normalized);
 }
 
+export function normalizeProviderModelId(provider: string | undefined, model: string | undefined): string | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  const trimmedModel = model?.trim();
+
+  if (!trimmedModel) {
+    return undefined;
+  }
+
+  if (normalizedProvider === "github-copilot") {
+    return trimmedModel.replace(/^github-copilot\//, "") || undefined;
+  }
+
+  return trimmedModel;
+}
+
 export function applyProviderDefaults<T extends { provider?: string; model?: string; baseUrl?: string }>(value: T): T {
   const normalizedProvider = normalizeProviderId(value.provider);
   const definition = getBuiltinProviderDefinition(normalizedProvider);
@@ -635,7 +650,7 @@ export function applyProviderDefaults<T extends { provider?: string; model?: str
     return {
       ...value,
       provider: normalizedProvider,
-      model: value.model?.trim() || undefined,
+      model: normalizeProviderModelId(normalizedProvider, value.model),
       baseUrl: value.baseUrl?.trim() || undefined,
     };
   }
@@ -643,7 +658,7 @@ export function applyProviderDefaults<T extends { provider?: string; model?: str
   return {
     ...value,
     provider: definition.id,
-    model: value.model?.trim() || definition.defaultModel || undefined,
+    model: normalizeProviderModelId(definition.id, value.model) ?? definition.defaultModel || undefined,
     baseUrl: value.baseUrl?.trim() || definition.defaultBaseUrl || undefined,
   };
 }

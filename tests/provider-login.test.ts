@@ -73,7 +73,7 @@ describe("settings provider login runner", () => {
     expect(lines.join(" ")).toContain("ABCD-EFGH");
     expect(openedUrls).toEqual(["https://github.com/login/device"]);
     expect(result.nextSettings.provider).toBe("github-copilot");
-    expect(result.nextSettings.model).toBe("github-copilot/gpt-4o");
+    expect(result.nextSettings.model).toBe("gpt-4o");
     expect(result.nextSettings.baseUrl).toBe("https://api.individual.githubcopilot.com");
     expect(result.nextSettings.providerAuth?.["github-copilot"]?.oauth?.accessToken).toBe(
       "ghu_settings_login_token",

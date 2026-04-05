@@ -473,13 +473,13 @@ export function App({ context }: { context: CommandContext }) {
   // ------------------------------------------------------------------
   // Engine initialisation
   // ------------------------------------------------------------------
-  React.useEffect(() => {
+  const rebuildEngine = React.useCallback((activeRuntimeConfig: Record<string, unknown>) => {
     const settings = loadSettingsForCwd(context.cwd);
     const resolvedProvider = resolveRuntimeProvider(
       settings,
       {
-        provider: typeof runtimeConfig.provider === "string" ? runtimeConfig.provider : undefined,
-        model: typeof runtimeConfig.model === "string" ? runtimeConfig.model : undefined,
+        provider: typeof activeRuntimeConfig.provider === "string" ? activeRuntimeConfig.provider : undefined,
+        model: typeof activeRuntimeConfig.model === "string" ? activeRuntimeConfig.model : undefined,
       },
       context.extensionProviders ?? [],
     );
@@ -487,7 +487,7 @@ export function App({ context }: { context: CommandContext }) {
     const permissionManager =
       context.permissionManager ??
       new PermissionManager({ mode: "always-ask", projectRoot: context.cwd });
-    const maxTurns = resolveMaxTurns(runtimeConfig.maxTurns, settings.maxTurns ?? 50);
+    const maxTurns = resolveMaxTurns(activeRuntimeConfig.maxTurns, settings.maxTurns ?? 50);
 
     const resolvePermission = (request: PermissionRequest): Promise<import("../runtime/permissions.js").PermissionDecision> => {
       return new Promise((resolve) => {
@@ -556,9 +556,20 @@ export function App({ context }: { context: CommandContext }) {
     context.permissionManager,
     context.systemPrompt,
     extensionDirs,
-    runtimeConfig.model,
-    runtimeConfig.provider,
     sessionStore,
+  ]);
+
+  const refreshRuntimeConfig = React.useCallback(() => {
+    const nextRuntimeConfig = loadCommandConfig(context.cwd, runtimeConfig, context.extensionProviders);
+    setRuntimeConfig(nextRuntimeConfig);
+    rebuildEngine(nextRuntimeConfig);
+  }, [context.cwd, context.extensionProviders, rebuildEngine, runtimeConfig]);
+
+  React.useEffect(() => {
+    rebuildEngine(runtimeConfig);
+  }, [
+    rebuildEngine,
+    runtimeConfig,
   ]);
 
   React.useEffect(() => {
@@ -841,7 +852,7 @@ export function App({ context }: { context: CommandContext }) {
 
         // /config changes — reload config
         if (result.data?.action === "config-updated") {
-          setRuntimeConfig(loadCommandConfig(context.cwd, runtimeConfig));
+          refreshRuntimeConfig();
         }
 
         // /sidebar — toggle sidebar visibility
@@ -1034,7 +1045,7 @@ export function App({ context }: { context: CommandContext }) {
     // state.messages intentionally omitted — we only need it for the fallback
     // non-persisted path. Including it would cause stale-closure issues.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [registry, context, runtimeConfig, sessionStore, refreshSessions, suggestions, suggestionIndex, reconcilePendingApprovals],
+    [registry, context, runtimeConfig, sessionStore, refreshSessions, suggestions, suggestionIndex, reconcilePendingApprovals, refreshRuntimeConfig],
   );
 
   const model = String(runtimeConfig.model ?? "default");
@@ -1171,7 +1182,7 @@ export function App({ context }: { context: CommandContext }) {
         onClose={() => {
           setShowSettings(false);
           setSettingsTab("config");
-          setRuntimeConfig(loadCommandConfig(context.cwd, runtimeConfig));
+          refreshRuntimeConfig();
         }}
       />
     );

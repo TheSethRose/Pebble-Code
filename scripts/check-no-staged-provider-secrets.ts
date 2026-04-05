@@ -36,6 +36,7 @@ const SUPPORTED_SCAN_MODES = ["staged", "push"] as const satisfies readonly Secr
 const SECRET_PREFIX = "sk-or-v1-";
 const MIN_SECRET_SUFFIX_LENGTH = 16;
 const SECRET_PATTERN = /sk-or-v1-[A-Za-z0-9_-]{16,}/g;
+const OBVIOUS_FIXTURE_SUFFIX_PATTERN = /^[a-z]+(?:[-_][a-z]+)+$/;
 const GIT_COMMIT_PATTERN = /\bgit\s+commit\b/i;
 const GIT_PUSH_PATTERN = /\bgit\s+push\b/i;
 const PROVIDER_SENSITIVE_PATH_PREFIXES = [
@@ -202,11 +203,22 @@ function redactSecrets(value: string): string {
 }
 
 function findSecretMatches(value: string): string[] {
-  return Array.from(value.matchAll(SECRET_PATTERN), (match) => match[0]);
+  return Array.from(value.matchAll(SECRET_PATTERN), (match) => match[0]).filter(
+    (match) => !isObviousFixtureSecret(match),
+  );
 }
 
 export function isSecretLikeValue(value: string): boolean {
   return findSecretMatches(value).length > 0;
+}
+
+function isObviousFixtureSecret(value: string): boolean {
+  if (!value.startsWith(SECRET_PREFIX)) {
+    return false;
+  }
+
+  const suffix = value.slice(SECRET_PREFIX.length);
+  return OBVIOUS_FIXTURE_SUFFIX_PATTERN.test(suffix);
 }
 
 function detectViolations(scan: DiffScanResult): SecretViolation[] {

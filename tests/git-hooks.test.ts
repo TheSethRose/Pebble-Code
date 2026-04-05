@@ -63,6 +63,8 @@ describe("git hook secret scanner", () => {
 
   test("ignores short sk-or-v1 fixtures but catches realistically long ones", () => {
     expect(isSecretLikeValue("sk-or-v1-test-key")).toBe(false);
+    expect(isSecretLikeValue("sk-or-v1-stale-openrouter-token")).toBe(false);
+    expect(isSecretLikeValue("sk-or-v1-fixture_demo_token")).toBe(false);
     expect(isSecretLikeValue(buildFakeSecret("long-token"))).toBe(true);
   });
 

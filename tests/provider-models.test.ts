@@ -32,8 +32,8 @@ describe("provider model fetching", () => {
         ],
       },
     })).toEqual([
-      { id: "github-copilot/gpt-5", name: "GPT-5" },
-      { id: "github-copilot/gpt-5-codex" },
+      { id: "gpt-5", name: "GPT-5" },
+      { id: "gpt-5-codex" },
     ]);
   });
 
@@ -79,8 +79,8 @@ describe("provider model fetching", () => {
     });
 
     expect(models).toEqual([
-      { id: "github-copilot/gpt-5", name: "GPT-5" },
-      { id: "github-copilot/gpt-5-codex", name: "GPT-5-Codex" },
+      { id: "gpt-5", name: "GPT-5" },
+      { id: "gpt-5-codex", name: "GPT-5-Codex" },
     ]);
     expect(requests).toHaveLength(2);
     expect(requests[0]?.headers.get("Authorization")).toBe("token ghu_saved_device_token");

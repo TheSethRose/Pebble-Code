@@ -409,7 +409,7 @@ describe("Command Registry", () => {
 
     const loaded = loadSettingsForCwd(tempDir);
     expect(loaded.provider).toBe("github-copilot");
-    expect(loaded.model).toBe("github-copilot/gpt-4o");
+    expect(loaded.model).toBe("gpt-4o");
     expect(loaded.baseUrl).toBe("https://api.individual.githubcopilot.com");
   });
 

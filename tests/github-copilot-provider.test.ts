@@ -57,7 +57,7 @@ describe("GitHub Copilot provider runtime", () => {
         id: "chatcmpl-1",
         object: "chat.completion",
         created: 1,
-        model: "github-copilot/gpt-4o",
+        model: "gpt-4o",
         choices: [
           {
             index: 0,
@@ -101,7 +101,7 @@ describe("GitHub Copilot provider runtime", () => {
       "Bearer copilot-runtime-token;proxy-ep=proxy.individual.githubcopilot.com",
     );
     expect(requests[1]?.headers.get("Openai-Intent")).toBe("conversation-edits");
-    expect(requests[1]?.body).toContain("github-copilot/gpt-4o");
+    expect(requests[1]?.body).toContain('"model":"gpt-4o"');
   });
 
   test("prefers the saved OAuth session over a stale saved credential during token exchange", async () => {
@@ -134,7 +134,7 @@ describe("GitHub Copilot provider runtime", () => {
         id: "chatcmpl-1",
         object: "chat.completion",
         created: 1,
-        model: "github-copilot/gpt-4o",
+        model: "gpt-4o",
         choices: [
           {
             index: 0,
@@ -197,8 +197,8 @@ describe("GitHub Copilot provider runtime", () => {
       }
 
       const body = [
-        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"github-copilot/gpt-4o","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}\n\n',
-        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"github-copilot/gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}\n\n',
+        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
         "data: [DONE]\n\n",
       ].join("");
 
@@ -284,5 +284,79 @@ describe("GitHub Copilot provider runtime", () => {
     expect(logContents).toContain('"status":401');
     expect(logContents).toContain("Unauthorized");
     expect(logContents).not.toContain("ghu_saved_device_token");
+  });
+
+  test("uses max_completion_tokens for GitHub Copilot GPT-5 requests when maxTokens is provided", async () => {
+    const requests: Array<{ url: string; headers: Headers; body?: string }> = [];
+
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      requests.push({
+        url,
+        headers: new Headers(init?.headers),
+        body: typeof init?.body === "string" ? init.body : undefined,
+      });
+
+      if (url === "https://api.github.com/copilot_internal/v2/token") {
+        return new Response(JSON.stringify({
+          token: "copilot-runtime-token;proxy-ep=proxy.individual.githubcopilot.com",
+          expires_at: Math.floor((Date.now() + 30 * 60_000) / 1000),
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({
+        id: "chatcmpl-1",
+        object: "chat.completion",
+        created: 1,
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "Hello from GPT-5.4" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 3,
+          total_tokens: 8,
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const provider = createPrimaryProvider({
+      settings: {
+        provider: "github-copilot",
+        model: "gpt-5.4",
+        providerAuth: {
+          "github-copilot": {
+            oauth: {
+              accessToken: "ghu_saved_device_token",
+              tokenType: "github-device",
+            },
+          },
+        },
+      },
+    });
+
+    const response = await provider.complete([{ role: "user", content: "Hello" }], {
+      maxTokens: 123,
+    });
+
+    expect(response.text).toBe("Hello from GPT-5.4");
+    const requestBody = JSON.parse(requests[1]?.body ?? "{}");
+    expect(requestBody.model).toBe("gpt-5.4");
+    expect(requestBody.max_completion_tokens).toBe(123);
+    expect(requestBody.max_tokens).toBeUndefined();
   });
 });

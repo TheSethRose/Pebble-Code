@@ -6,6 +6,7 @@ import {
 } from "../constants/openrouter.js";
 import {
   getBuiltinProviderDefinition,
+  normalizeProviderModelId,
   normalizeProviderId,
   type ProviderAuthKind,
   type ProviderTransport,
@@ -78,12 +79,13 @@ export function resolveProviderConfig(
   const defaultApiKey = definition.defaultApiKey?.trim();
   const settingsBaseUrl = settings.baseUrl?.trim();
   const envBaseUrl = firstConfiguredEnv(definition.baseUrlEnvKeys);
-  const model =
+  const requestedModel =
     overrides.model?.trim() ||
     settings.model?.trim() ||
     firstConfiguredEnv(definition.modelEnvKeys) ||
     definition.defaultModel ||
     "";
+  const model = normalizeProviderModelId(definition.id, requestedModel) || "";
   const preferredSettingsApiKey = definition.authKind === "oauth"
     ? storedOauthToken || settingsApiKey
     : settingsApiKey || storedOauthToken;

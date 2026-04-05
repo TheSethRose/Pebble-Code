@@ -1,3 +1,4 @@
+import { normalizeProviderModelId as normalizeCatalogModelId } from "../providers/catalog.js";
 import { resolveGitHubCopilotRuntimeAuth } from "../providers/githubCopilot.js";
 
 export interface ProviderModel {
@@ -10,16 +11,7 @@ function trimTrailingSlash(value: string): string {
 }
 
 function normalizeProviderModelId(providerId: string, modelId: string): string {
-  const trimmed = modelId.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  if (providerId === "github-copilot" && !trimmed.includes("/")) {
-    return `github-copilot/${trimmed}`;
-  }
-
-  return trimmed;
+  return normalizeCatalogModelId(providerId, modelId) ?? "";
 }
 
 function normalizeProviderModel(providerId: string, value: unknown): ProviderModel | null {

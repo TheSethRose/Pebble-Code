@@ -92,7 +92,7 @@ describe("provider config resolution", () => {
 
     expect(resolved.providerId).toBe("github-copilot");
     expect(resolved.providerLabel).toBe("GitHub Copilot");
-    expect(resolved.model).toBe("github-copilot/gpt-4o");
+    expect(resolved.model).toBe("gpt-4o");
     expect(resolved.baseUrl).toBe("https://api.individual.githubcopilot.com");
     expect(resolved.apiKey).toBe("ghu_copilot_device_token");
     expect(resolved.apiKeySource).toBe("settings");
@@ -119,6 +119,23 @@ describe("provider config resolution", () => {
     expect(resolved.apiKey).toBe("ghu_copilot_device_token");
     expect(resolved.apiKeySource).toBe("settings");
     expect(resolved.runtimeReady).toBe(true);
+  });
+
+  test("normalizes saved prefixed GitHub Copilot model ids to bare chat model ids", () => {
+    const resolved = resolveProviderConfig({
+      provider: "github-copilot",
+      model: "github-copilot/gpt-5.4",
+      providerAuth: {
+        "github-copilot": {
+          oauth: {
+            accessToken: "ghu_copilot_device_token",
+            tokenType: "github-device",
+          },
+        },
+      },
+    });
+
+    expect(resolved.model).toBe("gpt-5.4");
   });
 
   const promotedProviders = [
