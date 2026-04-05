@@ -1,9 +1,10 @@
 /**
- * Runtime main entry point.
+ * Full runtime boot path used by both the CLI and SDK surfaces.
  *
- * This is the full runtime boot — called after fast-path checks pass.
- * It initializes config, trust, providers, extensions, and starts
- * either the interactive REPL or headless mode.
+ * This layer owns configuration, trust, extension loading, provider
+ * resolution, and the final handoff into either the TUI or the headless
+ * reporter. Headless diagnostics intentionally stay on stderr so stdout can
+ * remain machine-readable.
  */
 
 import { join } from "node:path";
@@ -64,15 +65,19 @@ export interface RuntimeOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * Test seam for swapping the Ink entrypoint without changing production boot.
+ */
 export function setStartReplForTesting(startRepl: StartRepl | null): void {
   startReplForTesting = startRepl;
 }
 
 export async function run(options: RuntimeOptions = {}): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
+  // Interactive mode renders immediately, so only headless runs emit preflight
+  // diagnostics instead of polluting the TUI buffer.
   const shouldLogStartup = options.headless ?? false;
 
-  // Phase 1: Log startup
   if (shouldLogStartup) {
     console.error(getVersionString());
     console.error(getFeatureSummary());
@@ -80,20 +85,17 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
     console.error(`Working directory: ${cwd}`);
   }
 
-  // Phase 2: Initialize config layer
   const config = buildRuntimeConfig(cwd);
   if (shouldLogStartup) {
     console.error(`Trust level: ${config.trust.level}`);
     console.error(`Project root: ${config.trust.projectRoot}`);
   }
 
-  // Phase 3: Initialize trust system
   const permissionManager = new PermissionManager({
     mode: config.settings.permissionMode,
     projectRoot: config.trust.projectRoot,
   });
 
-  // Phase 4: Load repository instructions and prompt files
   const instructions = formatInstructions(config.instructions);
   if (shouldLogStartup && instructions) {
     console.error(`Loaded ${config.instructions.length} instruction file(s)`);
@@ -123,6 +125,9 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
   );
   const extensionCommandNames = integrations.commands.map((command) => command.name);
   const hookRegistry = createHookRegistry(integrations.extensions);
+  // Prompt files, repository instructions, and loaded skills all become one
+  // provider-facing system prompt so headless and interactive runs share the
+  // same instruction stack.
   const systemPrompt = mergeRuntimeInstructions(promptContent, instructions, integrations.skills);
 
   if (shouldLogStartup) {
@@ -136,7 +141,6 @@ export async function run(options: RuntimeOptions = {}): Promise<number> {
     );
   }
 
-  // Phase 6: Start the appropriate mode
   if (options.headless) {
     return runHeadless(
       options,
@@ -208,6 +212,8 @@ async function runHeadless(
     sessionStarted = true;
 
     if (options.prompt) {
+      // Persist the prompt before executing so resume flows and transcript
+      // inspection can reconstruct the exact headless invocation.
       sessionStore.appendMessage(session.id, {
         role: "user",
         content: options.prompt,
@@ -215,6 +221,8 @@ async function runHeadless(
       });
     }
 
+    // Compact before execution to keep the provider context bounded, then
+    // compact again after the turn so the stored transcript does not regrow.
     const compactedTranscript = compactSessionIfNeeded(
       sessionStore,
       session.id,

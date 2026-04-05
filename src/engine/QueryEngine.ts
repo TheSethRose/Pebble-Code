@@ -1,8 +1,9 @@
 /**
- * Query engine — the heart of Pebble Code.
+ * Coordinates the provider/tool loop for both buffered and streaming turns.
  *
- * Processes multi-turn conversations with tool-use cycles,
- * streaming responses, and bounded recursion.
+ * The engine is responsible for keeping provider responses, tool execution,
+ * permission gates, lifecycle hooks, and emitted events aligned so both entry
+ * points observe the same behavior.
  */
 
 import type { Provider, StreamChunk, ProviderResponse } from "../providers/types.js";
@@ -22,6 +23,14 @@ import {
   buildRecoveryErrorMessage,
 } from "../tools/toolErrorLogger.js";
 
+/**
+ * Flattens top-level discriminated object unions into a single provider-facing
+ * object schema.
+ *
+ * Several providers struggle with raw `anyOf`/`oneOf` tool schemas, so Pebble
+ * presents a merged object that preserves shared required keys and action
+ * discriminators without changing the underlying tool contract.
+ */
 export function normalizeProviderToolInputSchema(schema: Record<string, unknown>): Record<string, unknown> {
   const anyOf = Array.isArray(schema.anyOf) ? schema.anyOf : undefined;
   const oneOf = Array.isArray(schema.oneOf) ? schema.oneOf : undefined;
@@ -52,6 +61,8 @@ export function normalizeProviderToolInputSchema(schema: Record<string, unknown>
   });
   const sharedRequired = new Set<string>(branchRequiredSets[0] ? [...branchRequiredSets[0]] : []);
 
+  // Once the union is flattened, only keys required by every branch can remain
+  // globally required without making some valid tool calls impossible.
   for (const requiredSet of branchRequiredSets.slice(1)) {
     for (const key of [...sharedRequired]) {
       if (!requiredSet.has(key)) {
@@ -112,6 +123,8 @@ function mergeProviderSchemaProperty(
     return left;
   }
 
+  // Most Pebble tools discriminate on `action`, so collapsing branch-specific
+  // const/enum values into one enum keeps the provider prompt legible.
   if (propertyName === "action") {
     const actionValues = variants.flatMap((variant) => {
       if (typeof variant.const === "string") {
@@ -278,6 +291,13 @@ interface ToolCallExecutionOutcome {
   events: StreamEvent[];
 }
 
+/**
+ * Shared query runner used by both `process()` and `stream()`.
+ *
+ * Both methods intentionally funnel tool execution through the same helpers so
+ * approvals, hook callbacks, transcript metadata, and error wording stay in
+ * sync across interactive and headless runtimes.
+ */
 export class QueryEngine {
   private options: Required<Pick<QueryEngineOptions, "maxTurns" | "provider" | "tools" | "systemPrompt">> & {
     signal?: AbortSignal;
@@ -1067,6 +1087,8 @@ export class QueryEngine {
       });
 
       if (permissionResult.decision === "ask") {
+        // Record the pending approval before handing control to the UI so a
+        // resumed session can fail or resolve the exact same tool call.
         const pendingApproval = this.options.permissionManager.createPendingApproval({
           sessionId: this.options.getSessionId?.() ?? null,
           toolCallId: params.toolCall.id,

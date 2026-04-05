@@ -11,6 +11,11 @@ import { SessionStore, type SessionTranscript, type TranscriptMessage } from "./
 import type { DisplayMessage } from "../ui/types.js";
 import { estimateTokens } from "./tokenEstimation.js";
 
+/**
+ * Runtime-facing session helpers that keep transcript persistence, session
+ * memory, and worktree lifecycle in sync with the higher-level runtime boot.
+ */
+
 export interface SessionCompactionOutcome {
   transcript: SessionTranscript;
   compacted: boolean;
@@ -52,6 +57,12 @@ export function createOrResumeSession(
   return store.getLatestSession() ?? store.createSession();
 }
 
+/**
+ * Resolves the startup session for interactive mode.
+ *
+ * `listSessions()` is newest-first, so `resume-linked` prefers the most recent
+ * transcript whose recorded worktree still exists on disk.
+ */
 export function resolveInteractiveStartupSessionId(
   store: SessionStore,
   startupMode: WorktreeStartupMode | undefined,
@@ -112,6 +123,9 @@ export function failPendingApprovalsForResume(
   sessionId: string,
   reason = "Pending approval expired when the session was resumed.",
 ): TranscriptMessage[] {
+  // Pending approvals are ephemeral UI state; when a session resumes without
+  // resolving them, convert them into explicit transcript failures instead of
+  // leaving hidden tool calls dangling.
   const failed = permissionManager.failPendingApprovalsForSession(sessionId, reason);
   const appended: TranscriptMessage[] = [];
 
@@ -236,6 +250,9 @@ export function transcriptToConversation(
   transcript: SessionTranscript,
   compactThreshold?: number,
 ): Message[] {
+  // If a transcript has grown past the active threshold, compact the in-memory
+  // view again before sending it to the provider. The stored transcript is
+  // compacted separately so this function can remain a pure projection.
   const sourceMessages =
     compactThreshold && estimateTokens(transcript.messages) >= compactThreshold
       ? compactTranscriptWithArtifact(transcript.messages).messages
@@ -250,6 +267,8 @@ export function transcriptToConversation(
     }));
 
   if (transcript.memory) {
+    // Session memory is injected as the first system message so the provider
+    // sees the distilled recap before the replayed turn history.
     conversation.unshift({
       role: "system",
       content: buildSessionMemoryPrompt(transcript.memory.summary, transcript.memory.bullets),

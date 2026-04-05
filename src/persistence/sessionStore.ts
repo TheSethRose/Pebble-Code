@@ -31,7 +31,11 @@ export interface SessionTranscript {
 }
 
 /**
- * Session store for managing transcripts.
+ * File-backed transcript store.
+ *
+ * Pebble keeps one JSON file per session so local state stays inspectable and
+ * easy to recover. Read paths are intentionally tolerant of corruption because
+ * broken local history should not brick the rest of the runtime.
  */
 export class SessionStore {
   private sessionsDir: string;
@@ -107,7 +111,8 @@ export class SessionStore {
           messageCount: transcript.messages.length,
         });
       } catch {
-        // skip corrupt files
+        // Ignore unreadable transcripts so one bad file does not hide the rest
+        // of the user's sessions.
       }
     }
     return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));

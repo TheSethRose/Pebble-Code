@@ -110,7 +110,7 @@ const WorkspaceReadInputSchema = z.discriminatedUnion("action", [
 
 export class WorkspaceReadTool implements Tool {
   name = "WorkspaceRead";
-  aliases = ["WorkspaceInspect", "FileRead", "ListDirectory", "Glob", "Grep"];
+  aliases = ["WorkspaceInspect"];
   description = "Consolidated workspace inspection tool. Use this for ALL workspace read operations. Set the `action` field to choose the operation: `read_file` (file contents), `list_directory` (directory children), `glob` (find files by path pattern), `grep` (search file contents), `project_structure` (recursive tree view), `tool_search` (discover available tools), `summarize_path` (path metadata + preview), `git_inspect` (git status/diff), or `diagnostics` (run typecheck/build/test). IMPORTANT: Do NOT confuse this with the Shell tool — the Shell tool uses actions like `exec`, `start_background`, etc., while this tool ONLY accepts the read actions listed above. Always pass an object with an `action` field matching exactly one of the allowed literals. Several flags accept JSON-typed booleans/numbers as strings for model compatibility, but the action names themselves must still match exactly. Never send Shell, Bash, or background process actions here.";
   category = "workspace-read" as const;
   capability = "workspace-read" as const;
