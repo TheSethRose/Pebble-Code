@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { z } from "zod";
 import type { Tool, ToolApprovalRequest, ToolContext, ToolResult } from "../Tool.js";
-import { truncateText } from "../shared/common.js";
+import { summarizeShellExecution } from "../shared/outputCompaction.js";
 
 const ShellInputSchema = z.discriminatedUnion("action", [
   z.object({
@@ -77,20 +77,26 @@ export class ShellTool implements Tool {
         });
         const stdout = result.stdout.toString("utf-8").trim();
         const stderr = result.stderr.toString("utf-8").trim();
-        const combined = [stdout, stderr].filter(Boolean).join("\n\n") || "(no output)";
-        const truncated = truncateText(combined, 20_000);
+        const compacted = summarizeShellExecution({
+          command: parsed.data.command,
+          stdout,
+          stderr,
+          exitCode: result.exitCode,
+          cwd: workingDir,
+        });
 
         return {
           success: result.exitCode === 0,
-          output: truncated.text,
+          output: compacted.output,
           error: result.exitCode === 0 ? undefined : `Command failed with exit code ${result.exitCode}`,
-          truncated: truncated.truncated,
+          truncated: compacted.truncated,
           data: {
             exitCode: result.exitCode,
             cwd: workingDir,
             command: parsed.data.command,
           },
-          summary: `Executed shell command`,
+          debug: compacted.debug,
+          summary: compacted.summary,
         };
       }
 

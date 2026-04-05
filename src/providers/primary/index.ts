@@ -6,6 +6,8 @@ import type {
   StreamChunk,
 } from "../types.js";
 import type { Message } from "../../engine/types.js";
+import type { ResponseInputItem, ResponseOutputItem, ResponseStreamEvent } from "openai/resources/responses/responses";
+import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import {
   getProviderNotConfiguredMessage,
@@ -67,6 +69,10 @@ export class PrimaryProvider implements Provider {
     }
 
     try {
+      if (this.shouldUseResponsesApi()) {
+        return await this.completeWithResponses(client, messages, options);
+      }
+
       const openaiMessages = mapEngineMessagesToOpenAi(messages);
 
       const tools = options?.tools?.map((t) => ({
@@ -141,6 +147,11 @@ export class PrimaryProvider implements Provider {
     }
 
     try {
+      if (this.shouldUseResponsesApi()) {
+        yield* this.streamWithResponses(client, messages, options);
+        return;
+      }
+
       const openaiMessages = mapEngineMessagesToOpenAi(messages);
 
       const stream = await client.chat.completions.create({
@@ -324,6 +335,198 @@ export class PrimaryProvider implements Provider {
 
     return { max_tokens: maxTokens };
   }
+
+  private shouldUseResponsesApi(): boolean {
+    return this.config.providerId === "github-copilot" && /^gpt-5([.-]|$)/.test(this.model);
+  }
+
+  private async completeWithResponses(
+    client: OpenAI,
+    messages: Message[],
+    options?: ProviderOptions,
+  ): Promise<ProviderResponse> {
+    const response = await client.responses.create({
+      model: this.model,
+      input: mapEngineMessagesToResponsesInput(messages),
+      temperature: options?.temperature,
+      tools: mapProviderToolsToResponsesTools(options?.tools),
+      parallel_tool_calls: options?.tools?.length ? true : undefined,
+      ...this.buildResponsesMaxTokensParam(options?.maxTokens),
+    }, {
+      signal: options?.abortSignal,
+    });
+
+    return {
+      text: response.output_text ?? "",
+      toolCalls: collectResponseToolCalls(response.output),
+      stopReason: mapResponsesStopReason(response),
+      usage: {
+        inputTokens: response.usage?.input_tokens ?? 0,
+        outputTokens: response.usage?.output_tokens ?? 0,
+      },
+    };
+  }
+
+  private async *streamWithResponses(
+    client: OpenAI,
+    messages: Message[],
+    options?: ProviderOptions,
+  ): AsyncIterable<StreamChunk> {
+    const stream = await client.responses.create({
+      model: this.model,
+      input: mapEngineMessagesToResponsesInput(messages),
+      temperature: options?.temperature,
+      stream: true,
+      tools: mapProviderToolsToResponsesTools(options?.tools),
+      parallel_tool_calls: options?.tools?.length ? true : undefined,
+      ...this.buildResponsesMaxTokensParam(options?.maxTokens),
+    }, {
+      signal: options?.abortSignal,
+    });
+
+    const pendingToolCalls = new Map<string, {
+      streamItemId: string;
+      surfacedId: string;
+      name: string;
+      arguments: string;
+      argumentsComplete: boolean;
+      emitted: boolean;
+    }>();
+    let stopReason: ProviderResponse["stopReason"] = "end_turn";
+
+    for await (const event of stream) {
+      if (event.type === "response.output_text.delta") {
+        yield { textDelta: event.delta, done: false };
+        continue;
+      }
+
+      if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
+        const toolCall = extractResponseToolCall(event.item);
+        if (!toolCall) {
+          continue;
+        }
+
+        const streamItemId = event.item.id ?? toolCall.id;
+        const existing = pendingToolCalls.get(streamItemId);
+        const pendingToolCall = {
+          streamItemId,
+          surfacedId: normalizeResponsesToolCallId(toolCall.id, streamItemId),
+          name: hasUsableToolCallName(toolCall.name) ? toolCall.name : (existing?.name ?? "unknown"),
+          arguments: toolCall.arguments,
+          argumentsComplete: existing?.argumentsComplete ?? false,
+          emitted: existing?.emitted ?? false,
+        };
+        pendingToolCalls.set(streamItemId, pendingToolCall);
+
+        if (pendingToolCall.argumentsComplete && hasUsableToolCallName(pendingToolCall.name) && !pendingToolCall.emitted) {
+          pendingToolCall.emitted = true;
+          stopReason = "tool_use";
+          yield {
+            toolCall: {
+              id: pendingToolCall.surfacedId,
+              name: pendingToolCall.name,
+              input: safeParseJson(pendingToolCall.arguments),
+            },
+            done: false,
+          };
+        }
+        continue;
+      }
+
+      if (event.type === "response.function_call_arguments.delta") {
+        const existing = pendingToolCalls.get(event.item_id) ?? {
+          streamItemId: event.item_id,
+          surfacedId: normalizeResponsesToolCallId(event.item_id, event.item_id),
+          name: "unknown",
+          arguments: "",
+          argumentsComplete: false,
+          emitted: false,
+        };
+        existing.arguments += event.delta;
+        pendingToolCalls.set(event.item_id, existing);
+        continue;
+      }
+
+      if (event.type === "response.function_call_arguments.done") {
+        const existing = pendingToolCalls.get(event.item_id) ?? {
+          streamItemId: event.item_id,
+          surfacedId: normalizeResponsesToolCallId(event.item_id, event.item_id),
+          name: typeof event.name === "string" ? event.name : "unknown",
+          arguments: event.arguments,
+          argumentsComplete: false,
+          emitted: false,
+        };
+        if (hasUsableToolCallName(event.name)) {
+          existing.name = event.name;
+        }
+        existing.arguments = event.arguments;
+        existing.argumentsComplete = true;
+        pendingToolCalls.set(event.item_id, existing);
+
+        if (hasUsableToolCallName(existing.name) && !existing.emitted) {
+          existing.emitted = true;
+          stopReason = "tool_use";
+          yield {
+            toolCall: {
+              id: existing.surfacedId,
+              name: existing.name,
+              input: safeParseJson(existing.arguments),
+            },
+            done: false,
+          };
+        }
+        continue;
+      }
+
+      if (event.type === "response.completed") {
+        if (pendingToolCalls.size > 0) {
+          for (const toolCall of pendingToolCalls.values()) {
+            if (toolCall.emitted || !hasUsableToolCallName(toolCall.name)) {
+              continue;
+            }
+
+            stopReason = "tool_use";
+            yield {
+              toolCall: {
+                id: toolCall.surfacedId,
+                name: toolCall.name,
+                input: safeParseJson(toolCall.arguments),
+              },
+              done: false,
+            };
+          }
+        }
+
+        const reason = event.response.incomplete_details?.reason;
+        if (reason === "max_output_tokens") {
+          stopReason = "max_tokens";
+        }
+
+        yield {
+          done: true,
+          metadata: {
+            stopReason,
+          },
+        };
+        return;
+      }
+    }
+
+    yield {
+      done: true,
+      metadata: {
+        stopReason,
+      },
+    };
+  }
+
+  private buildResponsesMaxTokensParam(maxTokens: number | undefined): Record<string, number> {
+    if (typeof maxTokens !== "number") {
+      return {};
+    }
+
+    return { max_output_tokens: maxTokens };
+  }
 }
 
 /**
@@ -344,11 +547,26 @@ export function createPrimaryProvider(options: {
 }
 
 function safeParseJson(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
+  let current: unknown = value;
+
+  for (let depth = 0; depth < 3; depth++) {
+    if (typeof current !== "string") {
+      return current;
+    }
+
+    const trimmed = current.trim();
+    if (!looksLikeJson(trimmed)) {
+      return current;
+    }
+
+    try {
+      current = JSON.parse(trimmed);
+    } catch {
+      return current;
+    }
   }
+
+  return current;
 }
 
 function mapEngineMessagesToOpenAi(messages: Message[]): Array<Record<string, unknown>> {
@@ -421,4 +639,163 @@ function serializeToolCallArguments(input: unknown): string {
   }
 
   return JSON.stringify(input ?? {});
+}
+
+function mapEngineMessagesToResponsesInput(messages: Message[]): ResponseInputItem[] {
+  return messages.flatMap((message) => {
+    if (message.role === "progress") {
+      return [];
+    }
+
+    if (message.role === "user") {
+      return [{
+        type: "message",
+        role: "user",
+        content: message.content,
+      }];
+    }
+
+    if (message.role === "system") {
+      return [{
+        type: "message",
+        role: "system",
+        content: message.content,
+      }];
+    }
+
+    if (message.role === "assistant") {
+      const items: ResponseInputItem[] = [];
+      if (message.content.trim().length > 0) {
+        items.push({
+          id: `assistant-${items.length}`,
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{
+            type: "output_text",
+            text: message.content,
+            annotations: [],
+          }],
+        } as ResponseOutputItem as ResponseInputItem);
+      }
+
+      const toolCalls = extractAssistantToolCalls(message).map((toolCall, index) => ({
+        type: "function_call" as const,
+        call_id: normalizeResponsesToolCallId(
+          typeof toolCall.id === "string" ? toolCall.id : undefined,
+          `assistant-tool-${index}`,
+        ),
+        name: typeof (toolCall.function as { name?: unknown })?.name === "string"
+          ? (toolCall.function as { name: string }).name
+          : "unknown",
+        arguments: typeof (toolCall.function as { arguments?: unknown })?.arguments === "string"
+          ? (toolCall.function as { arguments: string }).arguments
+          : "{}",
+      }));
+
+      return [...items, ...toolCalls];
+    }
+
+    if (message.role === "tool" && message.toolCallId) {
+      return [{
+        type: "function_call_output",
+        call_id: normalizeResponsesToolCallId(message.toolCallId, message.toolName ?? "tool-output"),
+        output: message.content,
+      }];
+    }
+
+    return [];
+  });
+}
+
+function mapProviderToolsToResponsesTools(
+  tools: ProviderOptions["tools"],
+): Array<{ type: "function"; name: string; description: string; parameters: Record<string, unknown>; strict: boolean }> | undefined {
+  if (!tools || tools.length === 0) {
+    return undefined;
+  }
+
+  return tools.map((tool) => ({
+    type: "function",
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.inputSchema,
+    strict: false,
+  }));
+}
+
+function collectResponseToolCalls(output: ResponseOutputItem[]): ProviderResponse["toolCalls"] {
+  return output.flatMap((item) => {
+    const toolCall = extractResponseToolCall(item);
+    if (!toolCall) {
+      return [];
+    }
+
+    return [{
+      id: toolCall.id,
+      name: toolCall.name,
+      input: safeParseJson(toolCall.arguments),
+    }];
+  });
+}
+
+function extractResponseToolCall(item: ResponseOutputItem): { id: string; name: string; arguments: string } | null {
+  if (item.type !== "function_call") {
+    return null;
+  }
+
+  const rawId = item.call_id || item.id;
+  const id = normalizeResponsesToolCallId(rawId, item.id || item.name || "response-tool");
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    name: item.name,
+    arguments: item.arguments,
+  };
+}
+
+function mapResponsesStopReason(response: {
+  output: ResponseOutputItem[];
+  incomplete_details: { reason?: string | null } | null;
+}): ProviderResponse["stopReason"] {
+  if (response.output.some((item) => item.type === "function_call")) {
+    return "tool_use";
+  }
+
+  if (response.incomplete_details?.reason === "max_output_tokens") {
+    return "max_tokens";
+  }
+
+  return "end_turn";
+}
+
+function looksLikeJson(value: string): boolean {
+  return (value.startsWith("{") && value.endsWith("}"))
+    || (value.startsWith("[") && value.endsWith("]"))
+    || (value.startsWith("\"") && value.endsWith("\""));
+}
+
+function hasUsableToolCallName(value: unknown): value is string {
+  return typeof value === "string"
+    && value.trim().length > 0
+    && value !== "unknown"
+    && value !== "undefined";
+}
+
+function normalizeResponsesToolCallId(value: unknown, fallbackSeed: string): string {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length > 0 && trimmed.length <= 64 && /^[A-Za-z0-9._:-]+$/.test(trimmed)) {
+      return trimmed;
+    }
+  }
+
+  const seed = typeof value === "string" && value.trim().length > 0
+    ? value
+    : fallbackSeed;
+  const digest = createHash("sha256").update(seed).digest("hex").slice(0, 24);
+  return `call_${digest}`;
 }

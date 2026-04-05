@@ -53,7 +53,7 @@ function getRoleStyle(role: string): RoleStyle {
     case "output":
       return { marker: "└", color: "gray", dim: true, indent: 2 };
     case "tool":
-      return { marker: "⧈", color: "yellow", indent: 0 };
+      return { marker: "⧈", color: "white", indent: 0 };
     case "tool_result":
       return { marker: "✓", color: "green", indent: 0 };
     case "tool_error":
@@ -227,13 +227,15 @@ function StreamingMessage({ content, style }: { content: string; style: RoleStyl
 function ToolCallMessage({ toolName, meta }: { toolName: string; meta?: DisplayMessage["meta"] }) {
   const spinner = useSpinner(true);
   const argSummary = meta?.toolArgs ? compactArgs(meta.toolArgs) : "";
+  const isError = meta?.isError ?? false;
+  const color = isError ? "red" : "white";
   return (
     <Box marginBottom={1} paddingLeft={2} flexDirection="column">
       <Box>
         <Box minWidth={2}>
-          <Text color="yellow">{spinner || "⧈"}</Text>
+          <Text color={isError ? "red" : "gray"}>{spinner || "⧈"}</Text>
         </Box>
-        <Text color="yellow" bold>{toolName}</Text>
+        <Text color={color}>{toolName}</Text>
         {argSummary ? <Text dimColor> {argSummary}</Text> : null}
       </Box>
       {(meta?.requestedToolName || meta?.qualifiedToolName) && (

@@ -615,6 +615,103 @@ describe("capability tool implementations", () => {
     expect(result.output).toContain("hello shell");
   });
 
+  test("ShellTool compacts git status output for common repo inspection", async () => {
+    const projectDir = createTempProject("pebble-tools-shell-git-status-");
+    Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+    writeFileSync(join(projectDir, "demo.txt"), "demo\n", "utf-8");
+
+    const tool = new ShellTool();
+    const result = await tool.execute(
+      { action: "exec", command: "git status --short" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain("Git status");
+    expect(result.output).toContain("Files changed: 2");
+    expect(result.output).toContain("?? demo.txt");
+    expect(result.truncated).toBe(true);
+  });
+
+  test("ShellTool preserves full failing test output in a sidecar log when compacting", async () => {
+    const projectDir = createTempProject("pebble-tools-shell-test-log-");
+    writeFileSync(
+      join(projectDir, "failing.test.ts"),
+      [
+        'import { expect, test } from "bun:test";',
+        'test("fails loudly", () => {',
+        '  expect(1).toBe(2);',
+        '});',
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const tool = new ShellTool();
+    const result = await tool.execute(
+      { action: "exec", command: "bun test" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.summary?.toLowerCase()).toContain("fail");
+    expect(result.output).toContain("Full output saved to");
+
+    const logPath = result.output.match(/Full output saved to (.+?)\]/)?.[1];
+    expect(logPath).toBeTruthy();
+    expect(existsSync(logPath!)).toBe(true);
+    expect(readFileSync(logPath!, "utf-8")).toContain("Expected: 2");
+  });
+
+  test("WorkspaceRead groups grep matches by file", async () => {
+    const projectDir = createTempProject("pebble-tools-workspace-grep-");
+    mkdirSync(join(projectDir, "src"), { recursive: true });
+    writeFileSync(join(projectDir, "src", "one.ts"), "const target = 1;\nconsole.log(target);\n", "utf-8");
+    writeFileSync(join(projectDir, "src", "two.ts"), "export const target = 2;\n", "utf-8");
+
+    const tool = new WorkspaceReadTool();
+    const result = await tool.execute(
+      { action: "grep", pattern: "target", path: "src", max_results: 10 },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain("matches across 2 files");
+    expect(result.output).toContain("[file]");
+    expect(result.output).toContain("one.ts");
+    expect(result.output).toContain("two.ts");
+    expect(result.output).toContain("1: const target = 1;");
+  });
+
+  test("WorkspaceRead applies smart source compaction to large code files", async () => {
+    const projectDir = createTempProject("pebble-tools-workspace-read-compact-");
+    const largeSource = [
+      "import { join } from \"node:path\";",
+      "",
+      ...Array.from({ length: 500 }, (_, index) => `// comment ${index}`),
+      "export function importantFunction() {",
+      "  return join('a', 'b');",
+      "}",
+      "",
+      "export class ExampleClass {",
+      "  value = 1;",
+      "}",
+    ].join("\n");
+    writeFileSync(join(projectDir, "large.ts"), largeSource, "utf-8");
+
+    const tool = new WorkspaceReadTool();
+    const result = await tool.execute(
+      { action: "read_file", file_path: "large.ts" },
+      { cwd: projectDir, permissionMode: "always-ask" },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain("source compaction");
+    expect(result.output).toContain("importantFunction");
+    expect(result.output).toContain("ExampleClass");
+    expect(result.output).not.toContain("// comment 42");
+  });
+
   test("IntegrationTool can discover local skills", async () => {
     const projectDir = createTempProject("pebble-tools-integration-");
     const skillDir = join(projectDir, "skills", "demo-skill");

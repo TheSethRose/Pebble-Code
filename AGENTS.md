@@ -17,6 +17,18 @@ Default to Bun instead of Node.js for every task.
 - Use `Bun.$\`cmd\`` instead of execa
 - Bun loads `.env` automatically — do not use dotenv
 
+### Commands that do NOT have Bun equivalents
+
+Bun's package manager is **not** a drop-in replacement for npm. These npm commands have no Bun equivalent:
+
+| npm command | Bun alternative |
+|---|---|
+| `npm install -g` | Manual symlink to `~/.bun/bin/` or a PATH directory |
+| `npm link` | Manual symlink (`ln -s`) — Bun has no `bun pm link` |
+| `npm run -g` | Does not exist in npm or Bun — use shell aliases or PATH |
+
+If you need global CLI behavior, **create a symlink manually** and confirm it works before proceeding. Do not guess at alternative Bun flags.
+
 ## Build & Verify
 
 Run in this order before committing:

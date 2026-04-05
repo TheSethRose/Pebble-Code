@@ -3,8 +3,8 @@
  */
 
 import { z } from "zod";
-import { $ } from "bun";
 import type { Tool, ToolContext, ToolResult } from "../Tool.js";
+import { compactGrepOutput } from "../shared/outputCompaction.js";
 
 const GrepInputSchema = z.object({
   pattern: z.string().describe("Search pattern (regex or literal string)"),
@@ -44,26 +44,40 @@ export class GrepTool implements Tool {
       cmd += ` '${pattern.replace(/'/g, "'\\''")}'`;
       cmd += ` ${searchPath}`;
 
-      const result = await $`bash -c ${cmd}`.quiet().nothrow();
-      const output = String(result.stdout || "").trim();
+      const result = Bun.spawnSync({
+        cmd: ["bash", "-lc", cmd],
+        cwd: context.cwd,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const output = result.stdout.toString("utf-8").trim();
 
       if (!output && result.exitCode !== 0) {
         return {
           success: true,
           output: `No matches found for "${pattern}" in ${searchPath}`,
+          summary: `Found 0 matches for ${pattern}`,
           data: { matches: [], count: 0 },
         };
       }
 
-      const lines = output.split("\n").slice(0, limit);
-      const truncated = lines.length >= limit;
-      const displayOutput = lines.join("\n") + (truncated ? `\n\n[Results truncated — showing first ${limit} matches]` : "");
+      const compacted = compactGrepOutput({
+        rawOutput: output,
+        maxResults: limit,
+      });
 
       return {
         success: true,
-        output: displayOutput,
-        truncated,
-        data: { matches: lines, count: lines.length },
+        output: compacted.output,
+        truncated: compacted.truncated,
+        summary: compacted.summary,
+        data: {
+          matches: compacted.groups.flatMap((group) =>
+            group.matches.map((match) => `${group.file}:${match.line}:${match.content}`),
+          ),
+          count: compacted.totalMatches,
+          groups: compacted.groups,
+        },
       };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

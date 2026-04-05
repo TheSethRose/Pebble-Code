@@ -1,5 +1,62 @@
 # Tool Behavior
 
+## Tool API Contract (Universal)
+
+- **Tools are invoked by their registered name, not as standalone commands.**
+  `grep`, `glob`, `project_structure` are *actions* of `WorkspaceRead`, not their own tools.
+- **Multi-action tools use an `action` field with a strictly defined enum.**
+  Always pass a valid enum value — never invent new ones.
+
+### WorkspaceRead (single dispatch, multiple actions)
+All calls use the same tool name with an `action` enum:
+
+```json
+{ "action": "read_file",        "file_path": "path/to/file.ts" }
+{ "action": "read_file",        "file_path": "path/to/file.ts", "start_line": 1, "end_line": 50 }
+{ "action": "list_directory",   "path": "src" }
+{ "action": "grep",             "pattern": "TODO", "path": "src", "is_regex": false }
+{ "action": "glob",             "pattern": "**/*.ts", "path": "src" }
+{ "action": "project_structure","path": ".", "max_depth": 3 }
+{ "action": "summarize_path",   "path": "src/runtime" }
+{ "action": "tool_search",      "query": "permission" }
+{ "action": "git_inspect",      "mode": "status" }
+{ "action": "diagnostics",      "command": "typecheck" }
+```
+
+Required field: **`action`** (enum above). File-level actions need `file_path`; directory-level actions need `path`.
+
+### WorkspaceEdit (single dispatch, multiple actions)
+```json
+{ "action": "write_file",  "file_path": "src/foo.ts", "content": "...", "create_directories": true }
+{ "action": "edit_file",   "file_path": "src/foo.ts", "old_string": "...", "new_string": "..." }
+{ "action": "apply_patch", "file_path": "src/foo.ts", "patch": "..." }
+{ "action": "delete_path", "path": "src/old.ts" }
+{ "action": "move_path",   "source_path": "a.ts", "destination_path": "b.ts" }
+```
+Required field: **`action`**. Write/create/update actions require `file_path`; delete/move actions require `source_path`/`destination_path`/`path`.
+
+### Shell (single dispatch, multiple actions)
+```json
+{ "action": "exec",                 "command": "bun test" }
+{ "action": "start_background",     "command": "bun run dev", "label": "dev server" }
+{ "action": "poll_background",      "id": "<task-id>", "tail_lines": 50 }
+{ "action": "stop_background",      "id": "<task-id>" }
+```
+Required field: **`action`** + **`command`** for exec/background-start.
+
+### General Rules
+- **Every call must have the correct `action` value.** Invalid discriminator → instant failure.
+- **Required fields are required.** Missing `content` on a write, missing `old_string`/`new_string` on edit, missing `command` on shell → truncation or silent corruption.
+- **When in doubt, check the tool's schema before calling.** Don't guess field names or enum values.
+- **File edits via `edit_file` need both `old_string` AND `new_string`.** Writing one without the other produces an empty or mangled result.
+
+## CLI Command Execution
+
+- **Do not guess at CLI commands.** If you're unsure whether a command or flag is correct, look it up first (`<command> --help`) before executing.
+- **Never retry a failed command with a small variation.** If `bun pm link -g` fails, do not try `bun install -g` next. Stop, read the error, and research the correct approach.
+- **Treat npm → Bun mapping carefully.** Many npm patterns (`npm install -g`, `npm link`, `npx`) do not have direct Bun equivalents. Consult `AGENTS.md` for guidance.
+- **When a command fails with an error message, parse the error before trying anything else.** The error usually tells you exactly what went wrong and what to do instead.
+
 ## Action Over Narration
 
 Do not narrate routine, low-risk tool calls — just call the tool.

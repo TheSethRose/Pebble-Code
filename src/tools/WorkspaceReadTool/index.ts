@@ -13,6 +13,7 @@ import {
   safePreviewText,
   truncateText,
 } from "../shared/common.js";
+import { summarizeShellExecution } from "../shared/outputCompaction.js";
 
 const booleanish = z.preprocess((value) => {
   if (typeof value !== "string") {
@@ -248,8 +249,10 @@ export class WorkspaceReadTool implements Tool {
         return {
           success: true,
           output: result.output,
+          truncated: result.truncated,
           data: result.data,
-          summary: `Collected git ${mode}`,
+          debug: result.debug,
+          summary: result.summary,
         };
       }
 
@@ -260,11 +263,13 @@ export class WorkspaceReadTool implements Tool {
           success: result.success,
           output: result.output,
           error: result.error,
+          truncated: result.truncated,
           data: {
             command,
             exitCode: result.exitCode,
           },
-          summary: `Ran ${command}`,
+          debug: result.debug,
+          summary: result.summary,
         };
       }
     }
@@ -274,7 +279,7 @@ export class WorkspaceReadTool implements Tool {
 function inspectGit(
   mode: "status" | "diff" | "staged-diff" | "changed-files",
   cwd: string,
-): { output: string; data: Record<string, unknown> } {
+): { output: string; data: Record<string, unknown>; summary: string; truncated: boolean; debug: Record<string, unknown> } {
   const command = mode === "status"
     ? ["git", "status", "--short"]
     : mode === "diff"
@@ -292,10 +297,19 @@ function inspectGit(
 
   const stdout = result.stdout.toString("utf-8").trim();
   const stderr = result.stderr.toString("utf-8").trim();
-  const output = stdout || stderr || "No git output.";
+  const summarized = summarizeShellExecution({
+    command: command.join(" "),
+    stdout,
+    stderr,
+    exitCode: result.exitCode,
+    cwd,
+  });
 
   return {
-    output,
+    output: summarized.output,
+    summary: summarized.summary,
+    truncated: summarized.truncated,
+    debug: summarized.debug,
     data: {
       mode,
       command,
@@ -309,7 +323,7 @@ function inspectGit(
 function runWorkspaceCommand(
   command: "typecheck" | "build" | "test",
   cwd: string,
-): { success: boolean; output: string; error?: string; exitCode: number } {
+): { success: boolean; output: string; error?: string; exitCode: number; summary: string; truncated: boolean; debug: Record<string, unknown> } {
   const cmd = command === "typecheck"
     ? ["bun", "run", "typecheck"]
     : command === "build"
@@ -324,13 +338,21 @@ function runWorkspaceCommand(
   });
   const stdout = result.stdout.toString("utf-8").trim();
   const stderr = result.stderr.toString("utf-8").trim();
-  const combined = [stdout, stderr].filter(Boolean).join("\n\n");
-  const truncated = truncateText(combined || `${command} produced no output`, 20_000);
+  const summarized = summarizeShellExecution({
+    command: cmd.join(" "),
+    stdout,
+    stderr,
+    exitCode: result.exitCode,
+    cwd,
+  });
 
   return {
     success: result.exitCode === 0,
-    output: truncated.text,
+    output: summarized.output,
     error: result.exitCode === 0 ? undefined : `${command} failed with exit code ${result.exitCode}`,
     exitCode: result.exitCode,
+    summary: summarized.summary,
+    truncated: summarized.truncated,
+    debug: summarized.debug,
   };
 }

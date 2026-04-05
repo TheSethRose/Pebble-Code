@@ -491,7 +491,7 @@ function messageToRows(
         "  ",
         appendCursor(message.content || "Thinking…"),
         width,
-        { color: "yellow" },
+        { color: "white" },
         {
           markdown: true,
           prefixStyle: { color: blinkPhase ? "yellow" : "gray" },

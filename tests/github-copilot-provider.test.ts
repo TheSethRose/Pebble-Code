@@ -286,7 +286,7 @@ describe("GitHub Copilot provider runtime", () => {
     expect(logContents).not.toContain("ghu_saved_device_token");
   });
 
-  test("uses max_completion_tokens for GitHub Copilot GPT-5 requests when maxTokens is provided", async () => {
+  test("uses the responses API with max_output_tokens for GitHub Copilot GPT-5 requests", async () => {
     const requests: Array<{ url: string; headers: Headers; body?: string }> = [];
 
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -312,20 +312,37 @@ describe("GitHub Copilot provider runtime", () => {
       }
 
       return new Response(JSON.stringify({
-        id: "chatcmpl-1",
-        object: "chat.completion",
+        id: "resp_1",
+        object: "response",
         created: 1,
         model: "gpt-5.4",
-        choices: [
+        output_text: "Hello from GPT-5.4",
+        error: null,
+        incomplete_details: null,
+        instructions: null,
+        metadata: null,
+        output: [
           {
-            index: 0,
-            message: { role: "assistant", content: "Hello from GPT-5.4" },
-            finish_reason: "stop",
+            id: "msg_1",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{
+              type: "output_text",
+              text: "Hello from GPT-5.4",
+              annotations: [],
+            }],
           },
         ],
+        parallel_tool_calls: true,
+        temperature: null,
+        tool_choice: "auto",
+        tools: [],
         usage: {
-          prompt_tokens: 5,
-          completion_tokens: 3,
+          input_tokens: 5,
+          input_tokens_details: { cached_tokens: 0 },
+          output_tokens: 3,
+          output_tokens_details: { reasoning_tokens: 0 },
           total_tokens: 8,
         },
       }), {
@@ -356,11 +373,13 @@ describe("GitHub Copilot provider runtime", () => {
     expect(response.text).toBe("Hello from GPT-5.4");
     const requestBody = JSON.parse(requests[1]?.body ?? "{}");
     expect(requestBody.model).toBe("gpt-5.4");
-    expect(requestBody.max_completion_tokens).toBe(123);
+    expect(requests[1]?.url).toBe("https://api.individual.githubcopilot.com/responses");
+    expect(requestBody.max_output_tokens).toBe(123);
+    expect(requestBody.max_completion_tokens).toBeUndefined();
     expect(requestBody.max_tokens).toBeUndefined();
   });
 
-  test("includes preceding assistant tool_calls before tool messages in follow-up Copilot requests", async () => {
+  test("preserves assistant tool calls and tool outputs in follow-up Copilot GPT-5 responses requests", async () => {
     const requests: Array<{ url: string; headers: Headers; body?: string }> = [];
 
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -386,20 +405,37 @@ describe("GitHub Copilot provider runtime", () => {
       }
 
       return new Response(JSON.stringify({
-        id: "chatcmpl-1",
-        object: "chat.completion",
+        id: "resp_2",
+        object: "response",
         created: 1,
         model: "gpt-5.4-mini",
-        choices: [
+        output_text: "Here is the workspace overview.",
+        error: null,
+        incomplete_details: null,
+        instructions: null,
+        metadata: null,
+        output: [
           {
-            index: 0,
-            message: { role: "assistant", content: "Here is the workspace overview." },
-            finish_reason: "stop",
+            id: "msg_2",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{
+              type: "output_text",
+              text: "Here is the workspace overview.",
+              annotations: [],
+            }],
           },
         ],
+        parallel_tool_calls: true,
+        temperature: null,
+        tool_choice: "auto",
+        tools: [],
         usage: {
-          prompt_tokens: 5,
-          completion_tokens: 3,
+          input_tokens: 5,
+          input_tokens_details: { cached_tokens: 0 },
+          output_tokens: 3,
+          output_tokens_details: { reasoning_tokens: 0 },
           total_tokens: 8,
         },
       }), {
@@ -449,26 +485,395 @@ describe("GitHub Copilot provider runtime", () => {
 
     expect(response.text).toBe("Here is the workspace overview.");
     const requestBody = JSON.parse(requests[1]?.body ?? "{}");
-    expect(requestBody.messages).toHaveLength(3);
-    expect(requestBody.messages[1]).toMatchObject({
+    expect(requests[1]?.url).toBe("https://api.individual.githubcopilot.com/responses");
+    expect(requestBody.input).toHaveLength(4);
+    expect(requestBody.input[1]).toMatchObject({
+      type: "message",
       role: "assistant",
-      content: "I'll inspect the workspace first.",
-      tool_calls: [
+      status: "completed",
+      content: [
         {
-          id: "call_workspace_read_1",
-          type: "function",
-          function: {
-            name: "WorkspaceRead",
-            arguments: JSON.stringify({ action: "project_structure", path: "." }),
-          },
+          type: "output_text",
+          text: "I'll inspect the workspace first.",
         },
       ],
     });
-    expect(requestBody.messages[2]).toMatchObject({
-      role: "tool",
-      tool_call_id: "call_workspace_read_1",
+    expect(requestBody.input[2]).toMatchObject({
+      type: "function_call",
+      call_id: "call_workspace_read_1",
       name: "WorkspaceRead",
-      content: "src/\nREADME.md",
+      arguments: JSON.stringify({ action: "project_structure", path: "." }),
     });
+    expect(requestBody.input[2].id).toBeUndefined();
+    expect(requestBody.input[3]).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_workspace_read_1",
+      output: "src/\nREADME.md",
+    });
+  });
+
+  test("normalizes oversized Copilot GPT-5 call ids in follow-up responses history", async () => {
+    const requests: Array<{ url: string; headers: Headers; body?: string }> = [];
+    const longToolCallId = `call_${"workspace_read_".repeat(25)}`;
+
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      requests.push({
+        url,
+        headers: new Headers(init?.headers),
+        body: typeof init?.body === "string" ? init.body : undefined,
+      });
+
+      if (url === "https://api.github.com/copilot_internal/v2/token") {
+        return new Response(JSON.stringify({
+          token: "copilot-runtime-token;proxy-ep=proxy.individual.githubcopilot.com",
+          expires_at: Math.floor((Date.now() + 30 * 60_000) / 1000),
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({
+        id: "resp_2b",
+        object: "response",
+        created: 1,
+        model: "gpt-5.4-mini",
+        output_text: "Here is the workspace overview.",
+        error: null,
+        incomplete_details: null,
+        instructions: null,
+        metadata: null,
+        output: [
+          {
+            id: "msg_2b",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{
+              type: "output_text",
+              text: "Here is the workspace overview.",
+              annotations: [],
+            }],
+          },
+        ],
+        parallel_tool_calls: true,
+        temperature: null,
+        tool_choice: "auto",
+        tools: [],
+        usage: {
+          input_tokens: 5,
+          input_tokens_details: { cached_tokens: 0 },
+          output_tokens: 3,
+          output_tokens_details: { reasoning_tokens: 0 },
+          total_tokens: 8,
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const provider = createPrimaryProvider({
+      settings: {
+        provider: "github-copilot",
+        model: "gpt-5.4-mini",
+        providerAuth: {
+          "github-copilot": {
+            oauth: {
+              accessToken: "ghu_saved_device_token",
+              tokenType: "github-device",
+            },
+          },
+        },
+      },
+    });
+
+    await provider.complete([
+      { role: "user", content: "Give me an overview of the workspace" },
+      {
+        role: "assistant",
+        content: "I'll inspect the workspace first.",
+        metadata: {
+          toolCalls: [{
+            id: longToolCallId,
+            name: "WorkspaceRead",
+            input: {
+              action: "project_structure",
+              path: ".",
+            },
+          }],
+        },
+      },
+      {
+        role: "tool",
+        content: "src/\nREADME.md",
+        toolCallId: longToolCallId,
+        toolName: "WorkspaceRead",
+      },
+    ]);
+
+    const requestBody = JSON.parse(requests[1]?.body ?? "{}");
+    expect(requestBody.input[2]).toMatchObject({
+      type: "function_call",
+      name: "WorkspaceRead",
+      arguments: JSON.stringify({ action: "project_structure", path: "." }),
+    });
+    expect(requestBody.input[3]).toMatchObject({
+      type: "function_call_output",
+      output: "src/\nREADME.md",
+    });
+    expect(requestBody.input[2].call_id).toMatch(/^call_[a-f0-9]{24}$/);
+    expect(requestBody.input[2].call_id.length).toBeLessThanOrEqual(64);
+    expect(requestBody.input[3].call_id).toBe(requestBody.input[2].call_id);
+  });
+
+  test("streams GitHub Copilot GPT-5 responses through the responses API", async () => {
+    const requests: Array<{ url: string; headers: Headers }> = [];
+
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      requests.push({ url, headers: new Headers(init?.headers) });
+
+      if (url === "https://api.github.com/copilot_internal/v2/token") {
+        return new Response(JSON.stringify({
+          token: "copilot-runtime-token;proxy-ep=proxy.individual.githubcopilot.com",
+          expires_at: Math.floor((Date.now() + 30 * 60_000) / 1000),
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const body = [
+        'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_3","object":"response","created_at":1,"model":"gpt-5.4-mini","output":[],"output_text":"","error":null,"incomplete_details":null,"instructions":null,"metadata":null,"parallel_tool_calls":true,"temperature":null,"tool_choice":"auto","tools":[],"usage":{"input_tokens":1,"input_tokens_details":{"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":1}}}\n\n',
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Hello","content_index":0,"item_id":"msg_3","output_index":0,"sequence_number":2}\n\n',
+        'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_3","object":"response","created_at":1,"model":"gpt-5.4-mini","output":[],"output_text":"Hello","error":null,"incomplete_details":null,"instructions":null,"metadata":null,"parallel_tool_calls":true,"temperature":null,"tool_choice":"auto","tools":[],"usage":{"input_tokens":1,"input_tokens_details":{"cached_tokens":0},"output_tokens":1,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":2}}}\n\n',
+        'data: [DONE]\n\n',
+      ].join("");
+
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+
+    const provider = createPrimaryProvider({
+      settings: {
+        provider: "github-copilot",
+        model: "gpt-5.4-mini",
+        providerAuth: {
+          "github-copilot": {
+            oauth: {
+              accessToken: "ghu_saved_device_token",
+              tokenType: "github-device",
+            },
+          },
+        },
+      },
+    });
+
+    const chunks = [] as Array<{ textDelta?: string; done: boolean; stopReason?: unknown }>;
+    for await (const chunk of provider.stream([{ role: "user", content: "Hello" }])) {
+      chunks.push({
+        textDelta: chunk.textDelta,
+        done: chunk.done,
+        stopReason: chunk.metadata?.stopReason,
+      });
+    }
+
+    expect(chunks).toEqual([
+      { textDelta: "Hello", done: false, stopReason: undefined },
+      { textDelta: undefined, done: true, stopReason: "end_turn" },
+    ]);
+    expect(requests[1]?.url).toBe("https://api.individual.githubcopilot.com/responses");
+  });
+
+  test("surfaces streamed Copilot GPT-5 function calls using call_id instead of fc item ids", async () => {
+    const requests: Array<{ url: string; headers: Headers }> = [];
+
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      requests.push({ url, headers: new Headers(init?.headers) });
+
+      if (url === "https://api.github.com/copilot_internal/v2/token") {
+        return new Response(JSON.stringify({
+          token: "copilot-runtime-token;proxy-ep=proxy.individual.githubcopilot.com",
+          expires_at: Math.floor((Date.now() + 30 * 60_000) / 1000),
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const body = [
+        'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_4","object":"response","created_at":1,"model":"gpt-5.4-mini","output":[],"output_text":"","error":null,"incomplete_details":null,"instructions":null,"metadata":null,"parallel_tool_calls":true,"temperature":null,"tool_choice":"auto","tools":[],"usage":{"input_tokens":1,"input_tokens_details":{"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":1}}}\n\n',
+        'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"sequence_number":2,"item":{"id":"fc_123","type":"function_call","call_id":"call_workspace_read_1","name":"WorkspaceRead","arguments":"","status":"in_progress"}}\n\n',
+        'event: response.function_call_arguments.done\ndata: {"type":"response.function_call_arguments.done","arguments":"{\\"action\\":\\"project_structure\\",\\"path\\":\\".\\"}","item_id":"fc_123","name":"WorkspaceRead","output_index":0,"sequence_number":3}\n\n',
+        'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_4","object":"response","created_at":1,"model":"gpt-5.4-mini","output":[],"output_text":"","error":null,"incomplete_details":null,"instructions":null,"metadata":null,"parallel_tool_calls":true,"temperature":null,"tool_choice":"auto","tools":[],"usage":{"input_tokens":1,"input_tokens_details":{"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":1}}}\n\n',
+        'data: [DONE]\n\n',
+      ].join("");
+
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+
+    const provider = createPrimaryProvider({
+      settings: {
+        provider: "github-copilot",
+        model: "gpt-5.4-mini",
+        providerAuth: {
+          "github-copilot": {
+            oauth: {
+              accessToken: "ghu_saved_device_token",
+              tokenType: "github-device",
+            },
+          },
+        },
+      },
+    });
+
+    const chunks = [] as Array<{ toolCall?: { id: string; name: string; input: unknown }; done: boolean; stopReason?: unknown }>;
+    for await (const chunk of provider.stream([{ role: "user", content: "Inspect the workspace" }])) {
+      chunks.push({
+        toolCall: chunk.toolCall,
+        done: chunk.done,
+        stopReason: chunk.metadata?.stopReason,
+      });
+    }
+
+    expect(chunks).toEqual([
+      {
+        toolCall: {
+          id: "call_workspace_read_1",
+          name: "WorkspaceRead",
+          input: { action: "project_structure", path: "." },
+        },
+        done: false,
+        stopReason: undefined,
+      },
+      {
+        toolCall: undefined,
+        done: true,
+        stopReason: "tool_use",
+      },
+    ]);
+    expect(requests[1]?.url).toBe("https://api.individual.githubcopilot.com/responses");
+  });
+
+  test("waits for a usable streamed tool name and decodes double-encoded Copilot GPT-5 tool input", async () => {
+    const requests: Array<{ url: string; headers: Headers }> = [];
+    const longToolCallId = `call_${"workspace_read_".repeat(25)}`;
+    const doubleEncodedArguments = JSON.stringify(JSON.stringify({
+      action: "project_structure",
+      path: ".",
+    }));
+
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      requests.push({ url, headers: new Headers(init?.headers) });
+
+      if (url === "https://api.github.com/copilot_internal/v2/token") {
+        return new Response(JSON.stringify({
+          token: "copilot-runtime-token;proxy-ep=proxy.individual.githubcopilot.com",
+          expires_at: Math.floor((Date.now() + 30 * 60_000) / 1000),
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const body = [
+        'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_5","object":"response","created_at":1,"model":"gpt-5.4-mini","output":[],"output_text":"","error":null,"incomplete_details":null,"instructions":null,"metadata":null,"parallel_tool_calls":true,"temperature":null,"tool_choice":"auto","tools":[],"usage":{"input_tokens":1,"input_tokens_details":{"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":1}}}\n\n',
+        `event: response.function_call_arguments.done\ndata: ${JSON.stringify({
+          type: "response.function_call_arguments.done",
+          arguments: doubleEncodedArguments,
+          item_id: "fc_456",
+          output_index: 0,
+          sequence_number: 2,
+        })}\n\n`,
+        `event: response.output_item.done\ndata: ${JSON.stringify({
+          type: "response.output_item.done",
+          output_index: 0,
+          sequence_number: 3,
+          item: {
+            id: "fc_456",
+            type: "function_call",
+            call_id: longToolCallId,
+            name: "WorkspaceRead",
+            arguments: doubleEncodedArguments,
+            status: "completed",
+          },
+        })}\n\n`,
+        'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_5","object":"response","created_at":1,"model":"gpt-5.4-mini","output":[],"output_text":"","error":null,"incomplete_details":null,"instructions":null,"metadata":null,"parallel_tool_calls":true,"temperature":null,"tool_choice":"auto","tools":[],"usage":{"input_tokens":1,"input_tokens_details":{"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":1}}}\n\n',
+        'data: [DONE]\n\n',
+      ].join("");
+
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+
+    const provider = createPrimaryProvider({
+      settings: {
+        provider: "github-copilot",
+        model: "gpt-5.4-mini",
+        providerAuth: {
+          "github-copilot": {
+            oauth: {
+              accessToken: "ghu_saved_device_token",
+              tokenType: "github-device",
+            },
+          },
+        },
+      },
+    });
+
+    const chunks = [] as Array<{ toolCall?: { id: string; name: string; input: unknown }; done: boolean; stopReason?: unknown }>;
+    for await (const chunk of provider.stream([{ role: "user", content: "Inspect the workspace" }])) {
+      chunks.push({
+        toolCall: chunk.toolCall,
+        done: chunk.done,
+        stopReason: chunk.metadata?.stopReason,
+      });
+    }
+
+    expect(chunks).toEqual([
+      {
+        toolCall: {
+          id: expect.stringMatching(/^call_[a-f0-9]{24}$/),
+          name: "WorkspaceRead",
+          input: { action: "project_structure", path: "." },
+        },
+        done: false,
+        stopReason: undefined,
+      },
+      {
+        toolCall: undefined,
+        done: true,
+        stopReason: "tool_use",
+      },
+    ]);
+    expect((chunks[0]?.toolCall?.id ?? "").length).toBeLessThanOrEqual(64);
+    expect(requests[1]?.url).toBe("https://api.individual.githubcopilot.com/responses");
   });
 });
