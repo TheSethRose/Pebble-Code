@@ -1151,6 +1151,10 @@ export function App({
 
       // ---- Regular prompt ----------------------------------------
       if (!engineRef.current) {
+        rebuildEngine(runtimeConfig);
+      }
+
+      if (!engineRef.current) {
         setState((prev) => ({
           ...prev,
           messages: [
@@ -1307,7 +1311,7 @@ export function App({
     // state.messages intentionally omitted — we only need it for the fallback
     // non-persisted path. Including it would cause stale-closure issues.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [registry, context, runtimeConfig, sessionStore, refreshSessions, suggestions, suggestionIndex, reconcilePendingApprovals, refreshRuntimeConfig],
+    [registry, context, runtimeConfig, sessionStore, refreshSessions, suggestions, suggestionIndex, reconcilePendingApprovals, refreshRuntimeConfig, rebuildEngine, buildCompactionPolicy],
   );
 
   const model = String(runtimeConfig.model ?? "default");

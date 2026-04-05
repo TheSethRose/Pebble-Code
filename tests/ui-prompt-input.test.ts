@@ -108,6 +108,7 @@ describe("PromptInput", () => {
     expect(flat).toContain("2 pasted blocks staged");
     expect(flat).toContain("Enter sends the full pasted content");
   });
+
 });
 
 function normalizeWhitespace(value: string): string {
