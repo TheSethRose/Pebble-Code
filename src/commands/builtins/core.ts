@@ -1,5 +1,16 @@
 import type { Command, CommandResult } from "../types.js";
+import {
+  getBuiltinProviderDefinition,
+  isSupportedProvider,
+  normalizeProviderId,
+} from "../../providers/catalog.js";
 import { ensureProjectInit, formatInitFlowReport } from "../../runtime/initFlow.js";
+import {
+  createConfigUpdatedResult,
+  ensureProviderDefaults,
+  loadProjectSettings,
+  saveProjectSettings,
+} from "./shared.js";
 
 export function createHelpCommand(): Command {
   return {
@@ -8,8 +19,28 @@ export function createHelpCommand(): Command {
     description: "Show keyboard shortcuts",
     type: "local",
     usage: "/help",
-    modes: ["interactive"],
-    execute: (_args, _ctx): CommandResult => {
+    modes: ["interactive", "telegram"],
+    execute: (_args, ctx): CommandResult => {
+      if (ctx.mode === "telegram") {
+        return {
+          success: true,
+          output: [
+            "Pebble Telegram commands:",
+            "/start — show Telegram runtime status",
+            "/help — show this help",
+            "/new — start a fresh session for this chat/topic",
+            "/sessions — list this chat's recent sessions",
+            "/resume <session-id> — bind this chat/topic to an earlier session",
+            "/model [model-id] — show or update the active model",
+            "/provider [provider-id] — show or update the active provider",
+            "/compact — compact the current bound session",
+            "/status — show Telegram runtime state",
+            "/approve <id> / /deny <id> — resolve a pending approval",
+            "/stop — cancel the active run for this chat/topic",
+          ].join("\n"),
+        };
+      }
+
       return {
         success: true,
         output: "",
@@ -87,12 +118,55 @@ export function createProviderCommand(): Command {
   return {
     name: "provider",
     aliases: ["p"],
-    description: "Switch AI provider",
-    type: "ui",
-    usage: "/provider",
-    modes: ["interactive"],
-    execute: (_args, _ctx): CommandResult => {
-      return { success: true, output: "", data: { action: "open-settings", defaultTab: "provider" } };
+    description: "Show or change the active AI provider",
+    type: "local",
+    usage: "/provider [provider-id]",
+    modes: ["interactive", "telegram"],
+    execute: (args, ctx): CommandResult => {
+      const requestedProvider = args.trim();
+      if (!requestedProvider) {
+        if (ctx.mode === "telegram") {
+          const providerId = typeof ctx.config.provider === "string"
+            ? ctx.config.provider
+            : loadProjectSettings(ctx).provider;
+          const providerLabel = typeof ctx.config.providerLabel === "string"
+            ? ctx.config.providerLabel
+            : getBuiltinProviderDefinition(providerId)?.label ?? providerId ?? "unknown";
+          return {
+            success: true,
+            output: [
+              `Current provider: ${providerLabel} (${providerId ?? "unknown"})`,
+              "Usage: /provider <provider-id>",
+            ].join("\n"),
+          };
+        }
+
+        return { success: true, output: "", data: { action: "open-settings", defaultTab: "provider" } };
+      }
+
+      const providerId = normalizeProviderId(requestedProvider);
+      if (!isSupportedProvider(providerId)) {
+        return {
+          success: true,
+          output: `Unsupported provider: ${providerId}. Choose a built-in provider or configure an extension provider in the TUI settings.`,
+        };
+      }
+
+      const currentSettings = loadProjectSettings(ctx);
+      const switchingProvider = providerId !== normalizeProviderId(currentSettings.provider);
+      const nextSettings = ensureProviderDefaults({
+        ...currentSettings,
+        provider: providerId,
+        model: switchingProvider ? undefined : currentSettings.model,
+        baseUrl: switchingProvider ? undefined : currentSettings.baseUrl,
+      });
+      const settingsPath = saveProjectSettings(ctx, nextSettings);
+      const providerLabel = getBuiltinProviderDefinition(providerId)?.label ?? providerId;
+
+      return createConfigUpdatedResult(
+        `Provider set to ${providerLabel} (${providerId}). Saved to ${settingsPath}.`,
+        settingsPath,
+      );
     },
   };
 }

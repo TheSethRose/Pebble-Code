@@ -70,7 +70,10 @@ async function build() {
   console.log("\n📦 Bundling...");
   try {
     const result = await Bun.build({
-      entrypoints: [join(SRC, "entrypoints/cli.tsx")],
+      entrypoints: [
+        join(SRC, "entrypoints/cli.tsx"),
+        join(SRC, "entrypoints/telegram.ts"),
+      ],
       outdir: DIST,
       target: "bun",
       minify: true,
@@ -93,7 +96,7 @@ async function build() {
       process.exit(1);
     }
 
-    // Rename cli.js to pebble.js for the start script
+    // Rename entrypoint bundles to their published executable names.
     const cliJs = join(DIST, "cli.js");
     const pebbleJs = join(DIST, "pebble.js");
     if (existsSync(cliJs)) {
@@ -103,7 +106,16 @@ async function build() {
       renameSync(cliJs, pebbleJs);
     }
 
-    console.log("✅ Bundle created in dist/pebble.js");
+    const telegramJs = join(DIST, "telegram.js");
+    const pebbleTelegramJs = join(DIST, "pebble-telegram.js");
+    if (existsSync(telegramJs)) {
+      if (existsSync(pebbleTelegramJs)) {
+        rmSync(pebbleTelegramJs);
+      }
+      renameSync(telegramJs, pebbleTelegramJs);
+    }
+
+    console.log("✅ Bundles created in dist/pebble.js and dist/pebble-telegram.js");
   } catch (err: unknown) {
     console.error("❌ Build failed");
     const message = err instanceof Error ? err.message : String(err);
@@ -114,8 +126,8 @@ async function build() {
   // Step 5: Verify the bundled output across success and failure paths
   console.log("\n🧪 Verifying bundled output...");
   try {
-    await verifyBundledCli();
-    console.log("✅ Bundled CLI passed success and failure-path verification");
+    await verifyBundledEntrypoints();
+    console.log("✅ Bundled entrypoints passed success and failure-path verification");
   } catch (err: unknown) {
     console.error("❌ Bundled output verification failed");
     const message = err instanceof Error ? err.message : String(err);
@@ -260,6 +272,35 @@ async function verifyBundledCli(): Promise<void> {
   const headlessFailureOutput = assertFailure(runBundledCli("--headless"), "--headless without prompt");
   if (!headlessFailureOutput.includes("headless mode requires --prompt")) {
     throw new Error(`Expected headless failure message not found: ${headlessFailureOutput}`);
+  }
+}
+
+function runBundledTelegram(...args: string[]): SpawnResult {
+  const smokeCwd = createSmokeProjectDir();
+  const smokePebbleHome = join(smokeCwd, ".pebble-home");
+  mkdirSync(smokePebbleHome, { recursive: true });
+
+  return Bun.spawnSync({
+    cmd: [process.execPath, join(DIST, "pebble-telegram.js"), ...args],
+    cwd: smokeCwd,
+    env: {
+      ...process.env,
+      HOME: smokeCwd,
+      PEBBLE_HOME: smokePebbleHome,
+      PEBBLE_TELEGRAM_BOT_TOKEN: "",
+      TELEGRAM_BOT_TOKEN: "",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+async function verifyBundledEntrypoints(): Promise<void> {
+  await verifyBundledCli();
+
+  const telegramHelp = assertSuccess(runBundledTelegram("--help"), "telegram --help");
+  if (!telegramHelp.includes("Pebble Telegram runtime") || !telegramHelp.includes("--bot-token")) {
+    throw new Error(`Telegram help output missing expected flags: ${telegramHelp}`);
   }
 }
 

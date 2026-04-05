@@ -7,13 +7,16 @@
   "private": true,
   "exports": {
     ".": "./index.ts",
-    "./cli": "./src/entrypoints/cli.tsx"
+    "./cli": "./src/entrypoints/cli.tsx",
+    "./telegram": "./src/entrypoints/telegram.ts"
   },
   "bin": {
-    "pebble": "./dist/pebble.js"
+    "pebble": "./dist/pebble.js",
+    "pebble-telegram": "./dist/pebble-telegram.js"
   },
   "scripts": {
     "dev": "bun run src/entrypoints/cli.tsx",
+    "dev:telegram": "bun run src/entrypoints/telegram.ts",
     "build": "bun run scripts/build.ts",
     "hooks:install": "bun run scripts/install-git-hooks.ts",
     "hooks:check-secrets": "bun run scripts/check-no-staged-provider-secrets.ts --mode staged",
@@ -25,6 +28,7 @@
   },
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
+    "grammy": "^1.42.0",
     "ink": "^6.8.0",
     "openai": "^6.33.0",
     "react": "^19.2.4",

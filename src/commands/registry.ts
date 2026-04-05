@@ -112,7 +112,7 @@ export class CommandRegistry {
       return true;
     }
 
-    const currentMode = context.headless ? "headless" : "interactive";
+    const currentMode = context.mode ?? (context.headless ? "headless" : "interactive");
     if (command.modes?.length && !command.modes.includes(currentMode)) {
       return false;
     }

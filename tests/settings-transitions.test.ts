@@ -37,6 +37,24 @@ describe("settings post-login navigation", () => {
     });
   });
 
+  test("returns to the model picker after manual auth configuration succeeds", () => {
+    expect(resolveSettingsPostLoginNavigation({
+      providerId: "custom-openai",
+      followUpProviderId: "custom-openai",
+      returnTarget: {
+        tab: "model",
+        modelPhase: "model",
+        successMessage: "Custom OpenAI-Compatible Endpoint authenticated. Pick a model below.",
+      },
+    })).toEqual({
+      nextTab: "model",
+      modelResumeTarget: {
+        phase: "model",
+        message: "Custom OpenAI-Compatible Endpoint authenticated. Pick a model below.",
+      },
+    });
+  });
+
   test("routes configured provider selection straight into the model list", () => {
     expect(resolveSettingsPostProviderSelectionNavigation({
       providerId: "anthropic",

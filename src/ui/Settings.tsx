@@ -23,10 +23,13 @@ import {
 } from "../providers/config.js";
 import {
   getBuiltinProviderDefinition,
+  getProviderBaseUrlDescription,
+  getProviderBaseUrlPlaceholder,
   getBuiltinProviderDefinitions,
   getProviderAuthDescription,
   getProviderCredentialLabel,
   normalizeProviderId,
+  providerSupportsConfigurableBaseUrl,
   providerSupportsManualCredentialEntry,
 } from "../providers/catalog.js";
 import { listRuntimeProviders, resolveRuntimeProvider } from "../providers/runtime.js";
@@ -1254,6 +1257,7 @@ function ModelTab({
 function ApiKeyTab({
   settings,
   onSave,
+  onConfigured,
   initialProviderId,
   initialPhase = "provider",
   notice,
@@ -1262,6 +1266,7 @@ function ApiKeyTab({
 }: {
   settings: Settings;
   onSave: (s: Settings) => void;
+  onConfigured?: (providerId: string) => void;
   initialProviderId?: string;
   initialPhase?: "provider" | "credential";
   notice?: string;
@@ -1270,6 +1275,7 @@ function ApiKeyTab({
 }) {
   const [message, setMessage] = useState("");
   const [phase, setPhase] = useState<"provider" | "credential">(initialPhase);
+  const [manualEditPhase, setManualEditPhase] = useState<"menu" | "credential" | "base-url">("menu");
   const [filterQuery, setFilterQuery] = useState("");
   const [lastAutoLoginProviderId, setLastAutoLoginProviderId] = useState<string | null>(null);
   const [selectedProviderId, setSelectedProviderId] = useState(
@@ -1283,6 +1289,10 @@ function ApiKeyTab({
   useEffect(() => {
     setPhase(initialPhase);
   }, [initialPhase]);
+
+  useEffect(() => {
+    setManualEditPhase("menu");
+  }, [phase, selectedProviderId]);
 
   const providerOptions = useMemo<AuthProviderOption[]>(() => {
     return buildBuiltinProviderOptions().map((option) => ({
@@ -1305,7 +1315,18 @@ function ApiKeyTab({
   });
   const authStatus = getProviderAuthStatus(settings, selectedProviderId);
   const manualEntrySupported = providerSupportsManualCredentialEntry(selectedDefinition);
+  const baseUrlSupported = providerSupportsConfigurableBaseUrl(selectedDefinition);
   const activeLoginState = loginState?.providerId === selectedProviderId ? loginState : null;
+
+  const maybeCompleteFollowUp = useCallback((nextSettings: Settings, providerId: string) => {
+    const nextStatus = getProviderAuthStatus(nextSettings, providerId);
+    if (nextStatus.isConfigured) {
+      onConfigured?.(providerId);
+      return true;
+    }
+
+    return false;
+  }, [onConfigured]);
 
   useEffect(() => {
     if (phase !== "credential" || activeLoginState?.status !== "success" || !authStatus.isConfigured) {
@@ -1357,17 +1378,109 @@ function ApiKeyTab({
         setStoredProviderCredential(settings, selectedProviderId, value.trim()),
       );
       onSave(next);
+      const finishedFollowUp = maybeCompleteFollowUp(next, selectedProviderId);
       setMessage(`${getProviderCredentialLabel(selectedDefinition)} saved for ${selectedDefinition.label}`);
+      if (!finishedFollowUp) {
+        setManualEditPhase(baseUrlSupported ? "menu" : "credential");
+      }
     },
-    [manualEntrySupported, onSave, selectedDefinition, selectedProviderId, settings],
+    [baseUrlSupported, manualEntrySupported, maybeCompleteFollowUp, onSave, selectedDefinition, selectedProviderId, settings],
   );
+
+  const handleBaseUrlSubmit = useCallback((value: string) => {
+    if (!selectedDefinition || !baseUrlSupported) {
+      setMessage("This provider does not expose a configurable base URL in Pebble.");
+      return;
+    }
+
+    const trimmed = value.trim();
+    const normalized = trimmed.replace(/\/+$/u, "");
+
+    if (!normalized) {
+      if (selectedDefinition.defaultBaseUrl) {
+        const next = ensureSettingsProviderDefaults({
+          ...settings,
+          provider: selectedProviderId,
+          baseUrl: undefined,
+        });
+        onSave(next);
+        maybeCompleteFollowUp(next, selectedProviderId);
+        setMessage(`Base URL reset to ${selectedDefinition.defaultBaseUrl} for ${selectedDefinition.label}`);
+        setManualEditPhase("menu");
+        return;
+      }
+
+      if (selectedDefinition.requiresBaseUrl) {
+        setMessage("Base URL cannot be empty for this provider.");
+        return;
+      }
+
+      const next = ensureSettingsProviderDefaults({
+        ...settings,
+        provider: selectedProviderId,
+        baseUrl: undefined,
+      });
+      onSave(next);
+      maybeCompleteFollowUp(next, selectedProviderId);
+      setMessage(`Base URL cleared for ${selectedDefinition.label}`);
+      setManualEditPhase("menu");
+      return;
+    }
+
+    try {
+      const parsed = new URL(normalized);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        setMessage("Base URL must start with http:// or https://.");
+        return;
+      }
+    } catch {
+      setMessage("Base URL must be a full http:// or https:// URL.");
+      return;
+    }
+
+    const next = ensureSettingsProviderDefaults({
+      ...settings,
+      provider: selectedProviderId,
+      baseUrl: normalized,
+    });
+    onSave(next);
+    maybeCompleteFollowUp(next, selectedProviderId);
+    setMessage(`Base URL saved for ${selectedDefinition.label}`);
+    setManualEditPhase("menu");
+  }, [baseUrlSupported, maybeCompleteFollowUp, onSave, selectedDefinition, selectedProviderId, settings]);
+
+  const manualConfigOptions = useMemo<Array<{ label: string; value: "credential" | "base-url" }>>(() => {
+    const options: Array<{ label: string; value: "credential" | "base-url" }> = [
+      {
+        label: `${getProviderCredentialLabel(selectedDefinition)}: ${formatProviderAuthStatus(authStatus)}${baseUrlSupported ? "  —  press Enter to edit" : ""}`,
+        value: "credential",
+      },
+    ];
+
+    if (baseUrlSupported) {
+      options.push({
+        label: `Base URL: ${resolved.baseUrl || "not configured"}  —  press Enter to edit`,
+        value: "base-url",
+      });
+    }
+
+    return options;
+  }, [authStatus, baseUrlSupported, resolved.baseUrl, selectedDefinition]);
 
   const handleProviderSelect = useCallback((value: string) => {
     setSelectedProviderId(normalizeProviderId(value));
     setPhase("credential");
+    setManualEditPhase("menu");
     setFilterQuery("");
     setMessage("");
     setLastAutoLoginProviderId(null);
+  }, []);
+
+  const handleManualConfigSelect = useCallback((value: string) => {
+    if (value === "credential" || value === "base-url") {
+      setManualEditPhase(value);
+      setMessage("");
+    }
   }, []);
 
   useInput(
@@ -1391,6 +1504,11 @@ function ApiKeyTab({
   useInput(
     (_char, key) => {
       if (phase === "credential" && key.leftArrow) {
+        if (manualEntrySupported && manualEditPhase !== "menu") {
+          setManualEditPhase("menu");
+          return;
+        }
+
         setPhase("provider");
       }
     },
@@ -1432,19 +1550,63 @@ function ApiKeyTab({
               {formatProviderAuthStatus(authStatus)}
             </Text>
             <Text>Env vars: {resolved.envKeyNames.join(", ")}</Text>
+            {baseUrlSupported && (
+              <Text>
+                Base URL env vars: {selectedDefinition?.baseUrlEnvKeys.join(", ") || "configure in settings"}
+              </Text>
+            )}
+            {baseUrlSupported && (
+              <Text>
+                Current base URL: {resolved.baseUrl || "not configured"}
+                {resolved.baseUrlSource ? ` (${resolved.baseUrlSource})` : ""}
+              </Text>
+            )}
             {!resolved.implemented && (
               <Text color="yellow">Runtime status: cataloged, but live execution is still unimplemented or un-smoke-tested.</Text>
+            )}
+            {baseUrlSupported && (
+              <Text dimColor>{getProviderBaseUrlDescription(selectedDefinition)}</Text>
             )}
             {selectedDefinition?.help && (
               <Text dimColor>{selectedDefinition.help}</Text>
             )}
             {manualEntrySupported ? (
-              <Box marginTop={1}>
-                <Text color="cyan">{"› "} </Text>
-                <TextInput
-                  onSubmit={handleSubmit}
-                  placeholder={`${getProviderCredentialLabel(selectedDefinition)} (saved to ~/.pebble/settings.json)`}
-                />
+              <Box marginTop={1} flexDirection="column">
+                {manualEditPhase === "menu" ? (
+                  <Select
+                    options={manualConfigOptions}
+                    visibleOptionCount={manualConfigOptions.length}
+                    defaultValue="credential"
+                    onChange={handleManualConfigSelect}
+                  />
+                ) : (
+                  <>
+                    <Text dimColor>
+                      Editing: {manualEditPhase === "credential" ? getProviderCredentialLabel(selectedDefinition) : "base URL"}
+                    </Text>
+                    <Text dimColor>
+                      Current: {manualEditPhase === "credential"
+                        ? formatProviderAuthStatus(authStatus)
+                        : resolved.baseUrl || "not configured"}
+                    </Text>
+                    <Text dimColor>
+                      {manualEditPhase === "credential"
+                        ? `Saved to ~/.pebble/settings.json for ${selectedDefinition?.label ?? selectedProviderId}.`
+                        : selectedDefinition?.defaultBaseUrl
+                          ? `Submit a blank value to restore ${selectedDefinition.defaultBaseUrl}.`
+                          : "Submit the OpenAI-compatible API root Pebble should call (usually ending in /v1)."}
+                    </Text>
+                    <Box marginTop={1}>
+                      <Text color="cyan">{"› "} </Text>
+                      <TextInput
+                        onSubmit={manualEditPhase === "credential" ? handleSubmit : handleBaseUrlSubmit}
+                        placeholder={manualEditPhase === "credential"
+                          ? `${getProviderCredentialLabel(selectedDefinition)} (saved to ~/.pebble/settings.json)`
+                          : getProviderBaseUrlPlaceholder(selectedDefinition)}
+                      />
+                    </Box>
+                  </>
+                )}
               </Box>
             ) : (
               renderProviderAuthHelp({
@@ -1470,13 +1632,17 @@ function ApiKeyTab({
         <Text dimColor>
           {phase === "provider"
             ? "Type to filter · ↑↓ navigate · Enter select provider · Shift+Tab / Tab to switch sections"
-            : getProviderAuthActionHint({
-              providerId: selectedProviderId,
-              manualEntrySupported,
-              implemented: resolved.implemented,
-              authStatus,
-              loginState: activeLoginState,
-            })}
+            : manualEntrySupported
+              ? manualEditPhase === "menu"
+                ? "↑↓ choose field · Enter edit · ← change provider · Shift+Tab / Tab to switch sections"
+                : "Enter save · ← back to auth fields · Shift+Tab / Tab to switch sections"
+              : getProviderAuthActionHint({
+                providerId: selectedProviderId,
+                manualEntrySupported,
+                implemented: resolved.implemented,
+                authStatus,
+                loginState: activeLoginState,
+              })}
         </Text>
       </Box>
     </Box>
@@ -1551,6 +1717,28 @@ export function Settings({
     });
     setActiveTab("model");
   }, []);
+
+  const handleManualProviderConfigured = useCallback((providerId: string) => {
+    const navigation = resolveSettingsPostLoginNavigation({
+      providerId,
+      followUpProviderId: authFollowUp?.providerId,
+      returnTarget: authReturnTarget,
+    });
+
+    if (!navigation) {
+      return;
+    }
+
+    setAuthFollowUp(null);
+    setAuthReturnTarget(null);
+    if (navigation.modelResumeTarget) {
+      setModelResumeTarget({
+        nonce: Date.now(),
+        ...navigation.modelResumeTarget,
+      });
+    }
+    setActiveTab(navigation.nextTab);
+  }, [authFollowUp?.providerId, authReturnTarget]);
 
   const runProviderLogin = useCallback(async (providerId: string) => {
     if (activeProviderLoginRef.current === providerId) {
@@ -1691,6 +1879,7 @@ export function Settings({
           <ApiKeyTab
             settings={settings}
             onSave={handleSave}
+            onConfigured={handleManualProviderConfigured}
             initialProviderId={authFollowUp?.providerId}
             initialPhase={authFollowUp ? "credential" : "provider"}
             notice={authFollowUp?.notice}

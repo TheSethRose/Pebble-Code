@@ -185,6 +185,49 @@ export function getProviderAuthDescription(
   }
 }
 
+export function providerSupportsConfigurableBaseUrl(
+  provider?: string | BuiltinProviderDefinition,
+): boolean {
+  const definition = resolveDefinition(provider);
+  if (!definition) {
+    return false;
+  }
+
+  return definition.transport === "openai-compatible"
+    || definition.requiresBaseUrl
+    || Boolean(definition.defaultBaseUrl)
+    || definition.baseUrlEnvKeys.length > 0;
+}
+
+export function getProviderBaseUrlPlaceholder(
+  provider?: string | BuiltinProviderDefinition,
+): string {
+  const definition = resolveDefinition(provider);
+  if (!definition) {
+    return "http://localhost:8080/v1";
+  }
+
+  return definition.defaultBaseUrl
+    || (definition.transport === "openai-compatible"
+      ? "http://localhost:8080/v1"
+      : "https://example.com/api");
+}
+
+export function getProviderBaseUrlDescription(
+  provider?: string | BuiltinProviderDefinition,
+): string {
+  const definition = resolveDefinition(provider);
+  if (!definition) {
+    return "Use the API root URL Pebble should call, usually ending in /v1.";
+  }
+
+  if (definition.transport === "openai-compatible") {
+    return `Use the OpenAI-compatible API root Pebble should call, usually ending in /v1 (for example ${getProviderBaseUrlPlaceholder(definition)}). Do not paste a full /chat/completions, /responses, or /models URL; Pebble appends /models and /chat/completions itself.`;
+  }
+
+  return `Use the API root URL Pebble should call${definition.defaultBaseUrl ? ` (default: ${definition.defaultBaseUrl})` : ""}.`;
+}
+
 function envPrefixForProvider(id: string): string {
   return id.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
 }
@@ -408,7 +451,7 @@ const BUILTIN_PROVIDER_DEFINITIONS: BuiltinProviderDefinition[] = [
     aliases: ["customoai", "custom-openai-endpoint"],
     requiresBaseUrl: true,
     exampleModels: ["custom/model"],
-    help: "Set a custom base URL plus model metadata to route Pebble through another OpenAI-compatible endpoint.",
+    help: "Set the OpenAI-compatible API root URL (usually ending in /v1) plus model metadata to route Pebble through another endpoint. Do not paste a full /chat/completions URL.",
   }),
   openAiCompatible("github-copilot", "GitHub Copilot", {
     envKeys: [

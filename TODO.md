@@ -59,7 +59,7 @@ But the current repo is still **far from reference breadth**, especially in:
 - Interactive and headless runtimes persist session transcripts and support basic resume flows
 - Basic Ink REPL exists and can invoke the engine
 - UI now exposes trust/session startup chrome, recent-session history, and a tabbed settings panel
-- Settings now support per-provider auth storage, provider-aware login messaging, and provider-first model selection with searchable model lists
+- Settings now support per-provider auth storage, provider-aware login messaging, editable base URLs for OpenAI-compatible endpoints, and provider-first model selection with searchable model lists
 
 ### What is partial or weak
 

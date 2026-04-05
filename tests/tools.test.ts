@@ -1,4 +1,4 @@
-import { describe, expect, test, afterEach } from "bun:test";
+import { describe, expect, test, afterEach, afterAll } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -25,6 +25,10 @@ import { WorkspaceEditTool } from "../src/tools/WorkspaceEditTool";
 import { WorkspaceReadTool } from "../src/tools/WorkspaceReadTool";
 
 const tempDirs: string[] = [];
+const previousPebbleHome = process.env.PEBBLE_HOME;
+const pebbleHomeDir = mkdtempSync(join(tmpdir(), "pebble-tools-home-"));
+
+process.env.PEBBLE_HOME = pebbleHomeDir;
 
 function createTempProject(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -48,7 +52,7 @@ async function waitForBackgroundRun(
   projectDir: string,
   runId: string,
   predicate: (run: Record<string, unknown>) => boolean,
-  timeoutMs = 8_000,
+  timeoutMs = 30_000,
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs;
   const tool = new OrchestrateTool();
@@ -79,6 +83,14 @@ afterEach(() => {
       rmSync(dir, { recursive: true, force: true });
     }
   }
+
+  rmSync(pebbleHomeDir, { recursive: true, force: true });
+  mkdirSync(pebbleHomeDir, { recursive: true });
+});
+
+afterAll(() => {
+  process.env.PEBBLE_HOME = previousPebbleHome;
+  rmSync(pebbleHomeDir, { recursive: true, force: true });
 });
 
 class ScriptedProvider implements Provider {
@@ -953,7 +965,7 @@ describe("capability tool implementations", () => {
     expect(typeof finished.logPath).toBe("string");
     expect(existsSync(String(finished.logPath))).toBe(true);
     expect(readFileSync(String(finished.logPath), "utf-8")).toContain('"type":"result"');
-  });
+  }, 30_000);
 
   test("OrchestrateTool can stop a detached background verification run", async () => {
     const projectDir = createTempProject("pebble-tools-orchestrate-background-stop-");

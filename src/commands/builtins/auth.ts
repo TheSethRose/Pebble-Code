@@ -246,7 +246,7 @@ export function createPermissionsCommand(): Command {
     description: "Show permission status",
     type: "local",
     usage: "/permissions",
-    modes: ["interactive"],
+    modes: ["interactive", "telegram"],
     execute: (_args, ctx): CommandResult => {
       const decisions = ctx.permissionManager?.getDecisions() ?? [];
       return {
@@ -268,7 +268,7 @@ export function createModelCommand(): Command {
     description: "Show or change the current model",
     type: "local",
     usage: "/model [model-name]",
-    modes: ["interactive"],
+    modes: ["interactive", "telegram"],
     execute: (args, ctx): CommandResult => {
       if (args.trim()) {
         const settings = ensureProviderDefaults({
@@ -280,6 +280,19 @@ export function createModelCommand(): Command {
           `Model set to ${args.trim()}. Saved to ${settingsPath}.`,
           settingsPath,
         );
+      }
+
+      if (ctx.mode === "telegram") {
+        const settings = loadProjectSettings(ctx);
+        const providerId = getCurrentProviderId(ctx);
+        return {
+          success: true,
+          output: [
+            `Current model: ${settings.model ?? "auto"}`,
+            `Provider: ${providerId}`,
+            "Usage: /model <model-name>",
+          ].join("\n"),
+        };
       }
 
       return {

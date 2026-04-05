@@ -385,6 +385,7 @@ async function runInteractive(
 
   const context = {
     cwd: config.cwd,
+    mode: "interactive" as const,
     headless: false,
     config: {
       trust: config.trust.level,

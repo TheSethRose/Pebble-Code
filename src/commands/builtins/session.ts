@@ -54,7 +54,7 @@ export function createMemoryCommand(): Command {
     description: "Show, refresh, or clear session memory",
     type: "local",
     usage: "/memory [refresh|clear]",
-    modes: ["interactive"],
+    modes: ["interactive", "telegram"],
     execute: (args, ctx): CommandResult => {
       const action = args.trim().toLowerCase();
       if (action && action !== "refresh" && action !== "clear" && action !== "status") {
@@ -129,7 +129,7 @@ export function createCompactCommand(): Command {
     description: "Compact the active session transcript now",
     type: "local",
     usage: "/compact [session-id]",
-    modes: ["interactive"],
+    modes: ["interactive", "telegram"],
     execute: (args, ctx): CommandResult => {
       const requestedId = args.trim() || undefined;
       const transcript = getActiveSession(ctx, requestedId);
@@ -229,7 +229,7 @@ export function createPlanCommand(): Command {
     description: "Show or create a plan",
     type: "local",
     usage: "/plan [description]",
-    modes: ["interactive"],
+    modes: ["interactive", "telegram"],
     execute: (args, _ctx): CommandResult => {
       if (args) {
         return { success: true, output: `Plan noted: ${args}` };

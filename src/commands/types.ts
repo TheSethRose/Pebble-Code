@@ -16,6 +16,8 @@ import type { Tool } from "../tools/Tool.js";
 export interface CommandContext {
   /** Current working directory */
   cwd: string;
+  /** Active command surface */
+  mode?: CommandMode;
   /** Whether running in headless mode */
   headless: boolean;
   /** Current configuration */
@@ -64,7 +66,7 @@ export interface CommandResult {
   data?: Record<string, unknown>;
 }
 
-export type CommandMode = "interactive" | "headless";
+export type CommandMode = "interactive" | "headless" | "telegram";
 
 /**
  * Command type determines how it's executed.

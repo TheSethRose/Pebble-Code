@@ -66,6 +66,11 @@ export interface StartBackgroundVerificationRunOptions {
 }
 
 const WORKER_PATH = fileURLToPath(new URL("./backgroundRunWorker.ts", import.meta.url));
+const BACKGROUND_RUN_STARTUP_GRACE_MS = 5_000;
+
+function resolveBunExecutable(): string {
+  return Bun.which("bun") ?? process.execPath ?? "bun";
+}
 
 export function getBackgroundRunsDir(cwd: string): string {
   const projectRoot = findProjectRoot(cwd) ?? cwd;
@@ -299,6 +304,13 @@ export class BackgroundRunManager {
       return record;
     }
 
+    if (record.status === "queued") {
+      const queuedAt = Date.parse(record.createdAt);
+      if (Number.isFinite(queuedAt) && Date.now() - queuedAt < BACKGROUND_RUN_STARTUP_GRACE_MS) {
+        return record;
+      }
+    }
+
     const finalizedAt = new Date().toISOString();
     const nextStatus: BackgroundRunStatus = record.stopRequestedAt ? "stopped" : "failed";
     return saveBackgroundRunRecord(record.recordPath, {
@@ -317,7 +329,7 @@ export class BackgroundRunManager {
 
   private spawnWorker(recordPath: string): number {
     const child = spawn(
-      process.execPath || "bun",
+      resolveBunExecutable(),
       ["run", WORKER_PATH, "--record", recordPath],
       {
         cwd: this.projectRoot,

@@ -19,6 +19,69 @@ describe("settings auth follow-up routing", () => {
     expect(followUp?.notice).toContain("API key");
   });
 
+  test("routes custom OpenAI-compatible providers into auth flow with both API key and base URL guidance", () => {
+    const followUp = getProviderSelectionAuthFollowUp(
+      {
+        provider: "openrouter",
+      },
+      "custom-openai",
+    );
+
+    expect(followUp).not.toBeNull();
+    expect(followUp?.providerId).toBe("custom-openai");
+    expect(followUp?.notice).toContain("API key");
+    expect(followUp?.notice).toContain("base URL");
+  });
+
+  test("keeps custom OpenAI-compatible providers in auth flow until a base URL is configured", () => {
+    const followUp = getProviderSelectionAuthFollowUp(
+      {
+        provider: "custom-openai",
+        model: "google/gemma-3-27b-it",
+        providerAuth: {
+          "custom-openai": { credential: "custom-key" },
+        },
+      },
+      "custom-openai",
+    );
+
+    expect(followUp).not.toBeNull();
+    expect(followUp?.notice).toContain("base URL");
+  });
+
+  test("does not show custom OpenAI-compatible auth as configured until its base URL is present", () => {
+    const status = getProviderAuthStatus(
+      {
+        provider: "custom-openai",
+        providerAuth: {
+          "custom-openai": { credential: "custom-key" },
+        },
+      },
+      "custom-openai",
+    );
+
+    expect(status.hasCredential).toBe(true);
+    expect(status.baseUrlConfigured).toBe(false);
+    expect(status.isConfigured).toBe(false);
+  });
+
+  test("treats custom OpenAI-compatible auth as configured once API key and base URL are saved", () => {
+    const status = getProviderAuthStatus(
+      {
+        provider: "custom-openai",
+        baseUrl: "http://localhost:8080/v1",
+        providerAuth: {
+          "custom-openai": { credential: "custom-key" },
+        },
+      },
+      "custom-openai",
+    );
+
+    expect(status.hasCredential).toBe(true);
+    expect(status.baseUrlConfigured).toBe(true);
+    expect(status.isConfigured).toBe(true);
+  });
+
   test("routes unconfigured oauth providers into auth flow", () => {
     const followUp = getProviderSelectionAuthFollowUp(
       {

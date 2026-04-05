@@ -26,6 +26,29 @@ function runCli(args: string[]) {
   };
 }
 
+function runTelegramEntrypoint(args: string[]) {
+  const repoRoot = join(import.meta.dir, "..");
+  const result = Bun.spawnSync(
+    [process.execPath, "run", "src/entrypoints/telegram.ts", ...args],
+    {
+      cwd: repoRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        PEBBLE_TELEGRAM_BOT_TOKEN: "",
+        TELEGRAM_BOT_TOKEN: "",
+      },
+    },
+  );
+
+  return {
+    exitCode: result.exitCode,
+    stdout: new TextDecoder().decode(result.stdout).trim(),
+    stderr: new TextDecoder().decode(result.stderr).trim(),
+  };
+}
+
 describe("SDK entrypoint surface", () => {
   test("CLI fast path prints version without booting the runtime", () => {
     const result = runCli(["--version"]);
@@ -43,6 +66,15 @@ describe("SDK entrypoint surface", () => {
     expect(result.stdout).toContain("FAST COMMANDS (no runtime boot)");
     expect(result.stdout).toContain("--headless, -p");
     expect(result.stdout).toContain("/login");
+  });
+
+  test("Telegram entrypoint prints help without booting the runtime", () => {
+    const result = runTelegramEntrypoint(["--help"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Pebble Telegram runtime");
+    expect(result.stdout).toContain("--bot-token");
+    expect(result.stderr).toBe("");
   });
 
   test("root package entrypoint exports the programmatic runtime helpers", async () => {
@@ -107,5 +139,6 @@ describe("SDK entrypoint surface", () => {
     expect(packageJson.module).toBe("./index.ts");
     expect(packageJson.exports?.["."]).toBe("./index.ts");
     expect(packageJson.exports?.["./cli"]).toBe("./src/entrypoints/cli.tsx");
+    expect(packageJson.exports?.["./telegram"]).toBe("./src/entrypoints/telegram.ts");
   });
 });

@@ -2,6 +2,7 @@ import {
   getBuiltinProviderDefinition,
   getProviderCredentialLabel,
   normalizeProviderId,
+  providerSupportsConfigurableBaseUrl,
   providerSupportsManualCredentialEntry,
 } from "../providers/catalog.js";
 import { resolveProviderConfig } from "../providers/config.js";
@@ -19,6 +20,8 @@ export interface ProviderAuthFollowUp {
 export interface ProviderAuthStatus {
   providerId: string;
   isConfigured: boolean;
+  hasCredential: boolean;
+  baseUrlConfigured: boolean;
   source: "settings" | "env" | "default" | "none";
   credential?: string;
   envKey?: string;
@@ -48,57 +51,83 @@ export function getProviderAuthStatus(
     return {
       providerId: normalizedProviderId,
       isConfigured: false,
+      hasCredential: false,
+      baseUrlConfigured: false,
       source: "none",
     };
   }
 
+  const resolved = resolveProviderConfig({
+    ...settings,
+    provider: normalizedProviderId,
+  });
+  const baseUrlConfigured = !providerSupportsConfigurableBaseUrl(definition)
+    || Boolean(resolved.baseUrl.trim());
+
+  const buildStatus = (params: {
+    hasCredential: boolean;
+    source: ProviderAuthStatus["source"];
+    credential?: string;
+    envKey?: string;
+  }): ProviderAuthStatus => ({
+    providerId: normalizedProviderId,
+    isConfigured: params.hasCredential && baseUrlConfigured,
+    hasCredential: params.hasCredential,
+    baseUrlConfigured,
+    source: params.source,
+    ...(params.credential ? { credential: params.credential } : {}),
+    ...(params.envKey ? { envKey: params.envKey } : {}),
+  });
+
   const storedCredential = getStoredProviderCredential(settings, normalizedProviderId)?.trim();
   if (storedCredential) {
-    return {
-      providerId: normalizedProviderId,
-      isConfigured: true,
+    return buildStatus({
+      hasCredential: true,
       source: "settings",
       credential: storedCredential,
-    };
+    });
   }
 
   const storedOauth = getStoredProviderOAuthSession(settings, normalizedProviderId);
   const storedOauthToken = storedOauth?.accessToken?.trim() || storedOauth?.refreshToken?.trim();
   if (storedOauthToken) {
-    return {
-      providerId: normalizedProviderId,
-      isConfigured: true,
+    return buildStatus({
+      hasCredential: true,
       source: "settings",
       credential: storedOauthToken,
-    };
+    });
   }
 
   const envSignal = getConfiguredEnvSignal(definition.envKeys);
   if (envSignal) {
-    return {
-      providerId: normalizedProviderId,
-      isConfigured: true,
+    return buildStatus({
+      hasCredential: true,
       source: "env",
       credential: envSignal.value,
       envKey: envSignal.key,
-    };
+    });
   }
 
   const defaultCredential = definition.defaultApiKey?.trim();
   if (defaultCredential) {
-    return {
-      providerId: normalizedProviderId,
-      isConfigured: true,
+    return buildStatus({
+      hasCredential: true,
       source: "default",
       credential: defaultCredential,
-    };
+    });
   }
 
-  return {
-    providerId: normalizedProviderId,
-    isConfigured: false,
+  if (definition.authKind === "local-url" && !definition.requiresApiKey) {
+    return buildStatus({
+      hasCredential: true,
+      source: "default",
+    });
+  }
+
+  return buildStatus({
+    hasCredential: false,
     source: "none",
-  };
+  });
 }
 
 export function getProviderSelectionAuthFollowUp(
@@ -117,7 +146,7 @@ export function getProviderSelectionAuthFollowUp(
     ...settings,
     provider: normalizedProviderId,
   });
-  const hasConfiguredCredential = authStatus.isConfigured;
+  const hasConfiguredCredential = authStatus.hasCredential;
 
   if (definition.authKind === "local-url") {
     if (resolved.runtimeReady) {
@@ -135,14 +164,24 @@ export function getProviderSelectionAuthFollowUp(
       return null;
     }
 
-    if (!hasConfiguredCredential) {
+    const missingBaseUrl = resolved.missingConfiguration.includes("base URL");
+    const missingCredential = !hasConfiguredCredential;
+
+    if (missingCredential && missingBaseUrl) {
+      return {
+        providerId: normalizedProviderId,
+        notice: `${definition.label} is not configured yet. Enter your ${getProviderCredentialLabel(definition)} and base URL before using this provider.`,
+      };
+    }
+
+    if (missingCredential) {
       return {
         providerId: normalizedProviderId,
         notice: `${definition.label} is not configured yet. Enter your ${getProviderCredentialLabel(definition)} before using this provider.`,
       };
     }
 
-    if (resolved.missingConfiguration.includes("base URL")) {
+    if (missingBaseUrl) {
       return {
         providerId: normalizedProviderId,
         notice: `${definition.label} still needs its base URL configured before Pebble can use it.`,

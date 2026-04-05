@@ -8,7 +8,7 @@ export function createReviewCommand(): Command {
     description: "Review recent changes",
     type: "local",
     usage: "/review",
-    modes: ["interactive"],
+    modes: ["interactive", "telegram"],
     trustLevels: ["trusted", "bare"],
     execute: (_args, ctx): CommandResult => {
       const projectRoot = findProjectRoot(ctx.cwd);

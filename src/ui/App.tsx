@@ -1234,6 +1234,7 @@ export function App({
 
       const commandContext: CommandContext = {
         ...context,
+        mode: "interactive",
         config: runtimeConfig,
         sessionStore: sessionStore ?? undefined,
         sessionId: sessionIdRef.current,

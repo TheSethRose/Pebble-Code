@@ -50,7 +50,30 @@ export interface ProviderCredentialSettings {
 export type ProviderCredentialMap = Record<string, ProviderCredentialSettings>;
 export type ShellCompactionMode = "off" | "auto" | "aggressive";
 export type WorktreeStartupMode = "manual" | "resume-linked";
+export type TelegramRunMode = "polling" | "webhook";
 export const DEFAULT_COMPACT_PREPARE_RATIO = 0.8;
+
+export interface TelegramSettings {
+  enabled?: boolean;
+  botToken?: string;
+  botId?: string;
+  botUsername?: string;
+  mode?: TelegramRunMode;
+  pollingTimeoutSeconds?: number;
+  allowedUserIds?: string[];
+  allowedChatIds?: string[];
+  handleGroupMentionsOnly?: boolean;
+  streamEdits?: boolean;
+  editDebounceMs?: number;
+  maxMessageChars?: number;
+  syncCommandsOnStart?: boolean;
+  persistOffsets?: boolean;
+  webhookUrl?: string;
+  webhookPath?: string;
+  webhookHost?: string;
+  webhookPort?: number;
+  webhookSecret?: string;
+}
 
 /**
  * Global settings loaded from config files.
@@ -71,6 +94,7 @@ export interface Settings {
   shellCompactionMode?: ShellCompactionMode;
   providerCompactionMarkers?: boolean;
   worktreeStartupMode?: WorktreeStartupMode;
+  telegram?: TelegramSettings;
   fullscreenRenderer?: boolean;
   voiceEnabled?: boolean;
   voiceProvider?: string;
@@ -87,6 +111,20 @@ const DEFAULT_SETTINGS: Settings = {
   shellCompactionMode: "auto",
   providerCompactionMarkers: false,
   worktreeStartupMode: "manual",
+  telegram: {
+    enabled: false,
+    mode: "polling",
+    pollingTimeoutSeconds: 20,
+    handleGroupMentionsOnly: true,
+    streamEdits: true,
+    editDebounceMs: 750,
+    maxMessageChars: 4000,
+    syncCommandsOnStart: true,
+    persistOffsets: true,
+    webhookPath: "/telegram/webhook",
+    webhookHost: "127.0.0.1",
+    webhookPort: 8788,
+  },
   fullscreenRenderer: true,
   voiceEnabled: false,
   voiceProvider: DEFAULT_VOICE_PROVIDER,
@@ -115,6 +153,186 @@ function normalizeOptionalPositiveNumber(value: unknown): number | undefined {
   }
 
   return undefined;
+}
+
+function normalizeOptionalBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["0", "false", "no", "off"].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeOptionalNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeOptionalIdString(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(Math.trunc(value));
+  }
+
+  return normalizeOptionalNonEmptyString(value);
+}
+
+function normalizeStringList(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    const normalized = value.flatMap((entry) => {
+      const item = normalizeOptionalIdString(entry);
+      return item ? [item] : [];
+    });
+    return normalized.length > 0 ? Array.from(new Set(normalized)) : undefined;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value
+      .split(/[\s,]+/u)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    return normalized.length > 0 ? Array.from(new Set(normalized)) : undefined;
+  }
+
+  return undefined;
+}
+
+function normalizeTelegramMode(value: unknown): TelegramRunMode | undefined {
+  return value === "webhook" ? "webhook" : value === "polling" ? "polling" : undefined;
+}
+
+function normalizeTelegramSettings(input: unknown): TelegramSettings | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return undefined;
+  }
+
+  const value = input as Record<string, unknown>;
+  const enabled = normalizeOptionalBoolean(value.enabled);
+  const botToken = normalizeOptionalNonEmptyString(value.botToken);
+  const botId = normalizeOptionalIdString(value.botId);
+  const botUsername = normalizeOptionalNonEmptyString(value.botUsername);
+  const mode = normalizeTelegramMode(value.mode);
+  const pollingTimeoutSeconds = normalizeOptionalPositiveNumber(value.pollingTimeoutSeconds);
+  const allowedUserIds = normalizeStringList(value.allowedUserIds);
+  const allowedChatIds = normalizeStringList(value.allowedChatIds);
+  const handleGroupMentionsOnly = normalizeOptionalBoolean(value.handleGroupMentionsOnly);
+  const streamEdits = normalizeOptionalBoolean(value.streamEdits);
+  const editDebounceMs = normalizeOptionalPositiveNumber(value.editDebounceMs);
+  const maxMessageChars = normalizeOptionalPositiveNumber(value.maxMessageChars);
+  const syncCommandsOnStart = normalizeOptionalBoolean(value.syncCommandsOnStart);
+  const persistOffsets = normalizeOptionalBoolean(value.persistOffsets);
+  const webhookUrl = normalizeOptionalNonEmptyString(value.webhookUrl);
+  const webhookPath = normalizeOptionalNonEmptyString(value.webhookPath);
+  const webhookHost = normalizeOptionalNonEmptyString(value.webhookHost);
+  const webhookPort = normalizeOptionalPositiveNumber(value.webhookPort);
+  const webhookSecret = normalizeOptionalNonEmptyString(value.webhookSecret);
+
+  const normalized: TelegramSettings = {
+    ...(typeof enabled === "boolean" ? { enabled } : {}),
+    ...(botToken ? { botToken } : {}),
+    ...(botId ? { botId } : {}),
+    ...(botUsername ? { botUsername } : {}),
+    ...(mode ? { mode } : {}),
+    ...(typeof pollingTimeoutSeconds === "number" ? { pollingTimeoutSeconds } : {}),
+    ...(allowedUserIds ? { allowedUserIds } : {}),
+    ...(allowedChatIds ? { allowedChatIds } : {}),
+    ...(typeof handleGroupMentionsOnly === "boolean" ? { handleGroupMentionsOnly } : {}),
+    ...(typeof streamEdits === "boolean" ? { streamEdits } : {}),
+    ...(typeof editDebounceMs === "number" ? { editDebounceMs } : {}),
+    ...(typeof maxMessageChars === "number" ? { maxMessageChars } : {}),
+    ...(typeof syncCommandsOnStart === "boolean" ? { syncCommandsOnStart } : {}),
+    ...(typeof persistOffsets === "boolean" ? { persistOffsets } : {}),
+    ...(webhookUrl ? { webhookUrl } : {}),
+    ...(webhookPath ? { webhookPath } : {}),
+    ...(webhookHost ? { webhookHost } : {}),
+    ...(typeof webhookPort === "number" ? { webhookPort } : {}),
+    ...(webhookSecret ? { webhookSecret } : {}),
+  };
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function getEnvValue(...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = normalizeOptionalNonEmptyString(process.env[key]);
+    if (value) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function getTelegramEnvOverrides(): TelegramSettings | undefined {
+  return normalizeTelegramSettings({
+    botToken: getEnvValue("PEBBLE_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN"),
+    botId: getEnvValue("PEBBLE_TELEGRAM_BOT_ID"),
+    botUsername: getEnvValue("PEBBLE_TELEGRAM_BOT_USERNAME"),
+    mode: getEnvValue("PEBBLE_TELEGRAM_MODE"),
+    pollingTimeoutSeconds: getEnvValue("PEBBLE_TELEGRAM_POLLING_TIMEOUT_SECONDS"),
+    allowedUserIds: getEnvValue("PEBBLE_TELEGRAM_ALLOWED_USER_IDS"),
+    allowedChatIds: getEnvValue("PEBBLE_TELEGRAM_ALLOWED_CHAT_IDS"),
+    handleGroupMentionsOnly: getEnvValue("PEBBLE_TELEGRAM_HANDLE_GROUP_MENTIONS_ONLY"),
+    streamEdits: getEnvValue("PEBBLE_TELEGRAM_STREAM_EDITS"),
+    editDebounceMs: getEnvValue("PEBBLE_TELEGRAM_EDIT_DEBOUNCE_MS"),
+    maxMessageChars: getEnvValue("PEBBLE_TELEGRAM_MAX_MESSAGE_CHARS"),
+    syncCommandsOnStart: getEnvValue("PEBBLE_TELEGRAM_SYNC_COMMANDS_ON_START"),
+    persistOffsets: getEnvValue("PEBBLE_TELEGRAM_PERSIST_OFFSETS"),
+    webhookUrl: getEnvValue("PEBBLE_TELEGRAM_WEBHOOK_URL"),
+    webhookPath: getEnvValue("PEBBLE_TELEGRAM_WEBHOOK_PATH"),
+    webhookHost: getEnvValue("PEBBLE_TELEGRAM_WEBHOOK_HOST"),
+    webhookPort: getEnvValue("PEBBLE_TELEGRAM_WEBHOOK_PORT"),
+    webhookSecret: getEnvValue("PEBBLE_TELEGRAM_WEBHOOK_SECRET"),
+  });
+}
+
+function applyTelegramEnvOverrides(settings: Settings): Settings {
+  const envOverrides = getTelegramEnvOverrides();
+  if (!envOverrides) {
+    return settings;
+  }
+
+  return {
+    ...settings,
+    telegram: {
+      ...(settings.telegram ?? {}),
+      ...envOverrides,
+    },
+  };
+}
+
+function stripTelegramEnvOverridesForPersistence(settings: Settings): Settings {
+  const envOverrides = getTelegramEnvOverrides();
+  if (!envOverrides || !settings.telegram) {
+    return settings;
+  }
+
+  const sanitizedTelegram = { ...settings.telegram } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(envOverrides)) {
+    if (JSON.stringify(sanitizedTelegram[key]) === JSON.stringify(value)) {
+      delete sanitizedTelegram[key];
+    }
+  }
+
+  return {
+    ...settings,
+    telegram: Object.keys(sanitizedTelegram).length > 0
+      ? sanitizedTelegram as TelegramSettings
+      : undefined,
+  };
 }
 
 function normalizeProviderOAuthSession(input: unknown): ProviderOAuthSession | undefined {
@@ -226,6 +444,7 @@ function normalizeSettingsInput(settings: SettingsInput): SettingsInput {
     : settings.worktreeStartupMode === "manual"
       ? "manual"
       : undefined;
+  const normalizedTelegram = normalizeTelegramSettings(settings.telegram);
   const normalizedVoiceProvider = normalizeVoiceProviderValue(settings.voiceProvider);
   const normalizedVoiceBaseUrl = normalizeVoiceBaseUrlValue(settings.voiceBaseUrl);
   const normalizedVoiceTranscribePath = normalizeVoicePathValue(settings.voiceTranscribePath);
@@ -243,6 +462,7 @@ function normalizeSettingsInput(settings: SettingsInput): SettingsInput {
         ? { providerCompactionMarkers: normalizedProviderCompactionMarkers }
         : {}),
       ...(normalizedWorktreeStartupMode ? { worktreeStartupMode: normalizedWorktreeStartupMode } : {}),
+      ...(normalizedTelegram ? { telegram: normalizedTelegram } : {}),
       ...(typeof normalizedVoiceEnabled === "boolean" ? { voiceEnabled: normalizedVoiceEnabled } : {}),
       ...(normalizedVoiceProvider ? { voiceProvider: normalizedVoiceProvider } : {}),
       ...(normalizedVoiceBaseUrl ? { voiceBaseUrl: normalizedVoiceBaseUrl } : {}),
@@ -263,6 +483,7 @@ function normalizeSettingsInput(settings: SettingsInput): SettingsInput {
       ? { providerCompactionMarkers: normalizedProviderCompactionMarkers }
       : {}),
     ...(normalizedWorktreeStartupMode ? { worktreeStartupMode: normalizedWorktreeStartupMode } : {}),
+    ...(normalizedTelegram ? { telegram: normalizedTelegram } : {}),
     ...(typeof normalizedVoiceEnabled === "boolean" ? { voiceEnabled: normalizedVoiceEnabled } : {}),
     ...(normalizedVoiceProvider ? { voiceProvider: normalizedVoiceProvider } : {}),
     ...(normalizedVoiceBaseUrl ? { voiceBaseUrl: normalizedVoiceBaseUrl } : {}),
@@ -430,12 +651,25 @@ function readSettingsFile(configPath: string): SettingsInput {
 }
 
 function mergeSettingsLayers(...layers: SettingsInput[]): Settings {
-  return synchronizeActiveProviderCredential(applyProviderDefaults(
-    layers.map((layer) => normalizeSettingsInput(layer)).reduce<Settings>(
-      (merged, layer) => ({ ...merged, ...layer }),
-      { ...DEFAULT_SETTINGS },
-    ),
-  ));
+  return applyTelegramEnvOverrides(
+    synchronizeActiveProviderCredential(applyProviderDefaults(
+      layers.map((layer) => normalizeSettingsInput(layer)).reduce<Settings>(
+        (merged, layer) => ({
+          ...merged,
+          ...layer,
+          ...(merged.telegram || layer.telegram
+            ? {
+                telegram: {
+                  ...(merged.telegram ?? {}),
+                  ...(layer.telegram ?? {}),
+                },
+              }
+            : {}),
+        }),
+        { ...DEFAULT_SETTINGS },
+      ),
+    )),
+  );
 }
 
 export function loadSettings(configPath: string): Settings {
@@ -500,7 +734,22 @@ function sanitizeProjectSettings(settings: SettingsInput): SettingsInput {
     providerAuth: _ignoredProviderAuth,
     ...rest
   } = normalizeSettingsInput(settings);
-  return rest;
+  const telegram = normalizeTelegramSettings(rest.telegram);
+
+  if (!telegram) {
+    return rest;
+  }
+
+  const {
+    botToken: _ignoredBotToken,
+    webhookSecret: _ignoredWebhookSecret,
+    ...safeTelegram
+  } = telegram;
+
+  return {
+    ...rest,
+    telegram: Object.keys(safeTelegram).length > 0 ? safeTelegram : undefined,
+  };
 }
 
 function loadProjectSettingsForCwd(cwd: string): SettingsInput {
@@ -548,7 +797,7 @@ function settingsValuesEqual(left: unknown, right: unknown): boolean {
 function buildUserSettingsPayload(cwd: string, settings: Settings): SettingsInput {
   const projectDefaults = mergeSettingsLayers(loadProjectSettingsForCwd(cwd));
   const normalizedSettings = synchronizeActiveProviderCredential(
-    ensureSettingsProviderAuth(settings),
+    ensureSettingsProviderAuth(stripTelegramEnvOverridesForPersistence(settings)),
   );
   const entries = Object.entries(normalizedSettings) as Array<[keyof Settings, Settings[keyof Settings]]>;
   const payload: SettingsInput = {};

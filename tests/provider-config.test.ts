@@ -3,6 +3,10 @@ import {
   getProviderNotConfiguredMessage,
   resolveProviderConfig,
 } from "../src/providers/config";
+import {
+  getProviderBaseUrlDescription,
+  providerSupportsConfigurableBaseUrl,
+} from "../src/providers/catalog";
 import { listRuntimeProviders } from "../src/providers/runtime";
 
 describe("provider config resolution", () => {
@@ -244,6 +248,43 @@ describe("provider config resolution", () => {
     expect(resolved.baseUrl).toBe("http://localhost:11434/v1");
     expect(resolved.model).toBe("llama3.2");
     expect(resolved.runtimeReady).toBe(true);
+  });
+
+  test("requires a base URL and model for custom OpenAI-compatible endpoints", () => {
+    const resolved = resolveProviderConfig({
+      provider: "custom-openai",
+      providerAuth: {
+        "custom-openai": { credential: "custom-key" },
+      },
+    });
+
+    expect(resolved.providerId).toBe("custom-openai");
+    expect(resolved.runtimeReady).toBe(false);
+    expect(resolved.missingConfiguration).toContain("base URL");
+    expect(resolved.missingConfiguration).toContain("model");
+    expect(getProviderNotConfiguredMessage(resolved)).toContain("configure a base URL in settings or env");
+  });
+
+  test("resolves a custom OpenAI-compatible endpoint when base URL, model, and API key are configured", () => {
+    const resolved = resolveProviderConfig({
+      provider: "custom-openai",
+      model: "google/gemma-3-27b-it",
+      baseUrl: "http://localhost:8080/v1",
+      providerAuth: {
+        "custom-openai": { credential: "custom-key" },
+      },
+    });
+
+    expect(resolved.providerId).toBe("custom-openai");
+    expect(resolved.baseUrl).toBe("http://localhost:8080/v1");
+    expect(resolved.model).toBe("google/gemma-3-27b-it");
+    expect(resolved.runtimeReady).toBe(true);
+  });
+
+  test("describes the expected base URL format for custom OpenAI-compatible endpoints", () => {
+    expect(providerSupportsConfigurableBaseUrl("custom-openai")).toBe(true);
+    expect(getProviderBaseUrlDescription("custom-openai")).toContain("http://localhost:8080/v1");
+    expect(getProviderBaseUrlDescription("custom-openai")).toContain("/chat/completions");
   });
 
   test("keeps unsupported providers explicit instead of collapsing them to OpenRouter", () => {
