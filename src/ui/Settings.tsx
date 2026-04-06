@@ -1691,6 +1691,9 @@ function ApiKeyTab({
               {formatProviderAuthStatus(authStatus)}
             </Text>
             <Text>Env vars: {resolved.envKeyNames.join(", ")}</Text>
+            {selectedDefinition?.additionalEnvKeys.length ? (
+              <Text>Additional setup env vars: {selectedDefinition.additionalEnvKeys.join(", ")}</Text>
+            ) : null}
             {baseUrlSupported && (
               <Text>
                 Base URL env vars: {selectedDefinition?.baseUrlEnvKeys.join(", ") || "configure in settings"}

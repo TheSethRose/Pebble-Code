@@ -4,7 +4,9 @@ import {
   resolveProviderConfig,
 } from "../src/providers/config";
 import {
+  getBuiltinProviderDefinition,
   getProviderBaseUrlDescription,
+  providerSupportsManualCredentialEntry,
   providerSupportsConfigurableBaseUrl,
 } from "../src/providers/catalog";
 import { listRuntimeProviders } from "../src/providers/runtime";
@@ -297,6 +299,38 @@ describe("provider config resolution", () => {
     expect(resolved.implemented).toBe(false);
     expect(resolved.runtimeReady).toBe(false);
     expect(getProviderNotConfiguredMessage(resolved)).toContain("not implemented yet");
+  });
+
+  test("builds out cataloged providers with seeded defaults without marking them implemented", () => {
+    const minimax = resolveProviderConfig({ provider: "minimax" });
+    const opencodeGo = resolveProviderConfig({ provider: "opencode-go" });
+
+    expect(minimax.implemented).toBe(false);
+    expect(minimax.model).toBe("minimax/MiniMax-M2.7");
+    expect(minimax.exampleModels).toContain("minimax/MiniMax-M2.7");
+    expect(opencodeGo.implemented).toBe(false);
+    expect(opencodeGo.model).toBe("opencode-go/kimi-k2.5");
+    expect(opencodeGo.exampleModels).toEqual(["opencode-go/kimi-k2.5"]);
+  });
+
+  test("marks Azure catalog entries as manual providers with explicit base URL setup", () => {
+    const resolved = resolveProviderConfig({ provider: "azure" });
+
+    expect(providerSupportsManualCredentialEntry("azure")).toBe(true);
+    expect(providerSupportsConfigurableBaseUrl("azure")).toBe(true);
+    expect(resolved.authKind).toBe("api-key");
+    expect(resolved.missingConfiguration).toContain("base URL");
+  });
+
+  test("keeps extra setup env vars separate from credential env vars", () => {
+    const workersAi = getBuiltinProviderDefinition("cloudflare-workers-ai");
+    const gitlab = getBuiltinProviderDefinition("gitlab");
+    const resolved = resolveProviderConfig({ provider: "cloudflare-workers-ai" });
+
+    expect(workersAi?.envKeys).toEqual(["CLOUDFLARE_API_KEY"]);
+    expect(workersAi?.additionalEnvKeys).toContain("CLOUDFLARE_ACCOUNT_ID");
+    expect(resolved.envKeyNames).toEqual(["CLOUDFLARE_API_KEY"]);
+    expect(providerSupportsManualCredentialEntry(gitlab)).toBe(true);
   });
 
   test("lists the built-in provider catalog alongside extension providers", () => {

@@ -12,6 +12,8 @@ export default openAiCompatible("github-copilot", "GitHub Copilot", {
     "GITHUB_COPILOT_TOKEN",
     "COPILOT_TOKEN",
   ],
+  modelEnvKeys: [],
+  baseUrlEnvKeys: [],
   aliases: ["copilot"],
   authKind: "oauth",
   defaultModel: "gpt-4o",

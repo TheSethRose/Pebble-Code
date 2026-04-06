@@ -20,6 +20,34 @@ function resolveDefinition(
     : provider;
 }
 
+function getSupportedAuthKinds(
+  definition?: BuiltinProviderDefinition,
+): ProviderAuthKind[] {
+  if (!definition) {
+    return [];
+  }
+
+  return [...new Set([definition.authKind, ...(definition.additionalAuthKinds ?? [])])];
+}
+
+function describeAuthKind(kind: ProviderAuthKind): string {
+  switch (kind) {
+    case "oauth":
+      return "browser/device OAuth";
+    case "cloud-credentials":
+      return "cloud credentials or IAM identity";
+    case "gateway":
+      return "gateway/proxy tokens";
+    case "service-key":
+      return "a service key / enterprise credential";
+    case "local-url":
+      return "a local/self-hosted URL with an optional marker key";
+    case "api-key":
+    default:
+      return "direct API-key authentication";
+  }
+}
+
 export function providerSupportsManualCredentialEntry(
   provider?: string | BuiltinProviderDefinition,
 ): boolean {
@@ -28,10 +56,10 @@ export function providerSupportsManualCredentialEntry(
     return false;
   }
 
-  return definition.authKind === "api-key"
-    || definition.authKind === "gateway"
-    || definition.authKind === "service-key"
-    || definition.authKind === "local-url";
+  return getSupportedAuthKinds(definition).some((kind) => kind === "api-key"
+    || kind === "gateway"
+    || kind === "service-key"
+    || kind === "local-url");
 }
 
 export function getProviderCredentialLabel(
@@ -61,6 +89,12 @@ export function getProviderAuthDescription(
   const definition = resolveDefinition(provider);
   if (!definition) {
     return "Configure a provider first.";
+  }
+
+  const authKinds = getSupportedAuthKinds(definition);
+  if (authKinds.length > 1) {
+    const describedKinds = authKinds.map(describeAuthKind);
+    return `${definition.label} supports ${describedKinds.join(" and ")}.`;
   }
 
   switch (definition.authKind) {
