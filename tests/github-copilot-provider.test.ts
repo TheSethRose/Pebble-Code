@@ -498,6 +498,7 @@ describe("GitHub Copilot provider runtime", () => {
         },
       ],
     });
+    expect(requestBody.input[1].id).toMatch(/^msg_[a-f0-9]{24}$/);
     expect(requestBody.input[2]).toMatchObject({
       type: "function_call",
       call_id: "call_workspace_read_1",

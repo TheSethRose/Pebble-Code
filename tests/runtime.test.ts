@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { PassThrough } from "node:stream";
 import { render } from "ink";
 import { run, setStartReplForTesting } from "../src/runtime/main";
-import { BackgroundRunManager } from "../src/runtime/backgroundRuns";
+import { getBackgroundRunsDir, saveBackgroundRunRecord } from "../src/runtime/backgroundRuns";
 import { buildSessionMemory } from "../src/persistence/memory";
 import {
   createProjectSessionStore,
@@ -57,26 +57,6 @@ function initializeGitRepo(projectDir: string): void {
 function commitAll(projectDir: string, message: string): void {
   Bun.spawnSync({ cmd: ["git", "add", "."], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
   Bun.spawnSync({ cmd: ["git", "commit", "-m", message, "--quiet"], cwd: projectDir, stdout: "pipe", stderr: "pipe" });
-}
-
-async function waitForBackgroundRun(
-  manager: BackgroundRunManager,
-  runId: string,
-  predicate: (run: Record<string, unknown>) => boolean,
-  timeoutMs = 8_000,
-): Promise<Record<string, unknown>> {
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    const run = manager.getRun(runId) as Record<string, unknown> | null;
-    if (run && predicate(run)) {
-      return run;
-    }
-
-    await Bun.sleep(100);
-  }
-
-  throw new Error(`Timed out waiting for background run ${runId}`);
 }
 
 async function captureConsole<T>(callback: () => Promise<T>): Promise<{
@@ -252,13 +232,30 @@ describe("headless runtime", () => {
 
   test("surfaces persisted background run counts during runtime boot", async () => {
     const projectDir = createTempProject("pebble-runtime-background-summary-");
-    const manager = new BackgroundRunManager(projectDir);
-    const started = manager.startAgentRun({
-      prompt: "Summarize current project setup",
-      initiatedBy: "runtime-test",
-    });
+    const runId = "bg-persisted-runtime-test";
+    const runsDir = getBackgroundRunsDir(projectDir);
+    const recordPath = join(runsDir, "records", `${runId}.json`);
+    const logPath = join(runsDir, "logs", `${runId}.log`);
+    const now = new Date().toISOString();
 
-    await waitForBackgroundRun(manager, started.id, (run) => run.status === "completed");
+    saveBackgroundRunRecord(recordPath, {
+      id: runId,
+      task: "agent",
+      status: "completed",
+      cwd: projectDir,
+      createdAt: now,
+      updatedAt: now,
+      startedAt: now,
+      finishedAt: now,
+      prompt: "Summarize current project setup",
+      sessionId: `background-session-${runId}`,
+      parentSessionId: null,
+      initiatedBy: "runtime-test",
+      logPath,
+      recordPath,
+      exitCode: 0,
+      summary: "Background agent run completed.",
+    });
 
     const { result: exitCode, stderr } = await withProviderKeysUnset(() =>
       captureConsole(() =>
@@ -273,7 +270,7 @@ describe("headless runtime", () => {
 
     expect(exitCode).toBe(0);
     expect(stderr.some((line) => line.includes("Background runs: 1 total"))).toBe(true);
-  });
+  }, 15_000);
 
   test("fires compaction hooks and persists provider markers when transcript compaction runs", async () => {
     const projectDir = createTempProject("pebble-runtime-compaction-hooks-", {

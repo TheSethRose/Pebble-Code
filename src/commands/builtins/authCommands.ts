@@ -1,13 +1,14 @@
 import type { Command, CommandResult } from "../types.js";
 import {
-  applyProviderDefaults,
   getBuiltinProviderDefinition,
+  getBuiltinProviderDefinitions,
   getProviderAuthDescription,
   getProviderCredentialLabel,
   isSupportedProvider,
   normalizeProviderId,
   providerSupportsManualCredentialEntry,
 } from "../../providers/catalog.js";
+import { resolveRuntimeProvider } from "../../providers/runtime.js";
 import {
   clearStoredProviderAuth,
   getSettingsPath,
@@ -18,7 +19,24 @@ import {
 } from "../../runtime/config.js";
 import { openExternalUrl } from "../../runtime/openExternalUrl.js";
 import { runGitHubCopilotDeviceLogin } from "../../providers/githubCopilot.js";
-import { ensureProviderDefaults, getCurrentProviderId, loadProjectSettings, saveProjectSettings, createConfigUpdatedResult } from "./shared.js";
+import {
+  createConfigUpdatedResult,
+  ensureProviderDefaults,
+  getCurrentProviderId,
+  loadProjectSettings,
+  saveProjectSettings,
+} from "./shared.js";
+
+function hasStoredProviderAuth(
+  settings: ReturnType<typeof loadProjectSettings>,
+  providerId: string,
+): boolean {
+  const auth = settings.providerAuth?.[providerId];
+  const hasCredential = Boolean(auth?.credential?.trim());
+  const hasOauth = Boolean(auth?.oauth?.accessToken?.trim() || auth?.oauth?.refreshToken?.trim());
+  const hasLegacyApiKey = normalizeProviderId(settings.provider) === providerId && Boolean(settings.apiKey?.trim());
+  return hasCredential || hasOauth || hasLegacyApiKey;
+}
 
 export function createLoginCommand(): Command {
   return {
@@ -27,10 +45,26 @@ export function createLoginCommand(): Command {
     description: "Configure authentication for a provider",
     type: "local",
     usage: "/login [provider] <credential>",
-    modes: ["interactive"],
+    modes: ["interactive", "telegram"],
     execute: async (args, ctx): Promise<CommandResult> => {
       const trimmed = args.trim();
       if (!trimmed) {
+        if (ctx.mode === "telegram") {
+          const settings = loadProjectSettings(ctx);
+          const missingProviders = getBuiltinProviderDefinitions()
+            .filter((definition) => !hasStoredProviderAuth(settings, definition.id))
+            .map((definition) => `${definition.label} — ${definition.id}`);
+
+          return {
+            success: true,
+            output: [
+              missingProviders.length > 0 ? "Providers missing auth:" : "Providers missing auth: (none)",
+              ...missingProviders.map((provider) => `- ${provider}`),
+              "Usage: /login <provider-id> <credential>",
+            ].join("\n"),
+          };
+        }
+
         return {
           success: true,
           output: "",
@@ -68,6 +102,13 @@ export function createLoginCommand(): Command {
       }
 
       if (definition.authKind === "oauth" && explicitProvider === "github-copilot" && (!apiKey || providerOnlyInvocation)) {
+        if (ctx.mode === "telegram") {
+          return {
+            success: true,
+            output: "GitHub Copilot OAuth login must be started from the Pebble TUI for now.",
+          };
+        }
+
         const currentSettings = loadProjectSettings(ctx);
         const switchingProvider = explicitProvider !== normalizeProviderId(currentSettings.provider);
         const writeLine = (line: string) => {
@@ -283,13 +324,14 @@ export function createModelCommand(): Command {
       }
 
       if (ctx.mode === "telegram") {
-        const settings = loadProjectSettings(ctx);
+        const settings = ensureProviderDefaults(loadProjectSettings(ctx));
         const providerId = getCurrentProviderId(ctx);
+        const resolvedProvider = resolveRuntimeProvider(settings, { provider: providerId }, ctx.extensionProviders ?? []);
         return {
           success: true,
           output: [
-            `Current model: ${settings.model ?? "auto"}`,
-            `Provider: ${providerId}`,
+            `Current provider: ${resolvedProvider.providerLabel} (${resolvedProvider.providerId})`,
+            `Current model: ${resolvedProvider.model}`,
             "Usage: /model <model-name>",
           ].join("\n"),
         };

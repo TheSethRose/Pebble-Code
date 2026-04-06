@@ -1,9 +1,11 @@
 import type { Command, CommandResult } from "../types.js";
 import {
+  getBuiltinProviderDefinitions,
   getBuiltinProviderDefinition,
   isSupportedProvider,
   normalizeProviderId,
 } from "../../providers/catalog.js";
+import { listRuntimeProviders, resolveRuntimeProvider } from "../../providers/runtime.js";
 import { ensureProjectInit, formatInitFlowReport } from "../../runtime/initFlow.js";
 import {
   createConfigUpdatedResult,
@@ -11,6 +13,17 @@ import {
   loadProjectSettings,
   saveProjectSettings,
 } from "./shared.js";
+
+function hasStoredProviderAuth(
+  settings: ReturnType<typeof loadProjectSettings>,
+  providerId: string,
+): boolean {
+  const auth = settings.providerAuth?.[providerId];
+  const hasCredential = Boolean(auth?.credential?.trim());
+  const hasOauth = Boolean(auth?.oauth?.accessToken?.trim() || auth?.oauth?.refreshToken?.trim());
+  const hasLegacyApiKey = normalizeProviderId(settings.provider) === providerId && Boolean(settings.apiKey?.trim());
+  return hasCredential || hasOauth || hasLegacyApiKey;
+}
 
 export function createHelpCommand(): Command {
   return {
@@ -126,16 +139,23 @@ export function createProviderCommand(): Command {
       const requestedProvider = args.trim();
       if (!requestedProvider) {
         if (ctx.mode === "telegram") {
-          const providerId = typeof ctx.config.provider === "string"
-            ? ctx.config.provider
-            : loadProjectSettings(ctx).provider;
-          const providerLabel = typeof ctx.config.providerLabel === "string"
-            ? ctx.config.providerLabel
-            : getBuiltinProviderDefinition(providerId)?.label ?? providerId ?? "unknown";
+          const settings = loadProjectSettings(ctx);
+          const resolvedProvider = resolveRuntimeProvider(settings, {}, ctx.extensionProviders ?? []);
+          const runtimeProviders = listRuntimeProviders(ctx.extensionProviders ?? []);
+          const configuredProviders = runtimeProviders.filter((provider) => {
+            if (provider.source === "extension") {
+              return provider.id === resolvedProvider.providerId;
+            }
+
+            return hasStoredProviderAuth(settings, provider.id);
+          });
+
           return {
             success: true,
             output: [
-              `Current provider: ${providerLabel} (${providerId ?? "unknown"})`,
+              `Current provider: ${resolvedProvider.providerLabel} (${resolvedProvider.providerId})`,
+              configuredProviders.length > 0 ? "Configured providers:" : "Configured providers: (none)",
+              ...configuredProviders.map((provider) => `${provider.id === resolvedProvider.providerId ? "*" : "-"} ${provider.name} — ${provider.id}`),
               "Usage: /provider <provider-id>",
             ].join("\n"),
           };

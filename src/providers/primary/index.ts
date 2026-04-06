@@ -642,7 +642,7 @@ function serializeToolCallArguments(input: unknown): string {
 }
 
 function mapEngineMessagesToResponsesInput(messages: Message[]): ResponseInputItem[] {
-  return messages.flatMap((message) => {
+  return messages.flatMap((message, messageIndex) => {
     if (message.role === "progress") {
       return [];
     }
@@ -667,7 +667,7 @@ function mapEngineMessagesToResponsesInput(messages: Message[]): ResponseInputIt
       const items: ResponseInputItem[] = [];
       if (message.content.trim().length > 0) {
         items.push({
-          id: `assistant-${items.length}`,
+          id: createSyntheticResponsesMessageId(`assistant:${messageIndex}:${message.content}`),
           type: "message",
           role: "assistant",
           status: "completed",
@@ -798,4 +798,9 @@ function normalizeResponsesToolCallId(value: unknown, fallbackSeed: string): str
     : fallbackSeed;
   const digest = createHash("sha256").update(seed).digest("hex").slice(0, 24);
   return `call_${digest}`;
+}
+
+function createSyntheticResponsesMessageId(seed: string): string {
+  const digest = createHash("sha256").update(seed).digest("hex").slice(0, 24);
+  return `msg_${digest}`;
 }

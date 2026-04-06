@@ -129,6 +129,93 @@ describe("Command Registry", () => {
     expect(result.data?.action).toBe("show-keybindings");
   });
 
+  test("/provider in telegram mode lists the current and configured providers with ids", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-telegram-provider-");
+    saveSettingsForCwd(tempDir, {
+      ...loadSettingsForCwd(tempDir),
+      provider: "custom-openai",
+      model: "mlx-community/gemma-4-26b-a4b-it-bf16",
+      baseUrl: "http://localhost:8080/v1",
+      providerAuth: {
+        "custom-openai": { credential: "no-key" },
+        openrouter: { credential: "sk-or-v1-test-key" },
+      },
+    });
+
+    const result = await registry.execute("provider", "", createCommandContext({
+      cwd: tempDir,
+      mode: "telegram",
+      config: { provider: "custom-openai", providerLabel: "Custom OpenAI-Compatible Endpoint" },
+    }));
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Current provider: Custom OpenAI-Compatible Endpoint (custom-openai)");
+    expect(result.output).toContain("Configured providers:");
+    expect(result.output).toContain("* Custom OpenAI-Compatible Endpoint — custom-openai");
+    expect(result.output).toContain("- OpenRouter — openrouter");
+    expect(result.output).not.toContain("OpenAI — openai");
+  });
+
+  test("/login in telegram mode lists only providers missing auth settings", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-telegram-login-");
+    saveSettingsForCwd(tempDir, {
+      ...loadSettingsForCwd(tempDir),
+      provider: "custom-openai",
+      model: "mlx-community/gemma-4-26b-a4b-it-bf16",
+      baseUrl: "http://localhost:8080/v1",
+      providerAuth: {
+        "custom-openai": { credential: "no-key" },
+        openrouter: { credential: "sk-or-v1-test-key" },
+      },
+    });
+
+    const result = await registry.execute("login", "", createCommandContext({
+      cwd: tempDir,
+      mode: "telegram",
+      config: { provider: "custom-openai", providerLabel: "Custom OpenAI-Compatible Endpoint" },
+    }));
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Providers missing auth:");
+    expect(result.output).toContain("- OpenAI — openai");
+    expect(result.output).not.toContain("- OpenRouter — openrouter");
+    expect(result.output).not.toContain("- Custom OpenAI-Compatible Endpoint — custom-openai");
+    expect(result.output).toContain("Usage: /login <provider-id> <credential>");
+  });
+
+  test("/model in telegram mode shows the resolved model for the active provider", async () => {
+    const registry = new CommandRegistry();
+    registerBuiltinCommands(registry);
+
+    const tempDir = createTempProjectDir("pebble-command-telegram-model-");
+    saveSettingsForCwd(tempDir, {
+      ...loadSettingsForCwd(tempDir),
+      provider: "custom-openai",
+      model: "mlx-community/gemma-4-26b-a4b-it-bf16",
+      baseUrl: "http://localhost:8080/v1",
+      providerAuth: {
+        "custom-openai": { credential: "no-key" },
+      },
+    });
+
+    const result = await registry.execute("model", "", createCommandContext({
+      cwd: tempDir,
+      mode: "telegram",
+      config: { provider: "custom-openai", providerLabel: "Custom OpenAI-Compatible Endpoint" },
+    }));
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Current provider: Custom OpenAI-Compatible Endpoint (custom-openai)");
+    expect(result.output).toContain("Current model: mlx-community/gemma-4-26b-a4b-it-bf16");
+    expect(result.output).toContain("Usage: /model <model-name>");
+  });
+
   test("executes /new as an alias for /clear", async () => {
     const registry = new CommandRegistry();
     registerBuiltinCommands(registry);
