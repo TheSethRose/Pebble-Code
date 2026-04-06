@@ -49,7 +49,7 @@ export async function runTelegramMonitor(params: {
   config: ResolvedTelegramRuntimeConfig;
   state: TelegramStateStore;
   signal?: AbortSignal;
-  log?: (message: string) => void;
+  log?: (message: string, context?: Record<string, unknown>) => void;
 }): Promise<void> {
   if (params.config.mode === "webhook") {
     await runTelegramWebhookServer(params);
@@ -57,19 +57,32 @@ export async function runTelegramMonitor(params: {
   }
 
   await params.bot.api.deleteWebhook({ drop_pending_updates: false });
+  params.log?.("Telegram polling started", {
+    pollingTimeoutSeconds: params.config.pollingTimeoutSeconds,
+    persistOffsets: params.config.persistOffsets,
+    lastUpdateId: params.state.getLastUpdateId(),
+  });
   let backoffMs = 1_000;
 
   while (!params.signal?.aborted) {
     try {
-      await pollTelegramUpdatesOnce({
+      const highestUpdateId = await pollTelegramUpdatesOnce({
         bot: params.bot,
         state: params.state,
         pollingTimeoutSeconds: params.config.pollingTimeoutSeconds,
         persistOffsets: params.config.persistOffsets,
       });
+      if (highestUpdateId !== null) {
+        params.log?.("Telegram updates processed", {
+          highestUpdateId,
+        });
+      }
       backoffMs = 1_000;
     } catch (error) {
-      params.log?.(`Telegram polling error: ${error instanceof Error ? error.message : String(error)}`);
+      params.log?.("Telegram polling error", {
+        error: error instanceof Error ? error.message : String(error),
+        backoffMs,
+      });
       if (params.signal?.aborted) {
         break;
       }
@@ -84,7 +97,7 @@ async function runTelegramWebhookServer(params: {
   config: ResolvedTelegramRuntimeConfig;
   state: TelegramStateStore;
   signal?: AbortSignal;
-  log?: (message: string) => void;
+  log?: (message: string, context?: Record<string, unknown>) => void;
 }): Promise<void> {
   const path = params.config.webhookPath;
   const secret = params.config.webhookSecret;
@@ -123,10 +136,15 @@ async function runTelegramWebhookServer(params: {
       if (params.config.persistOffsets && typeof update.update_id === "number") {
         params.state.setLastUpdateId(update.update_id);
       }
+      params.log?.("Telegram webhook update processed", {
+        updateId: typeof update.update_id === "number" ? update.update_id : undefined,
+      });
       response.statusCode = 200;
       response.end("ok");
     } catch (error) {
-      params.log?.(`Telegram webhook error: ${error instanceof Error ? error.message : String(error)}`);
+      params.log?.("Telegram webhook error", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       response.statusCode = 500;
       response.end("error");
     }
@@ -134,7 +152,9 @@ async function runTelegramWebhookServer(params: {
 
   server.listen(params.config.webhookPort, params.config.webhookHost);
   await once(server, "listening");
-  params.log?.(`Telegram webhook listening on http://${params.config.webhookHost}:${params.config.webhookPort}${path}`);
+  params.log?.("Telegram webhook listening", {
+    url: `http://${params.config.webhookHost}:${params.config.webhookPort}${path}`,
+  });
 
   try {
     await waitForAbort(params.signal);

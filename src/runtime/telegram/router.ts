@@ -22,6 +22,7 @@ import { buildApprovalKeyboard, parseApprovalCallbackData, TelegramApprovalCoord
 import { normalizeTelegramCommandText } from "./commands.js";
 import { TelegramDelivery } from "./delivery.js";
 import type { TelegramLiveReply } from "./delivery.js";
+import type { TelegramLogger } from "./logger.js";
 import {
   bindTelegramSession,
   buildTelegramBindingKey,
@@ -67,6 +68,7 @@ interface TelegramRouterOptions {
   extensionDirs?: string[];
   hookRegistry?: HookRegistry;
   systemPrompt?: string;
+  logger?: TelegramLogger;
 }
 
 export class TelegramRouter {
@@ -93,7 +95,21 @@ export class TelegramRouter {
     }
 
     const binding = this.resolveBinding(ctx);
+    this.options.logger?.info("Telegram message received", {
+      bindingKey: binding.bindingKey,
+      chatId: binding.chatId,
+      userId: binding.userId,
+      chatType: binding.chatType,
+      textLength: rawText.length,
+      isCommand: rawText.startsWith("/"),
+    });
+
     if (!this.isAllowed(binding)) {
+      this.options.logger?.warn("Telegram message rejected by allowlist", {
+        bindingKey: binding.bindingKey,
+        chatId: binding.chatId,
+        userId: binding.userId,
+      });
       await this.delivery.sendText(this.toPromptScope(ctx, binding), "This Telegram user/chat is not allowed to control Pebble.");
       return;
     }
@@ -101,6 +117,9 @@ export class TelegramRouter {
     const scope = this.toPromptScope(ctx, binding);
     const normalizedCommandText = normalizeTelegramCommandText(rawText, this.options.botIdentity.username);
     if (normalizedCommandText === null) {
+      this.options.logger?.info("Telegram command ignored because it targeted another bot", {
+        bindingKey: binding.bindingKey,
+      });
       return;
     }
 
@@ -120,11 +139,18 @@ export class TelegramRouter {
     }
 
     if (this.activeRuns.has(binding.bindingKey)) {
+      this.options.logger?.info("Telegram message ignored because a run is already active", {
+        bindingKey: binding.bindingKey,
+      });
       await this.delivery.sendText(scope, TELEGRAM_BUSY_MESSAGE);
       return;
     }
 
     if (!normalizedCommandText.startsWith("/") && this.shouldIgnoreAmbientGroupMessage(ctx, rawText)) {
+      this.options.logger?.info("Telegram ambient group message ignored", {
+        bindingKey: binding.bindingKey,
+        chatId: binding.chatId,
+      });
       return;
     }
 
@@ -153,6 +179,12 @@ export class TelegramRouter {
     }
 
     const result = this.approvals.resolveApproval(parsed.token, parsed.decision === "approve" ? "allow" : "deny");
+    this.options.logger?.info("Telegram approval callback received", {
+      token: parsed.token,
+      decision: parsed.decision,
+      resolved: Boolean(result.record),
+      resumedLiveFlow: result.resumedLiveFlow,
+    });
     await ctx.answerCallbackQuery({
       text: result.record
         ? `${parsed.decision === "approve" ? "Approved" : "Denied"} ${result.record.toolName}`
@@ -194,15 +226,27 @@ export class TelegramRouter {
 
     switch (parsed.name) {
       case "start": {
+        this.options.logger?.info("Telegram native command executed", {
+          bindingKey: binding.bindingKey,
+          command: parsed.name,
+        });
         await this.delivery.sendText(scope, this.buildStatusMessage(binding));
         return;
       }
       case "new": {
+        this.options.logger?.info("Telegram native command executed", {
+          bindingKey: binding.bindingKey,
+          command: parsed.name,
+        });
         const session = createTelegramSession(this.options.sessionStore, this.options.state, binding);
         await this.delivery.sendText(scope, `Started a new Pebble session for this chat:\n${session.id}`);
         return;
       }
       case "sessions": {
+        this.options.logger?.info("Telegram native command executed", {
+          bindingKey: binding.bindingKey,
+          command: parsed.name,
+        });
         const summaries = listTelegramSessionsForBinding(this.options.sessionStore, this.options.state, binding.bindingKey);
         if (summaries.length === 0) {
           await this.delivery.sendText(scope, "No prior Pebble sessions are bound to this chat/topic yet.");
@@ -219,6 +263,10 @@ export class TelegramRouter {
         return;
       }
       case "resume": {
+        this.options.logger?.info("Telegram native command executed", {
+          bindingKey: binding.bindingKey,
+          command: parsed.name,
+        });
         const sessionId = parsed.args.trim();
         if (!sessionId) {
           await this.delivery.sendText(scope, "Usage: /resume <session-id>");
@@ -238,6 +286,10 @@ export class TelegramRouter {
         return;
       }
       case "status": {
+        this.options.logger?.info("Telegram native command executed", {
+          bindingKey: binding.bindingKey,
+          command: parsed.name,
+        });
         await this.delivery.sendText(scope, this.buildStatusMessage(binding));
         return;
       }
@@ -268,10 +320,18 @@ export class TelegramRouter {
     };
 
     if (!this.options.registry.isCommand(text, commandContext)) {
+      this.options.logger?.warn("Telegram command unavailable", {
+        bindingKey: binding.bindingKey,
+        command: parsed.name,
+      });
       await this.delivery.sendText(scope, `Unknown or unavailable command: /${parsed.name}`);
       return;
     }
 
+    this.options.logger?.info("Telegram shared command executing", {
+      bindingKey: binding.bindingKey,
+      command: parsed.name,
+    });
     const result = await this.options.registry.execute(parsed.name, parsed.args, commandContext);
 
     if (result.data?.action === "open-settings") {
@@ -285,6 +345,12 @@ export class TelegramRouter {
     }
 
     await this.delivery.sendText(scope, result.output || `Command /${parsed.name} completed.`);
+    this.options.logger?.info("Telegram shared command completed", {
+      bindingKey: binding.bindingKey,
+      command: parsed.name,
+      success: result.success,
+      action: typeof result.data?.action === "string" ? result.data.action : undefined,
+    });
   }
 
   private async handlePrompt(
@@ -300,6 +366,14 @@ export class TelegramRouter {
     const liveReply = this.delivery.createLiveReply(scope);
 
     this.activeRuns.set(binding.bindingKey, controller);
+    this.options.logger?.info("Telegram prompt starting", {
+      bindingKey: binding.bindingKey,
+      sessionId: session.id,
+      providerId: resolvedProvider.providerId,
+      model: resolvedProvider.model,
+      promptLength: promptText.length,
+      updateId,
+    });
 
     try {
       failPendingApprovalsForResume(this.options.sessionStore, this.options.permissionManager, session.id);
@@ -377,10 +451,23 @@ export class TelegramRouter {
         session.id,
         result.success ? "completed" : result.state === "interrupted" ? "interrupted" : "error",
       );
+      this.options.logger?.info("Telegram prompt finished", {
+        bindingKey: binding.bindingKey,
+        sessionId: session.id,
+        success: result.success,
+        state: result.state,
+        finalMessageId,
+      });
       await this.options.hookRegistry?.fire("turn:after", { sessionId: session.id });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.options.sessionStore.updateStatus(session.id, controller.signal.aborted ? "interrupted" : "error");
+      this.options.logger?.error("Telegram prompt failed", {
+        bindingKey: binding.bindingKey,
+        sessionId: session.id,
+        aborted: controller.signal.aborted,
+        error: message,
+      });
       await liveReply.fail(controller.signal.aborted
         ? "The active Telegram run was stopped."
         : `Error: ${message}`);
@@ -396,11 +483,17 @@ export class TelegramRouter {
   private async handleStop(scope: TelegramPromptScope, binding: TelegramBinding): Promise<void> {
     const activeRun = this.activeRuns.get(binding.bindingKey);
     if (!activeRun || activeRun.signal.aborted) {
+      this.options.logger?.info("Telegram stop requested with no active run", {
+        bindingKey: binding.bindingKey,
+      });
       await this.delivery.sendText(scope, "No active Pebble run is in flight for this chat/topic.");
       return;
     }
 
     activeRun.abort();
+    this.options.logger?.info("Telegram run stop requested", {
+      bindingKey: binding.bindingKey,
+    });
     await this.delivery.sendText(scope, "Stopping the active Pebble run for this chat/topic…");
   }
 
@@ -421,6 +514,12 @@ export class TelegramRouter {
     }
 
     const result = this.approvals.resolveApproval(token, commandName === "approve" ? "allow" : "deny");
+    this.options.logger?.info("Telegram approval text command received", {
+      token,
+      command: commandName,
+      resolved: Boolean(result.record),
+      resumedLiveFlow: result.resumedLiveFlow,
+    });
     await this.delivery.sendText(
       scope,
       result.record
@@ -441,6 +540,10 @@ export class TelegramRouter {
     }
 
     if (commandName && commandName !== "stop") {
+      this.options.logger?.info("Telegram question awaiting answer blocked a command", {
+        bindingKey: scope.binding.bindingKey,
+        command: commandName,
+      });
       await this.delivery.sendText(scope, "Pebble is waiting for an answer to the previous question. Reply with your answer or use /stop.");
       return true;
     }
@@ -460,6 +563,10 @@ export class TelegramRouter {
 
     this.pendingQuestions.delete(scope.binding.bindingKey);
     pendingQuestion.resolve(answer);
+    this.options.logger?.info("Telegram follow-up question answered", {
+      bindingKey: scope.binding.bindingKey,
+      answerLength: answer.length,
+    });
     await this.delivery.sendText(scope, `Answer received: ${answer}`);
     return true;
   }
@@ -479,6 +586,12 @@ export class TelegramRouter {
     });
 
     setTelegramPendingApprovalToken(this.options.sessionStore, sessionId, binding, approval.token);
+    this.options.logger?.info("Telegram approval requested", {
+      bindingKey: binding.bindingKey,
+      sessionId,
+      toolName: request.toolName,
+      token: approval.token,
+    });
     await this.delivery.sendText(
       scope,
       `${request.approvalMessage}\nApproval ID: ${approval.token}`,

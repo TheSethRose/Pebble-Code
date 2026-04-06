@@ -564,6 +564,97 @@ const WORKTREE_STARTUP_OPTIONS: Array<{ label: string; value: string }> = [
   { label: "Resume linked session  (prefer the newest session with an active worktree)", value: "resume-linked" },
 ];
 
+type ConfigTabGroupId = "shell-compaction" | "worktree-startup";
+
+interface ConfigTabOptionRow {
+  groupId: ConfigTabGroupId;
+  optionValue: string;
+  label: string;
+  isSelected: boolean;
+}
+
+export interface ConfigTabDisplayRow extends ConfigTabOptionRow {
+  isActive: boolean;
+}
+
+function normalizeConfigTabActiveIndex(index: number, rowCount: number): number {
+  if (rowCount <= 0) {
+    return 0;
+  }
+
+  return ((index % rowCount) + rowCount) % rowCount;
+}
+
+export function getConfigTabOptionRows(settings: Pick<Settings, "shellCompactionMode" | "worktreeStartupMode">): ConfigTabOptionRow[] {
+  const selectedShellCompactionMode = settings.shellCompactionMode ?? "auto";
+  const selectedWorktreeStartupMode = settings.worktreeStartupMode ?? "manual";
+
+  return [
+    ...SHELL_COMPACTION_OPTIONS.map((option) => ({
+      groupId: "shell-compaction" as const,
+      optionValue: option.value,
+      label: option.label,
+      isSelected: selectedShellCompactionMode === option.value,
+    })),
+    ...WORKTREE_STARTUP_OPTIONS.map((option) => ({
+      groupId: "worktree-startup" as const,
+      optionValue: option.value,
+      label: option.label,
+      isSelected: selectedWorktreeStartupMode === option.value,
+    })),
+  ];
+}
+
+export function getInitialConfigTabActiveIndex(settings: Pick<Settings, "shellCompactionMode" | "worktreeStartupMode">): number {
+  const rows = getConfigTabOptionRows(settings);
+  const selectedIndex = rows.findIndex((row) => row.isSelected);
+  return selectedIndex >= 0 ? selectedIndex : 0;
+}
+
+export function moveConfigTabActiveIndex(
+  currentIndex: number,
+  direction: "up" | "down",
+  rowCount: number,
+): number {
+  if (rowCount <= 0) {
+    return 0;
+  }
+
+  const delta = direction === "up" ? -1 : 1;
+  return normalizeConfigTabActiveIndex(currentIndex + delta, rowCount);
+}
+
+export function getConfigTabDisplayRows(
+  settings: Pick<Settings, "shellCompactionMode" | "worktreeStartupMode">,
+  activeIndex: number,
+): ConfigTabDisplayRow[] {
+  const rows = getConfigTabOptionRows(settings);
+  const normalizedActiveIndex = normalizeConfigTabActiveIndex(activeIndex, rows.length);
+
+  return rows.map((row, index) => ({
+    ...row,
+    isActive: index === normalizedActiveIndex,
+  }));
+}
+
+function ConfigTabOptionList({
+  rows,
+}: {
+  rows: ConfigTabDisplayRow[];
+}) {
+  return (
+    <Box flexDirection="column">
+      {rows.map((row) => (
+        <Box key={`${row.groupId}:${row.optionValue}`} flexDirection="row">
+          <Text color={row.isActive ? "blue" : undefined}>{row.isActive ? "› " : "  "}</Text>
+          <Text color={row.isActive ? "blue" : undefined}>{row.label}</Text>
+          {row.isSelected ? <Text color="green"> ✓</Text> : null}
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
 function TabBar({
   tabs,
   activeTab,
@@ -608,6 +699,31 @@ function ConfigTab({
 }) {
   const resolved = resolveRuntimeProvider(settings, {}, context.extensionProviders ?? []);
   const [message, setMessage] = useState("");
+  const [activeRowIndex, setActiveRowIndex] = useState(() => getInitialConfigTabActiveIndex(settings));
+
+  const configRows = useMemo(() => getConfigTabOptionRows(settings), [
+    settings.shellCompactionMode,
+    settings.worktreeStartupMode,
+  ]);
+
+  const displayRows = useMemo(
+    () => getConfigTabDisplayRows(settings, activeRowIndex),
+    [activeRowIndex, settings],
+  );
+
+  const shellCompactionRows = useMemo(
+    () => displayRows.filter((row) => row.groupId === "shell-compaction"),
+    [displayRows],
+  );
+
+  const worktreeStartupRows = useMemo(
+    () => displayRows.filter((row) => row.groupId === "worktree-startup"),
+    [displayRows],
+  );
+
+  useEffect(() => {
+    setActiveRowIndex((currentIndex) => normalizeConfigTabActiveIndex(currentIndex, configRows.length));
+  }, [configRows.length]);
 
   const handleShellCompactionModeChange = useCallback((value: string) => {
     if (value !== "off" && value !== "auto" && value !== "aggressive") {
@@ -632,6 +748,41 @@ function ConfigTab({
     });
     setMessage(`Worktree startup mode set to ${value}`);
   }, [onSave, settings]);
+
+  useInput(
+    (_input, key) => {
+      if (configRows.length === 0) {
+        return;
+      }
+
+      if (key.upArrow) {
+        setActiveRowIndex((currentIndex) => moveConfigTabActiveIndex(currentIndex, "up", configRows.length));
+        return;
+      }
+
+      if (key.downArrow) {
+        setActiveRowIndex((currentIndex) => moveConfigTabActiveIndex(currentIndex, "down", configRows.length));
+        return;
+      }
+
+      if (!key.return) {
+        return;
+      }
+
+      const activeRow = configRows[normalizeConfigTabActiveIndex(activeRowIndex, configRows.length)];
+      if (!activeRow) {
+        return;
+      }
+
+      if (activeRow.groupId === "shell-compaction") {
+        handleShellCompactionModeChange(activeRow.optionValue);
+        return;
+      }
+
+      handleWorktreeStartupModeChange(activeRow.optionValue);
+    },
+    { isActive: configRows.length > 0 },
+  );
 
   return (
     <Box flexDirection="column">
@@ -662,32 +813,22 @@ function ConfigTab({
       <Box flexDirection="column" marginTop={1}>
         <Text bold color="cyan">Shell compaction</Text>
         <Box marginTop={1}>
-          <Select
-            options={SHELL_COMPACTION_OPTIONS}
-            visibleOptionCount={3}
-            defaultValue={settings.shellCompactionMode ?? "auto"}
-            onChange={handleShellCompactionModeChange}
-          />
+          <ConfigTabOptionList rows={shellCompactionRows} />
         </Box>
-        {message ? (
-          <Box marginTop={1}>
-            <Text color="green">{message}</Text>
-          </Box>
-        ) : null}
       </Box>
       <Box flexDirection="column" marginTop={1}>
         <Text bold color="cyan">Worktree startup</Text>
         <Box marginTop={1}>
-          <Select
-            options={WORKTREE_STARTUP_OPTIONS}
-            visibleOptionCount={2}
-            defaultValue={settings.worktreeStartupMode ?? "manual"}
-            onChange={handleWorktreeStartupModeChange}
-          />
+          <ConfigTabOptionList rows={worktreeStartupRows} />
         </Box>
       </Box>
+      {message ? (
+        <Box marginTop={1}>
+          <Text color="green">{message}</Text>
+        </Box>
+      ) : null}
       <Box marginTop={1}>
-        <Text dimColor>↑↓ choose mode · Enter save · Shift+Tab / Tab to switch sections · Esc to close</Text>
+        <Text dimColor>↑↓ move cursor · Enter save option · Shift+Tab / Tab to switch sections · Esc to close</Text>
       </Box>
     </Box>
   );

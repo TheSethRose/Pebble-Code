@@ -14,12 +14,13 @@ import {
   cleanupDeletedSessionWorktrees,
   createProjectSessionStore,
 } from "../../persistence/runtimeSessions.js";
-import { buildRuntimeConfig, type Settings } from "../config.js";
+import { buildRuntimeConfig, getConfigDir, type Settings } from "../config.js";
 import { createHookRegistry } from "../hooks.js";
 import { formatInstructions, formatPromptFiles, loadPromptFiles } from "../instructions.js";
 import { PermissionManager } from "../permissionManager.js";
 import { createTelegramBot, wireTelegramBot } from "./bot.js";
 import { syncTelegramNativeCommands } from "./commands.js";
+import { createTelegramLogger } from "./logger.js";
 import { runTelegramMonitor } from "./monitor.js";
 import { TelegramRouter } from "./router.js";
 import { TelegramStateStore } from "./state.js";
@@ -47,10 +48,20 @@ export async function runTelegram(options: TelegramRuntimeOptions = {}): Promise
   const runtimeConfig = buildRuntimeConfig(cwd);
   const settings = runtimeConfig.settings;
   const telegramConfig = resolveTelegramRuntimeConfig(settings, options);
+  const logger = createTelegramLogger(getConfigDir(runtimeConfig.cwd));
+
+  logger.info("Telegram runtime booting", {
+    cwd,
+    projectRoot: runtimeConfig.trust.projectRoot,
+    requestedMode: options.mode ?? "settings/default",
+    transportMode: telegramConfig.mode,
+    logPath: logger.logPath,
+  });
 
   if (shouldLogStartup) {
     console.error(`Trust level: ${runtimeConfig.trust.level}`);
     console.error(`Project root: ${runtimeConfig.trust.projectRoot}`);
+    console.error(`Telegram log: ${logger.logPath}`);
   }
 
   const permissionManager = new PermissionManager({
@@ -71,8 +82,23 @@ export async function runTelegram(options: TelegramRuntimeOptions = {}): Promise
     reportExtensionStatus(integrations.results);
   }
 
+  logger.info("Telegram integrations loaded", {
+    commandCount: integrations.commands.length,
+    toolCount: integrations.tools.length,
+    providerCount: integrations.providers.length,
+    skillCount: integrations.skills.length,
+    mcpServerCount: integrations.mcpServers.length,
+  });
+
   const systemPrompt = mergeRuntimeInstructions(promptContent, instructions, integrations.skills);
   const resolvedProvider = resolveRuntimeProvider(settings, {}, integrations.providers);
+  logger.info("Telegram provider resolved", {
+    providerId: resolvedProvider.providerId,
+    providerLabel: resolvedProvider.providerLabel,
+    model: resolvedProvider.model,
+    transportMode: telegramConfig.mode,
+  });
+
   if (shouldLogStartup) {
     console.error(`Provider: ${resolvedProvider.providerLabel} (${resolvedProvider.model})`);
     console.error(`Telegram transport: ${telegramConfig.mode}`);
@@ -107,12 +133,21 @@ export async function runTelegram(options: TelegramRuntimeOptions = {}): Promise
     extensionDirs,
     hookRegistry,
     systemPrompt,
+    logger,
   });
   const wiredBot = wireTelegramBot(bot, router);
 
   if (telegramConfig.syncCommandsOnStart) {
     await syncTelegramNativeCommands(wiredBot, registry);
+    logger.info("Telegram native commands synchronized", {
+      commandCount: registry.list().filter((command) => command.modes?.includes("telegram") || !command.modes?.length).length,
+    });
   }
+
+  logger.info("Telegram bot authenticated", {
+    botId: botIdentity.id,
+    botUsername: botIdentity.username ?? "unknown",
+  });
 
   if (shouldLogStartup) {
     console.error(`Telegram bot: @${botIdentity.username ?? "unknown"} (${botIdentity.id})`);
@@ -124,10 +159,17 @@ export async function runTelegram(options: TelegramRuntimeOptions = {}): Promise
       config: telegramConfig,
       state,
       signal: options.signal,
-      log: (message) => console.error(message),
+      log: (message, context) => {
+        logger.info(message, context);
+        console.error(message);
+      },
     });
+    logger.info("Telegram runtime stopped cleanly");
     return 0;
   } catch (error) {
+    logger.error("Telegram runtime failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     console.error(`Telegram runtime failed: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
@@ -137,7 +179,8 @@ async function resolveTelegramBotIdentity(
   bot: ReturnType<typeof createTelegramBot>,
   config: ResolvedTelegramRuntimeConfig,
 ): Promise<TelegramBotIdentity> {
-  const me = await bot.api.getMe();
+  await bot.init();
+  const me = bot.botInfo;
   const actualId = String(me.id);
   if (config.botId && config.botId !== actualId) {
     throw new Error(`Configured telegram.botId (${config.botId}) does not match the authenticated bot (${actualId}).`);

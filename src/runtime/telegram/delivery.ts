@@ -24,6 +24,24 @@ export function getTelegramRetryAfterMs(error: unknown): number | undefined {
     : undefined;
 }
 
+function isTelegramMessageNotModifiedError(error: unknown): boolean {
+  const candidate = error as {
+    description?: unknown;
+    message?: unknown;
+    response?: { description?: unknown };
+  } | undefined;
+
+  const description = typeof candidate?.description === "string"
+    ? candidate.description
+    : typeof candidate?.response?.description === "string"
+      ? candidate.response.description
+      : typeof candidate?.message === "string"
+        ? candidate.message
+        : "";
+
+  return description.toLowerCase().includes("message is not modified");
+}
+
 async function withTelegramRetry<T>(operation: () => Promise<T>, retries = 2): Promise<T> {
   let attempts = 0;
 
@@ -121,10 +139,16 @@ export class TelegramDelivery {
     messageId: number,
     replyMarkup?: InlineKeyboardMarkup | InlineKeyboard,
   ): Promise<void> {
-    await withTelegramRetry(() => this.bot.api.editMessageReplyMarkup(scope.chatId, messageId, {
-      ...buildThreadOptions(scope.threadId),
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-    }));
+    try {
+      await withTelegramRetry(() => this.bot.api.editMessageReplyMarkup(scope.chatId, messageId, {
+        ...buildThreadOptions(scope.threadId),
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      }));
+    } catch (error) {
+      if (!isTelegramMessageNotModifiedError(error)) {
+        throw error;
+      }
+    }
   }
 
   createLiveReply(scope: TelegramPromptScope): TelegramLiveReply {
@@ -185,11 +209,17 @@ export class TelegramLiveReply {
     const firstChunk = chunks.shift() ?? "Done.";
 
     if (this.placeholderMessageId !== undefined) {
-      await withTelegramRetry(() => this.bot.api.editMessageText(this.scope.chatId, this.placeholderMessageId!, firstChunk, {
-        ...buildThreadOptions(this.scope.threadId),
-        ...buildLinkPreviewOptions(),
-        ...(options.replyMarkup ? { reply_markup: options.replyMarkup } : {}),
-      }));
+      try {
+        await withTelegramRetry(() => this.bot.api.editMessageText(this.scope.chatId, this.placeholderMessageId!, firstChunk, {
+          ...buildThreadOptions(this.scope.threadId),
+          ...buildLinkPreviewOptions(),
+          ...(options.replyMarkup ? { reply_markup: options.replyMarkup } : {}),
+        }));
+      } catch (error) {
+        if (!isTelegramMessageNotModifiedError(error)) {
+          throw error;
+        }
+      }
     } else {
       const sent = await withTelegramRetry(() => this.bot.api.sendMessage(this.scope.chatId, firstChunk, {
         ...buildThreadOptions(this.scope.threadId),
@@ -225,10 +255,16 @@ export class TelegramLiveReply {
       return;
     }
 
-    await withTelegramRetry(() => this.bot.api.editMessageText(this.scope.chatId, this.placeholderMessageId!, nextText, {
-      ...buildThreadOptions(this.scope.threadId),
-      ...buildLinkPreviewOptions(),
-    }));
+    try {
+      await withTelegramRetry(() => this.bot.api.editMessageText(this.scope.chatId, this.placeholderMessageId!, nextText, {
+        ...buildThreadOptions(this.scope.threadId),
+        ...buildLinkPreviewOptions(),
+      }));
+    } catch (error) {
+      if (!isTelegramMessageNotModifiedError(error)) {
+        throw error;
+      }
+    }
     this.lastFlushAt = Date.now();
     this.lastFlushedText = nextText;
   }

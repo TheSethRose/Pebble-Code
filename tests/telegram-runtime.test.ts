@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadSettingsForCwd } from "../src/runtime/config";
@@ -11,6 +11,7 @@ import {
 } from "../src/runtime/telegram/approvals";
 import { normalizeTelegramCommandText } from "../src/runtime/telegram/commands";
 import { chunkTelegramText, TelegramDelivery, getTelegramRetryAfterMs } from "../src/runtime/telegram/delivery";
+import { createTelegramLogger, getTelegramLogPath } from "../src/runtime/telegram/logger";
 import { pollTelegramUpdatesOnce } from "../src/runtime/telegram/monitor";
 import {
   buildTelegramBindingKey,
@@ -116,6 +117,20 @@ describe("telegram runtime helpers", () => {
     expect(handledUpdates).toEqual([14, 15]);
     expect(highest).toBe(15);
     expect(state.getLastUpdateId()).toBe(15);
+  });
+
+  test("createTelegramLogger writes structured lines to the Pebble home log file", () => {
+    const pebbleHomeDir = createTempProject("pebble-telegram-log-home-");
+    const logger = createTelegramLogger(pebbleHomeDir);
+
+    logger.info("Telegram runtime booting", { mode: "polling" });
+    logger.error("Telegram polling error", { error: "boom" });
+
+    const logContents = readFileSync(getTelegramLogPath(pebbleHomeDir), "utf-8");
+    expect(logContents).toContain("INFO Telegram runtime booting");
+    expect(logContents).toContain('"mode":"polling"');
+    expect(logContents).toContain("ERROR Telegram polling error");
+    expect(logContents).toContain('"error":"boom"');
   });
 
   test("telegram session helpers bind chats and reuse the active session", () => {
@@ -249,5 +264,45 @@ describe("telegram runtime helpers", () => {
     expect(messageId).toBe(77);
     expect(attempts).toHaveLength(2);
     expect(getTelegramRetryAfterMs({ parameters: { retry_after: 2 } })).toBe(2000);
+  });
+
+  test("TelegramLiveReply finalize ignores Telegram's message-not-modified edit errors", async () => {
+    const delivery = new TelegramDelivery({
+      api: {
+        sendMessage: async () => ({ message_id: 12 }),
+        editMessageText: async () => {
+          throw new Error("Call to 'editMessageText' failed! (400: Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message)");
+        },
+      },
+    } as never, {
+      botToken: "token",
+      mode: "polling",
+      allowedUserIds: [],
+      allowedChatIds: [],
+      handleGroupMentionsOnly: true,
+      streamEdits: true,
+      editDebounceMs: 10,
+      maxMessageChars: 4096,
+      syncCommandsOnStart: true,
+      persistOffsets: true,
+      pollingTimeoutSeconds: 20,
+      webhookPath: "/telegram/webhook",
+      webhookHost: "127.0.0.1",
+      webhookPort: 8788,
+    });
+
+    const liveReply = delivery.createLiveReply({
+      chatId: 1,
+      binding: {
+        bindingKey: buildTelegramBindingKey("1"),
+        chatId: "1",
+        chatType: "private",
+      },
+    });
+
+    await liveReply.start();
+    const messageId = await liveReply.finalize("Thinking…");
+
+    expect(messageId).toBe(12);
   });
 });
